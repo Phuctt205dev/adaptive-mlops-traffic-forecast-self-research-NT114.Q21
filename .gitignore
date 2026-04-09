@@ -1,0 +1,6 @@
+# Tự tải Data cũng được
+data/
+# Python hồi sinh được
+.venv/
+src/__pycache__/
+*.pyc

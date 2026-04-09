@@ -1,4 +1,5 @@
 import pandas as pd
+import time  # 👈 thêm dòng này
 
 from src.preprocess import load_data, preprocess
 from src.train import train_model
@@ -9,8 +10,8 @@ from sklearn.metrics import mean_absolute_error
 # =========================
 # ⚙️ CONFIG
 # =========================
-WINDOW_SIZE = 20000
-BATCH_SIZE = 2000
+WINDOW_SIZE = 90 * 24
+BATCH_SIZE = 24 * 7
 
 # =========================
 # 1. LOAD & PREPROCESS
@@ -88,5 +89,8 @@ while start < len(df):
 
     # next batch
     start += BATCH_SIZE
+
+    print("⏳ Waiting for next week (10s)...\n")
+    time.sleep(10)  # 👈 giả lập 1 tuần = 10 giây
 
 print("\n🎯 Pipeline finished")

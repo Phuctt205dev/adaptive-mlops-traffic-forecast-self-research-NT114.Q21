@@ -6,3 +6,7 @@ src/__pycache__/
 *.pyc
 # model có thể build lại
 models/
+
+#test
+results/
+prediction_next_month.csv

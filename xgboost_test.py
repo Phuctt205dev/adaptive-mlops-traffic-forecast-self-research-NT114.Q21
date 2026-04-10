@@ -1,9 +1,11 @@
+import os
 import pandas as pd
 import numpy as np
+
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 from src.preprocess import load_data, preprocess
-from src.train import train_random_forest
+from src.train import train_xgboost   # ✅ dùng lại từ train.py
 
 # =========================
 # 1. LOAD DATA
@@ -51,13 +53,13 @@ y_train = train_df[target]
 X_test = test_df.drop([target, "date_time"], axis=1)
 y_test = test_df[target]
 
-# Fix lệch cột (nếu có)
+# fix lệch cột do get_dummies
 X_test = X_test.reindex(columns=X_train.columns, fill_value=0)
 
 # =========================
-# 6. TRAIN
+# 6. TRAIN (reuse từ train.py)
 # =========================
-model = train_random_forest(X_train, y_train)
+model = train_xgboost(X_train, y_train)
 
 # =========================
 # 7. PREDICT
@@ -70,11 +72,9 @@ y_pred = model.predict(X_test)
 mae = mean_absolute_error(y_test, y_pred)
 mse = mean_squared_error(y_test, y_pred)
 rmse = np.sqrt(mse)
-
-# tránh chia cho 0
 mape = np.mean(np.abs((y_test - y_pred) / (y_test + 1e-5))) * 100
 
-print("\n📊 Evaluation:")
+print("\n📊 XGBoost Evaluation (NO LAG):")
 print(f"MAE  : {mae:.4f}")
 print(f"MSE  : {mse:.4f}")
 print(f"RMSE : {rmse:.4f}")
@@ -83,18 +83,17 @@ print(f"MAPE : {mape:.2f}%")
 # =========================
 # 9. SAVE RESULT
 # =========================
+os.makedirs("results", exist_ok=True)
+
 result_df = pd.DataFrame({
     "date_time": test_df["date_time"],
     "y_true": y_test,
     "y_pred": y_pred,
-    "error": y_test - y_pred
+    "error": y_test - y_pred,
+    "abs_error": np.abs(y_test - y_pred)
 })
 
-# result_df.to_csv("prediction_next_month.csv", index=False)
-
-# print("\n✅ Saved prediction to prediction_next_month.csv")
-
-result_path = "results/prediction_next_month.csv"
+result_path = "results/xgboost_prediction_no_lag.csv"
 result_df.to_csv(result_path, index=False)
 
 print(f"\n✅ Saved result to {result_path}")

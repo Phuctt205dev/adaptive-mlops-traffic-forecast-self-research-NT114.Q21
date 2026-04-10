@@ -11,7 +11,7 @@ from src.train import train_random_forest
 df_raw = load_data("data/TrafficVolumeData.csv")
 
 df_raw["date_time"] = pd.to_datetime(df_raw["date_time"])
-date_time = df_raw["date_time"].copy()
+# date_time = df_raw["date_time"].copy()
 
 # =========================
 # 2. PREPROCESS
@@ -19,7 +19,7 @@ date_time = df_raw["date_time"].copy()
 df = preprocess(df_raw)
 
 # gắn lại date_time
-df["date_time"] = date_time
+# df["date_time"] = date_time
 
 # =========================
 # 3. SORT TIME
@@ -31,7 +31,7 @@ df = df.sort_values("date_time")
 # =========================
 start_date = df["date_time"].min()
 
-train_end = start_date + pd.DateOffset(months=22)
+train_end = start_date + pd.DateOffset(months=23)
 test_end = train_end + pd.DateOffset(months=3)
 
 train_df = df[df["date_time"] < train_end]

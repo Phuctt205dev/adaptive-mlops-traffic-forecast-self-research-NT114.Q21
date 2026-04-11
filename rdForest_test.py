@@ -31,7 +31,7 @@ df = df.sort_values("date_time")
 # =========================
 start_date = df["date_time"].min()
 
-train_end = start_date + pd.DateOffset(months=23)
+train_end = start_date + pd.DateOffset(months=12)
 test_end = train_end + pd.DateOffset(months=3)
 
 train_df = df[df["date_time"] < train_end]

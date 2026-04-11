@@ -1,0 +1,14 @@
+artifact_uri: file:///D:/You Are Here/HK_VI/DoAnChuyenNganh/Thực hiện đồ án/Project/adaptive-mlops-traffic-forecast-new/traffic-project/mlruns/786841757359228681/4733edb6dbc5402ebd0428e0683159d3/artifacts
+end_time: 1775898287402
+entry_point_name: ''
+experiment_id: '786841757359228681'
+lifecycle_stage: active
+run_id: 4733edb6dbc5402ebd0428e0683159d3
+run_name: XGBoost
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1775898281907
+status: 3
+tags: []
+user_id: ADMIN

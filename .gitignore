@@ -11,4 +11,7 @@ models/
 results/
 
 #Tools
-tools/
+tools/checkDataset.py
+
+#MLFlow
+mlruns/

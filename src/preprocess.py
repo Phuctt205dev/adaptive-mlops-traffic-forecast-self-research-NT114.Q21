@@ -102,9 +102,8 @@ def preprocess(df):
     df["month"] = df["date_time"].dt.month
 
     # =========================
-    # 🔥 (BONUS) CYCLICAL TIME
+    # 🔥 CYCLICAL TIME
     # =========================
-    # giúp model hiểu tính chu kỳ (23h ~ 0h)
     df["hour_sin"] = np.sin(2 * np.pi * df["hour"] / 24)
     df["hour_cos"] = np.cos(2 * np.pi * df["hour"] / 24)
 
@@ -114,22 +113,17 @@ def preprocess(df):
     df["is_weekend"] = df["day"].isin([5, 6]).astype(int)
 
     # =========================
-    # 4. ❌ REMOVE LAG FEATURES
-    # =========================
-    # Không dùng lag vì dataset không liên tục theo giờ
-
-    # =========================
-    # 5. ENCODE CATEGORICAL
+    # 4. ENCODE CATEGORICAL
     # =========================
     df = pd.get_dummies(df, columns=["weather_type"], drop_first=True)
 
     # =========================
-    # 6. DROP CỘT KHÔNG CẦN
+    # ❗ CHỈ DROP DESCRIPTION
     # =========================
-    df = df.drop(["weather_description", "date_time"], axis=1)
+    df = df.drop(["weather_description"], axis=1)
 
     # =========================
-    # 7. DROP NA
+    # 5. DROP NA
     # =========================
     df = df.dropna()
 
@@ -137,6 +131,14 @@ def preprocess(df):
 
 
 def split_data(df):
+    # =========================
+    # 🔥 TIME-BASED SPLIT (CHỈ TRONG 2012–2013)
+    # =========================
+    df = df.sort_values("date_time")
+
+    # chỉ lấy data trước 2014
+    df = df[df["date_time"] < "2014-01-01"]
+
     n = len(df)
 
     train_end = int(n * 0.7)

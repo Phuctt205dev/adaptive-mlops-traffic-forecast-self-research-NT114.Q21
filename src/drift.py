@@ -1,25 +1,26 @@
-import numpy as np
+# src/drift.py
+from sklearn.metrics import mean_absolute_error
 
-def detect_drift(old_data, new_data, threshold=0.1):
-    old_mean = np.mean(old_data)
-    new_mean = np.mean(new_data)
 
-    old_std = np.std(old_data)
-    new_std = np.std(new_data)
+def detect_drift_by_mae(
+    y_true,
+    y_pred,
+    mae_threshold=500
+):
+    mae = mean_absolute_error(
+        y_true,
+        y_pred
+    )
 
-    mean_diff = abs(old_mean - new_mean) / (abs(old_mean) + 1e-6)
-    std_diff = abs(old_std - new_std) / (abs(old_std) + 1e-6)
+    print("\n=== DRIFT CHECK (MAE) ===")
+    print(f"Current MAE: {mae:.2f}")
+    print(
+        f"Threshold : {mae_threshold}"
+    )
 
-    print("\n=== DRIFT CHECK ===")
-    print(f"Old mean: {old_mean:.2f} | New mean: {new_mean:.2f}")
-    print(f"Mean diff: {mean_diff:.4f}")
-
-    print(f"Old std: {old_std:.2f} | New std: {new_std:.2f}")
-    print(f"Std diff: {std_diff:.4f}")
-
-    if mean_diff > threshold or std_diff > threshold:
+    if mae > mae_threshold:
         print("🚨 DRIFT DETECTED")
-        return True
+        return True, mae
     else:
         print("✅ NO DRIFT")
-        return False
+        return False, mae

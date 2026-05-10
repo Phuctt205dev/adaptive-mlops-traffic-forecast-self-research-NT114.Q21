@@ -1,15 +1,19 @@
 # src/pipeline.py
-
-import mlflow
-import mlflow.sklearn
-import numpy as np
 import joblib
 import os
 import random
+import numpy as np
 
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_squared_error
+)
 
-from src.preprocess import load_data, preprocess, split_data
+from src.preprocess import (
+    load_data,
+    preprocess
+)
+
 from src.train import (
     train_random_forest,
     train_xgboost,
@@ -17,181 +21,168 @@ from src.train import (
 )
 
 
-# =========================
-# EVALUATE FUNCTION
-# =========================
-def evaluate(y_true, y_pred):
-    mae = mean_absolute_error(y_true, y_pred)
-    mse = mean_squared_error(y_true, y_pred)
-    rmse = np.sqrt(mse)
-    mape = np.mean(np.abs((y_true - y_pred) / (y_true + 1e-5))) * 100
-    return mae, mse, rmse, mape
-
-
-# =========================
-# TRAIN + LOG (VALIDATION)
-# =========================
-def train_and_log(
-    model_name,
-    train_func,
-    X_train,
-    y_train,
-    X_val,
-    y_val,
-    random_state
+def evaluate(
+    y_true,
+    y_pred
 ):
+    mae = mean_absolute_error(
+        y_true,
+        y_pred
+    )
 
-    with mlflow.start_run(run_name=model_name):
+    mse = mean_squared_error(
+        y_true,
+        y_pred
+    )
 
-        model = train_func(
-            X_train,
-            y_train,
-            random_state
-        )
+    rmse = np.sqrt(
+        mse
+    )
 
-        preds = model.predict(X_val)
-
-        mae, mse, rmse, mape = evaluate(y_val, preds)
-
-        mlflow.log_param("model", model_name)
-        mlflow.log_param("random_state", random_state)
-
-        mlflow.log_metric("val_mae", mae)
-        mlflow.log_metric("val_mse", mse)
-        mlflow.log_metric("val_rmse", rmse)
-        mlflow.log_metric("val_mape", mape)
-
-        mlflow.sklearn.log_model(model, model_name)
-
-        print(f"\n📊 {model_name} (VALIDATION):")
-        print(f"MAE  : {mae:.4f}")
-        print(f"MSE  : {mse:.4f}")
-        print(f"RMSE : {rmse:.4f}")
-        print(f"MAPE : {mape:.2f}%")
-
-        return {
-            "name": model_name,
-            "model": model,
-            "rmse": rmse
-        }
+    return mae, rmse
 
 
-# =========================
-# MAIN PIPELINE
-# =========================
-def run_pipeline():
+def run_pipeline(
+    train_start_date,
+    train_end_date
+):
+    print(
+        "\n🚀 Retraining model..."
+    )
 
-    print("🚀 Running MLflow pipeline...")
+    random_state = random.randint(
+        1,
+        100000
+    )
 
-    random_state = random.randint(1, 100000)
-    print(f"🎲 Random state: {random_state}")
+    print(
+        "🎲 Random state:",
+        random_state
+    )
 
-    # 1. Load + preprocess
-    df = load_data("data/TrafficVolumeData.csv")
-    df = preprocess(df)
+    df = load_data(
+        "data/TrafficVolumeData.csv"
+    )
 
-    # 2. Split
-    train_df, val_df, test_df = split_data(df)
+    df = preprocess(
+        df
+    )
 
-    # =========================
-    # DROP TARGET + DATE
-    # =========================
-    X_train = train_df.drop(["traffic_volume", "date_time"], axis=1)
-    y_train = train_df["traffic_volume"]
+    train_df = df[
+        (df["date_time"] >= train_start_date)
+        &
+        (df["date_time"] < train_end_date)
+    ].copy()
 
-    X_val = val_df.drop(["traffic_volume", "date_time"], axis=1)
-    y_val = val_df["traffic_volume"]
+    n = len(
+        train_df
+    )
 
-    X_test = test_df.drop(["traffic_volume", "date_time"], axis=1)
-    y_test = test_df["traffic_volume"]
+    split_idx = int(
+        n * 0.85
+    )
 
-    # =========================
-    # MLflow setup
-    # =========================
-    mlflow.set_tracking_uri("file:./mlruns")
-    mlflow.set_experiment("traffic_prediction")
+    train_part = train_df[
+        :split_idx
+    ]
 
-    # =========================
-    # TRAIN MODELS
-    # =========================
+    val_part = train_df[
+        split_idx:
+    ]
+
+    X_train = train_part.drop(
+        ["traffic_volume", "date_time"],
+        axis=1
+    )
+
+    y_train = train_part[
+        "traffic_volume"
+    ]
+
+    X_val = val_part.drop(
+        ["traffic_volume", "date_time"],
+        axis=1
+    )
+
+    y_val = val_part[
+        "traffic_volume"
+    ]
+
     results = []
 
-    results.append(
-        train_and_log(
+    for name, func in [
+
+        (
             "RandomForest",
-            train_random_forest,
-            X_train,
-            y_train,
-            X_val,
-            y_val,
-            random_state
-        )
-    )
+            train_random_forest
+        ),
 
-    results.append(
-        train_and_log(
+        (
             "XGBoost",
-            train_xgboost,
-            X_train,
-            y_train,
-            X_val,
-            y_val,
-            random_state
-        )
-    )
+            train_xgboost
+        ),
 
-    results.append(
-        train_and_log(
+        (
             "LightGBM",
-            train_lightgbm,
+            train_lightgbm
+        ),
+    ]:
+
+        model = func(
             X_train,
             y_train,
-            X_val,
-            y_val,
             random_state
         )
+
+        pred = model.predict(
+            X_val
+        )
+
+        mae, rmse = evaluate(
+            y_val,
+            pred
+        )
+
+        print(
+            f"{name}"
+        )
+
+        print(
+            f"MAE  : {mae:.2f}"
+        )
+
+        print(
+            f"RMSE : {rmse:.2f}"
+        )
+
+        results.append(
+            (
+                name,
+                model,
+                rmse
+            )
+        )
+
+    best = min(
+        results,
+        key=lambda x: x[2]
     )
 
-    # =========================
-    # CHỌN BEST (VAL)
-    # =========================
-    best = min(results, key=lambda x: x["rmse"])
+    print(
+        "\n🏆 BEST:",
+        best[0]
+    )
 
-    print("\n🏆 BEST MODEL (from validation):", best["name"])
+    os.makedirs(
+        "models",
+        exist_ok=True
+    )
 
-    # =========================
-    # FINAL TEST
-    # =========================
-    preds = best["model"].predict(X_test)
+    joblib.dump(
+        best[1],
+        "models/best_model.pkl"
+    )
 
-    mae, mse, rmse, mape = evaluate(y_test, preds)
-
-    print("\n📊 FINAL TEST (2013):")
-    print(f"MAE  : {mae:.4f}")
-    print(f"MSE  : {mse:.4f}")
-    print(f"RMSE : {rmse:.4f}")
-    print(f"MAPE : {mape:.2f}%")
-
-    # =========================
-    # LOG BEST MODEL
-    # =========================
-    with mlflow.start_run(run_name="Best_Model"):
-
-        mlflow.log_param("best_model", best["name"])
-        mlflow.log_param("random_state", random_state)
-
-        mlflow.log_metric("test_mae", mae)
-        mlflow.log_metric("test_mse", mse)
-        mlflow.log_metric("test_rmse", rmse)
-        mlflow.log_metric("test_mape", mape)
-
-        mlflow.sklearn.log_model(best["model"], "best_model")
-
-    # =========================
-    # SAVE MODEL
-    # =========================
-    os.makedirs("models", exist_ok=True)
-    joblib.dump(best["model"], "models/best_model.pkl")
-
-    print("\n💾 Saved best model")
-    print("\n✅ Pipeline finished!")
+    print(
+        "✅ Model saved"
+    )

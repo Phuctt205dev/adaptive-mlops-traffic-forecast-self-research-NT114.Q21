@@ -1,7 +1,9 @@
+# src/pipeline.py
 import joblib
 import os
 import random
 import numpy as np
+import pandas as pd
 import mlflow
 import mlflow.sklearn
 import mlflow.data
@@ -51,6 +53,167 @@ def evaluate(
     return mae, rmse, mape
 
 
+# ====================================
+# CREATE DATA VERSION
+# ====================================
+def create_data_version(
+    df,
+    train_start_date,
+    train_end_date
+):
+    os.makedirs(
+        "data_versions",
+        exist_ok=True
+    )
+
+    log_path = (
+        "data_versions/version_log.csv"
+    )
+
+    if os.path.exists(
+        log_path
+    ):
+        log_df = pd.read_csv(
+            log_path
+        )
+
+        version_num = (
+            len(log_df) + 1
+        )
+
+    else:
+        log_df = pd.DataFrame(
+            columns=[
+                "version",
+                "train_start",
+                "train_end",
+                "rows"
+            ]
+        )
+
+        version_num = 1
+
+    version_name = (
+        f"data_v{version_num}"
+    )
+
+    version_file = (
+        f"data_versions/{version_name}.csv"
+    )
+
+    df.to_csv(
+        version_file,
+        index=False
+    )
+
+    new_row = pd.DataFrame(
+        [{
+            "version":
+            version_name,
+
+            "train_start":
+            train_start_date,
+
+            "train_end":
+            train_end_date,
+
+            "rows":
+            len(df)
+        }]
+    )
+
+    log_df = pd.concat(
+        [
+            log_df,
+            new_row
+        ],
+        ignore_index=True
+    )
+
+    log_df.to_csv(
+        log_path,
+        index=False
+    )
+
+    print(
+        "\n📦 Data version created:"
+    )
+
+    print(
+        version_name
+    )
+
+    return version_name
+
+
+# ====================================
+# CREATE MODEL VERSION
+# ====================================
+def create_model_version():
+    os.makedirs(
+        "models",
+        exist_ok=True
+    )
+
+    version_file = (
+        "models/model_versions.csv"
+    )
+
+    if os.path.exists(
+        version_file
+    ):
+        df = pd.read_csv(
+            version_file
+        )
+
+        version_num = (
+            len(df) + 1
+        )
+
+    else:
+        df = pd.DataFrame(
+            columns=[
+                "version"
+            ]
+        )
+
+        version_num = 1
+
+    model_version = (
+        f"model_v{version_num}"
+    )
+
+    new_row = pd.DataFrame(
+        [{
+            "version":
+            model_version
+        }]
+    )
+
+    df = pd.concat(
+        [
+            df,
+            new_row
+        ],
+        ignore_index=True
+    )
+
+    df.to_csv(
+        version_file,
+        index=False
+    )
+
+    print(
+        "\n🧠 Model version:"
+    )
+
+    print(
+        model_version
+    )
+
+    return model_version
+
+
 def run_pipeline(
     train_start_date,
     train_end_date
@@ -59,16 +222,10 @@ def run_pipeline(
         "\n🚀 Retraining model..."
     )
 
-    # =========================
-    # FORCE LOCAL MLFLOW
-    # =========================
     mlflow.set_tracking_uri(
         "file:./mlruns"
     )
 
-    # =========================
-    # SET EXPERIMENT
-    # =========================
     mlflow.set_experiment(
         "Traffic Forecast"
     )
@@ -91,19 +248,18 @@ def run_pipeline(
         df
     )
 
-    # =========================
-    # FILTER TRAIN WINDOW
-    # =========================
     df = df[
         (df["date_time"] >= train_start_date)
         &
         (df["date_time"] < train_end_date)
     ].copy()
 
-    # =========================
-    # SPLIT TRAIN / VAL / TEST
-    # (giữ logic file preprocess.py)
-    # =========================
+    data_version = create_data_version(
+        df,
+        train_start_date,
+        train_end_date
+    )
+
     train_part, val_part, test_part = split_data(
         df
     )
@@ -120,9 +276,6 @@ def run_pipeline(
         f"📦 Test size : {len(test_part)}"
     )
 
-    # =========================
-    # TRAIN SET
-    # =========================
     X_train = train_part.drop(
         ["traffic_volume", "date_time"],
         axis=1
@@ -132,9 +285,6 @@ def run_pipeline(
         "traffic_volume"
     ]
 
-    # =========================
-    # VALIDATION SET
-    # =========================
     X_val = val_part.drop(
         ["traffic_volume", "date_time"],
         axis=1
@@ -144,9 +294,6 @@ def run_pipeline(
         "traffic_volume"
     ]
 
-    # =========================
-    # TEST SET
-    # =========================
     X_test = test_part.drop(
         ["traffic_volume", "date_time"],
         axis=1
@@ -156,9 +303,6 @@ def run_pipeline(
         "traffic_volume"
     ]
 
-    # =========================
-    # DATASET OBJECT
-    # =========================
     mlflow_dataset = mlflow.data.from_pandas(
         df,
         source="data/TrafficVolumeData.csv",
@@ -189,26 +333,17 @@ def run_pipeline(
             run_name=name
         ):
 
-            # =====================
-            # LOG DATASET
-            # =====================
             mlflow.log_input(
                 mlflow_dataset,
                 context="training"
             )
 
-            # =====================
-            # TRAIN MODEL
-            # =====================
             model = func(
                 X_train,
                 y_train,
                 random_state
             )
 
-            # =====================
-            # VALIDATION PREDICT
-            # =====================
             pred = model.predict(
                 X_val
             )
@@ -234,17 +369,16 @@ def run_pipeline(
                 f"MAPE : {mape:.2f}%"
             )
 
-            # =====================
-            # ATTRIBUTE
-            # =====================
             mlflow.set_tag(
                 "Models",
                 name
             )
 
-            # =====================
-            # PARAMS
-            # =====================
+            mlflow.set_tag(
+                "data_version",
+                data_version
+            )
+
             mlflow.log_param(
                 "train_start_date",
                 train_start_date
@@ -260,9 +394,6 @@ def run_pipeline(
                 random_state
             )
 
-            # =====================
-            # METRICS
-            # =====================
             mlflow.log_metric(
                 "MAE",
                 mae
@@ -278,9 +409,6 @@ def run_pipeline(
                 mape
             )
 
-            # =====================
-            # LOG MODEL
-            # =====================
             mlflow.sklearn.log_model(
                 sk_model=model,
                 name=name
@@ -294,9 +422,6 @@ def run_pipeline(
                 )
             )
 
-    # =========================
-    # PICK BEST MODEL
-    # =========================
     best = min(
         results,
         key=lambda x: x[2]
@@ -307,10 +432,8 @@ def run_pipeline(
         best[0]
     )
 
-    # =========================
-    # TEST BEST MODEL
-    # (dùng TEST SET thật)
-    # =========================
+    model_version = create_model_version()
+
     best_pred = best[1].predict(
         X_test
     )
@@ -336,9 +459,6 @@ def run_pipeline(
         f"MAPE : {best_mape:.2f}%"
     )
 
-    # =========================
-    # SAVE MODEL
-    # =========================
     os.makedirs(
         "models",
         exist_ok=True
@@ -349,13 +469,15 @@ def run_pipeline(
         "models/best_model.pkl"
     )
 
+    joblib.dump(
+        best[1],
+        f"models/{model_version}.pkl"
+    )
+
     print(
         "✅ Model saved"
     )
 
-    # =========================
-    # BEST MODEL RUN
-    # =========================
     with mlflow.start_run(
         run_name="Best_Model"
     ):
@@ -370,9 +492,16 @@ def run_pipeline(
             best[0]
         )
 
-        # =====================
-        # TEST METRICS
-        # =====================
+        mlflow.set_tag(
+            "data_version",
+            data_version
+        )
+
+        mlflow.set_tag(
+            "model_version",
+            model_version
+        )
+
         mlflow.log_metric(
             "test_MAE",
             best_mae
@@ -394,5 +523,5 @@ def run_pipeline(
 
         mlflow.sklearn.log_model(
             sk_model=best[1],
-            name="best_model"
+            name=best[0]
         )

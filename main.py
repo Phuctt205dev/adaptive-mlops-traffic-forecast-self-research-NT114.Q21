@@ -1,6 +1,7 @@
 # main.py
 import os
 import joblib
+import subprocess
 
 from src.preprocess import (
     load_data,
@@ -28,7 +29,7 @@ PREDICT_START = "2013-12-01"
 PREDICT_END   = "2014-01-01"
 
 # drift threshold
-MAE_THRESHOLD = 500
+MAE_THRESHOLD = 100
 
 MODEL_PATH = "models/best_model.pkl"
 
@@ -42,6 +43,7 @@ if not os.path.exists(MODEL_PATH):
     print(
         "⚠️ No model found."
     )
+
     print(
         "🚀 Training initial model..."
     )
@@ -57,6 +59,7 @@ if not os.path.exists(MODEL_PATH):
     print(
         "\n✅ Initial model created."
     )
+
     print(
         "Run main.py again."
     )
@@ -72,14 +75,25 @@ df = load_data(
     "data/TrafficVolumeData.csv"
 )
 
-df = preprocess(df)
+df = preprocess(
+    df
+)
 
 
 # ====================================
 # LOAD MODEL
 # ====================================
 
+print(
+    "\n📦 Loading current model..."
+)
+
 model = joblib.load(
+    MODEL_PATH
+)
+
+print(
+    "✅ Using:",
     MODEL_PATH
 )
 
@@ -93,6 +107,12 @@ new_month = df[
     &
     (df["date_time"] < PREDICT_END)
 ].copy()
+
+if len(new_month) == 0:
+    print(
+        "❌ No data found for prediction window."
+    )
+    exit()
 
 
 # ====================================
@@ -118,7 +138,13 @@ y_true = new_month[
 # PREDICT
 # ====================================
 
-y_pred = model.predict(X)
+print(
+    "\n🔮 Predicting..."
+)
+
+y_pred = model.predict(
+    X
+)
 
 
 # ====================================
@@ -156,6 +182,7 @@ print(
 # ====================================
 
 if drift:
+
     print(
         "\n🔄 Drift found → retrain"
     )
@@ -168,10 +195,24 @@ if drift:
         new_train_end
     )
 
+    print(
+        "\n✅ Retrain complete."
+    )
+
+    print(
+        "🚀 Running predict.py on new model..."
+    )
+
+    subprocess.run(
+        ["python", "predict.py"]
+    )
+
 else:
+
     print(
         "\n✅ No drift"
     )
+
     print(
         "Keep current model."
     )

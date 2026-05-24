@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  traffic-api:
+    build: .
+    container_name: traffic-mlops-container
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      - ./models:/app/models
+      - ./results:/app/results
+      - ./monitoring:/app/monitoring
+      - ./mlruns:/app/mlruns
+      - ./data_versions:/app/data_versions

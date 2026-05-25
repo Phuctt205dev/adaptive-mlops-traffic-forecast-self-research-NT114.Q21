@@ -2,13 +2,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import requests
 
 from src.inference import predict_single
 
 app = FastAPI(title="Traffic Volume Prediction API")
 
 # =========================
-# CORS (GIỮ - nhưng chỉnh an toàn hơn)
+# CORS (GIỮ NGUYÊN)
 # =========================
 app.add_middleware(
     CORSMiddleware,
@@ -22,23 +23,38 @@ app.add_middleware(
 )
 
 # =========================
-# REQUEST MODEL (QUAN TRỌNG)
+# REQUEST MODEL (MỚI - đơn giản hơn)
+# Chỉ cần date_time
 # =========================
 class PredictRequest(BaseModel):
     date_time: str
-    is_holiday: int | None = None
-    air_pollution_index: int
-    humidity: int
-    wind_speed: int
-    wind_direction: int
-    visibility_in_miles: int
-    dew_point: int
-    temperature: int
-    rain_p_h: float
-    snow_p_h: float
-    clouds_all: int
-    weather_type: str
-    weather_description: str
+
+
+# =========================
+# WEATHER API
+# Minneapolis coordinates
+# =========================
+def get_weather_features():
+    url = (
+        "https://api.open-meteo.com/v1/forecast"
+        "?latitude=44.98"
+        "&longitude=-93.26"
+        "&hourly="
+        "temperature_2m,"
+        "relative_humidity_2m,"
+        "cloud_cover,"
+        "precipitation"
+    )
+
+    response = requests.get(url)
+    data = response.json()
+
+    return {
+        "temperature": data["hourly"]["temperature_2m"][0],
+        "humidity": data["hourly"]["relative_humidity_2m"][0],
+        "clouds_all": data["hourly"]["cloud_cover"][0],
+        "rain_p_h": data["hourly"]["precipitation"][0],
+    }
 
 
 # =========================
@@ -64,7 +80,28 @@ def model_info():
 # =========================
 @app.post("/predict")
 def predict(data: PredictRequest):
-    prediction = predict_single(data.dict())
+    weather = get_weather_features()
+
+    payload = {
+        "date_time": data.date_time,
+
+        # giữ default cho các feature còn lại
+        "is_holiday": None,
+        "air_pollution_index": 121,
+        "humidity": weather["humidity"],
+        "wind_speed": 2,
+        "wind_direction": 329,
+        "visibility_in_miles": 1,
+        "dew_point": 1,
+        "temperature": weather["temperature"],
+        "rain_p_h": weather["rain_p_h"],
+        "snow_p_h": 0,
+        "clouds_all": weather["clouds_all"],
+        "weather_type": "Clouds",
+        "weather_description": "scattered clouds"
+    }
+
+    prediction = predict_single(payload)
 
     return {
         "prediction": prediction

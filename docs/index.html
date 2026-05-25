@@ -2,49 +2,122 @@
 <html>
 <head>
   <title>Traffic Predictor</title>
+
+  <style>
+    body {
+      font-family: Arial;
+      background: #f4f7fb;
+      display: flex;
+      justify-content: center;
+      padding-top: 50px;
+    }
+
+    .card {
+      background: white;
+      padding: 30px;
+      width: 420px;
+      border-radius: 12px;
+      box-shadow: 0 0 20px rgba(0,0,0,0.1);
+    }
+
+    h1 {
+      text-align: center;
+    }
+
+    p.subtitle {
+      text-align: center;
+      color: gray;
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      font-weight: bold;
+      margin-top: 15px;
+    }
+
+    input, button {
+      width: 100%;
+      padding: 12px;
+      margin-top: 8px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+      box-sizing: border-box;
+    }
+
+    button {
+      background: #0077ff;
+      color: white;
+      border: none;
+      cursor: pointer;
+      margin-top: 20px;
+    }
+
+    button:hover {
+      background: #005fd1;
+    }
+
+    #result {
+      margin-top: 25px;
+      font-size: 22px;
+      text-align: center;
+      color: green;
+      font-weight: bold;
+    }
+  </style>
 </head>
 <body>
-  <h1>Traffic Prediction</h1>
 
-  <button onclick="predict()">Predict</button>
+<div class="card">
+  <h1>Traffic Predictor</h1>
+  <p class="subtitle">
+    Predict future traffic volume automatically
+  </p>
+
+  <label>Select Date & Time</label>
+  <input type="datetime-local" id="date_time">
+
+  <button onclick="predict()">
+    Predict Traffic
+  </button>
 
   <p id="result"></p>
+</div>
 
-  <script>
-    async function predict() {
-      const payload = {
-        date_time: "2013-12-01 08:00:00",
-        is_holiday: null,
-        air_pollution_index: 121,
-        humidity: 89,
-        wind_speed: 2,
-        wind_direction: 329,
-        visibility_in_miles: 1,
-        dew_point: 1,
-        temperature: 40,
-        rain_p_h: 0,
-        snow_p_h: 0,
-        clouds_all: 40,
-        weather_type: "Clouds",
-        weather_description: "scattered clouds"
-      };
+<script>
+async function predict() {
 
-      const response = await fetch(
-        "https://traffic-son.duckdns.org/predict",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(payload)
-        }
-      );
+  const dateTime =
+    document.getElementById("date_time").value;
 
-      const data = await response.json();
+  if (!dateTime) {
+    alert("Please select date and time");
+    return;
+  }
 
-      document.getElementById("result").innerText =
-        "Prediction: " + data.prediction;
+  const payload = {
+    date_time: dateTime
+  };
+
+  const response = await fetch(
+    "https://traffic-son.duckdns.org/predict",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
     }
-  </script>
+  );
+
+  const data = await response.json();
+
+  document.getElementById("result").innerText =
+    "Prediction: " +
+    data.prediction +
+    " vehicles/hour";
+}
+</script>
+
 </body>
 </html>

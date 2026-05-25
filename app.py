@@ -68,7 +68,6 @@ def map_weather_type(code):
 def get_is_holiday(date_str):
     dt = pd.to_datetime(date_str)
 
-    # Saturday=5, Sunday=6
     if dt.weekday() >= 5:
         return 1
 
@@ -119,7 +118,6 @@ def get_weather_features():
         "clouds_all":
             data["hourly"]["cloud_cover"][0],
 
-        # convert meter -> miles
         "visibility_in_miles":
             data["hourly"]["visibility"][0] / 1609.34,
 
@@ -166,7 +164,6 @@ def predict(data: PredictRequest):
         "is_holiday":
             get_is_holiday(data.date_time),
 
-        # chưa có air pollution API
         "air_pollution_index":
             121,
 
@@ -209,5 +206,6 @@ def predict(data: PredictRequest):
     prediction = predict_single(payload)
 
     return {
-        "prediction": prediction
+        "prediction": int(round(prediction)),
+        "features_used": payload
     }

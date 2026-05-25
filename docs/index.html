@@ -15,7 +15,7 @@
     .card {
       background: white;
       padding: 30px;
-      width: 420px;
+      width: 600px;
       border-radius: 12px;
       box-shadow: 0 0 20px rgba(0,0,0,0.1);
     }
@@ -64,12 +64,28 @@
       color: green;
       font-weight: bold;
     }
+
+    table {
+      margin-top: 25px;
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    th, td {
+      border: 1px solid #ddd;
+      padding: 8px;
+    }
+
+    th {
+      background: #f2f2f2;
+    }
   </style>
 </head>
 <body>
 
 <div class="card">
   <h1>Traffic Predictor</h1>
+
   <p class="subtitle">
     Predict future traffic volume automatically
   </p>
@@ -82,6 +98,8 @@
   </button>
 
   <p id="result"></p>
+
+  <div id="featuresTable"></div>
 </div>
 
 <script>
@@ -116,6 +134,31 @@ async function predict() {
     "Prediction: " +
     data.prediction +
     " vehicles/hour";
+
+  let html = `
+    <table>
+      <tr>
+        <th>Feature</th>
+        <th>Value</th>
+      </tr>
+  `;
+
+  for (const [key, value] of Object.entries(
+    data.features_used
+  )) {
+    html += `
+      <tr>
+        <td>${key}</td>
+        <td>${value}</td>
+      </tr>
+    `;
+  }
+
+  html += "</table>";
+
+  document.getElementById(
+    "featuresTable"
+  ).innerHTML = html;
 }
 </script>
 

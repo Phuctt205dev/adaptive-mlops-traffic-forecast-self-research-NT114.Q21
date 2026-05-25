@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Traffic Predictor</title>
+</head>
+<body>
+  <h1>Traffic Prediction</h1>
+
+  <button onclick="predict()">Predict</button>
+
+  <p id="result"></p>
+
+  <script>
+    async function predict() {
+      const payload = {
+        date_time: "2013-12-01 08:00:00",
+        is_holiday: null,
+        air_pollution_index: 121,
+        humidity: 89,
+        wind_speed: 2,
+        wind_direction: 329,
+        visibility_in_miles: 1,
+        dew_point: 1,
+        temperature: 40,
+        rain_p_h: 0,
+        snow_p_h: 0,
+        clouds_all: 40,
+        weather_type: "Clouds",
+        weather_description: "scattered clouds"
+      };
+
+      const response = await fetch(
+        "http://3.107.187.28:8000/predict",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
+        }
+      );
+
+      const data = await response.json();
+
+      document.getElementById("result").innerText =
+        "Prediction: " + data.prediction;
+    }
+  </script>
+</body>
+</html>

@@ -7,7 +7,7 @@ monitoring/
 src/__pycache__/
 *.pyc
 # model có thể build lại
-models/
+models/*.csv
 
 #test
 results/

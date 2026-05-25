@@ -77,6 +77,7 @@ def get_is_holiday(date_str):
 # =========================
 # WEATHER API
 # Minneapolis coordinates
+# FIX: lấy đúng weather theo date_time user chọn
 # =========================
 def get_weather_features(target_datetime):
     url = (
@@ -101,13 +102,15 @@ def get_weather_features(target_datetime):
 
     hourly = data["hourly"]
 
-    # target format:
+    # Format frontend gửi:
     # 2026-05-26T08:00
     target = target_datetime[:16]
 
+    # Tìm đúng vị trí thời gian user chọn
     try:
         idx = hourly["time"].index(target)
     except ValueError:
+        # nếu không tìm thấy thì fallback phần tử đầu
         idx = 0
 
     return {
@@ -166,7 +169,11 @@ def model_info():
 # =========================
 @app.post("/predict")
 def predict(data: PredictRequest):
-    weather = get_weather_features()
+
+    # FIX: truyền date_time user chọn vào đây
+    weather = get_weather_features(
+        data.date_time
+    )
 
     payload = {
         "date_time":

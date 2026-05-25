@@ -78,7 +78,7 @@ def get_is_holiday(date_str):
 # WEATHER API
 # Minneapolis coordinates
 # =========================
-def get_weather_features():
+def get_weather_features(target_datetime):
     url = (
         "https://api.open-meteo.com/v1/forecast"
         "?latitude=44.98"
@@ -99,36 +99,47 @@ def get_weather_features():
     response = requests.get(url)
     data = response.json()
 
+    hourly = data["hourly"]
+
+    # target format:
+    # 2026-05-26T08:00
+    target = target_datetime[:16]
+
+    try:
+        idx = hourly["time"].index(target)
+    except ValueError:
+        idx = 0
+
     return {
         "temperature":
-            data["hourly"]["temperature_2m"][0],
+            hourly["temperature_2m"][idx],
 
         "humidity":
-            data["hourly"]["relative_humidity_2m"][0],
+            hourly["relative_humidity_2m"][idx],
 
         "dew_point":
-            data["hourly"]["dew_point_2m"][0],
+            hourly["dew_point_2m"][idx],
 
         "rain_p_h":
-            data["hourly"]["precipitation"][0],
+            hourly["precipitation"][idx],
 
         "snow_p_h":
-            data["hourly"]["snowfall"][0],
+            hourly["snowfall"][idx],
 
         "clouds_all":
-            data["hourly"]["cloud_cover"][0],
+            hourly["cloud_cover"][idx],
 
         "visibility_in_miles":
-            data["hourly"]["visibility"][0] / 1609.34,
+            hourly["visibility"][idx] / 1609.34,
 
         "wind_speed":
-            data["hourly"]["wind_speed_10m"][0],
+            hourly["wind_speed_10m"][idx],
 
         "wind_direction":
-            data["hourly"]["wind_direction_10m"][0],
+            hourly["wind_direction_10m"][idx],
 
         "weather_code":
-            data["hourly"]["weather_code"][0],
+            hourly["weather_code"][idx],
     }
 
 

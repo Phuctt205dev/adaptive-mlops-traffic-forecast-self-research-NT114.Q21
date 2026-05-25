@@ -1,11 +1,28 @@
 # app.py
 from fastapi import FastAPI
+from fastapi.middleware.cors import (
+    CORSMiddleware
+)
+
 from src.inference import (
     predict_single
 )
 
 app = FastAPI(
     title="Traffic Volume Prediction API"
+)
+
+# =========================
+# CORS
+# Cho phép GitHub Pages
+# gọi API từ domain khác
+# =========================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 

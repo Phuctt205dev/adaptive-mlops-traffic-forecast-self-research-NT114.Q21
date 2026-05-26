@@ -57,10 +57,12 @@ def get_is_holiday(date_str):
 # WEATHER API (FIXED - AN TOÀN)
 # =========================
 def get_weather_features(target_datetime):
+
     url = (
         "https://api.open-meteo.com/v1/forecast"
         "?latitude=44.98"
         "&longitude=-93.26"
+        "&timezone=auto"
         "&hourly="
         "temperature_2m,"
         "relative_humidity_2m,"
@@ -75,40 +77,84 @@ def get_weather_features(target_datetime):
     )
 
     try:
-        response = requests.get(url, timeout=8)
 
-        # ❗ chặn lỗi HTTP (502, 503, 404...)
+        response = requests.get(
+            url,
+            timeout=8
+        )
+
         response.raise_for_status()
 
         data = response.json()
 
         hourly = data["hourly"]
 
-        target = target_datetime[:16]
+        # convert user datetime
+        target_dt = pd.to_datetime(
+            target_datetime
+        )
 
-        try:
-            idx = hourly["time"].index(target)
-        except ValueError:
-            idx = 0
+        api_times = pd.to_datetime(
+            hourly["time"]
+        )
+
+        # DEBUG
+        print("USER TIME:", target_dt)
+        print("FIRST API TIME:", api_times[0])
+
+        # tìm nearest hour
+        idx = min(
+            range(len(api_times)),
+            key=lambda i:
+            abs(
+                (
+                    api_times[i] - target_dt
+                ).total_seconds()
+            )
+        )
+
+        print("MATCHED INDEX:", idx)
+        print("MATCHED TIME:", api_times[idx])
 
         return {
-            "temperature": hourly["temperature_2m"][idx],
-            "humidity": hourly["relative_humidity_2m"][idx],
-            "dew_point": hourly["dew_point_2m"][idx],
-            "rain_p_h": hourly["precipitation"][idx],
-            "snow_p_h": hourly["snowfall"][idx],
-            "clouds_all": hourly["cloud_cover"][idx],
-            "visibility_in_miles": hourly["visibility"][idx] / 1609.34,
-            "wind_speed": hourly["wind_speed_10m"][idx],
-            "wind_direction": hourly["wind_direction_10m"][idx],
-            "weather_code": hourly["weather_code"][idx],
+
+            "temperature":
+                hourly["temperature_2m"][idx],
+
+            "humidity":
+                hourly["relative_humidity_2m"][idx],
+
+            "dew_point":
+                hourly["dew_point_2m"][idx],
+
+            "rain_p_h":
+                hourly["precipitation"][idx],
+
+            "snow_p_h":
+                hourly["snowfall"][idx],
+
+            "clouds_all":
+                hourly["cloud_cover"][idx],
+
+            "visibility_in_miles":
+                hourly["visibility"][idx] / 1609.34,
+
+            "wind_speed":
+                hourly["wind_speed_10m"][idx],
+
+            "wind_direction":
+                hourly["wind_direction_10m"][idx],
+
+            "weather_code":
+                hourly["weather_code"][idx],
         }
 
     except Exception as e:
+
         print("Weather API FAILED:", e)
 
-        # 🔥 FALLBACK (KHÔNG BAO GIỜ CRASH SERVER)
         return {
+
             "temperature": 20,
             "humidity": 60,
             "dew_point": 10,

@@ -4,6 +4,7 @@ import json
 import time
 import joblib
 import pandas as pd
+from datetime import datetime
 
 from src.preprocess import (
     load_data,
@@ -40,7 +41,7 @@ STATE_PATH = os.getenv(
 MAE_THRESHOLD = float(
     os.getenv(
         "MAE_THRESHOLD",
-        "100"
+        "700"
     )
 )
 
@@ -51,10 +52,10 @@ CHECK_INTERVAL_SECONDS = int(
     )
 )
 
-CHECK_WINDOW_MONTHS = int(
+CHECK_WINDOW_DAYS = int(
     os.getenv(
-        "CHECK_WINDOW_MONTHS",
-        "1"
+        "CHECK_WINDOW_DAYS",
+        "7"
     )
 )
 
@@ -82,6 +83,16 @@ RUN_ONCE = os.getenv(
     "RUN_ONCE",
     "false"
 ).lower() == "true"
+
+
+# =========================
+# PRINT HELPER
+# =========================
+def log(message):
+    print(
+        message,
+        flush=True
+    )
 
 
 # =========================
@@ -134,7 +145,10 @@ def load_state():
         "last_check_end": None,
         "last_drift": None,
         "last_mae": None,
-        "run_count": 0
+        "last_status": "initialized",
+        "last_error": None,
+        "run_count": 0,
+        "updated_at": datetime.now().isoformat()
     }
 
 
@@ -142,6 +156,13 @@ def load_state():
 # SAVE STATE
 # =========================
 def save_state(state):
+    state["updated_at"] = datetime.now().isoformat()
+
+    os.makedirs(
+        os.path.dirname(STATE_PATH),
+        exist_ok=True
+    )
+
     with open(
         STATE_PATH,
         "w",
@@ -185,6 +206,64 @@ def get_latest_model_version():
 
 
 # =========================
+# PRINT BEST MODEL INFO
+# =========================
+def print_best_model_info():
+    info_path = (
+        "models/best_model_info.json"
+    )
+
+    if not os.path.exists(
+        info_path
+    ):
+        log(
+            "ℹ️ No best_model_info.json found yet."
+        )
+        return
+
+    try:
+        with open(
+            info_path,
+            "r",
+            encoding="utf-8"
+        ) as f:
+            info = json.load(f)
+
+        log(
+            "\n🏆 CURRENT BEST MODEL INFO"
+        )
+
+        log(
+            f"Model type   : {info.get('best_model_name')}"
+        )
+
+        log(
+            f"Model version: {info.get('model_version')}"
+        )
+
+        log(
+            f"Data version : {info.get('data_version')}"
+        )
+
+        log(
+            f"Test MAE     : {info.get('test_MAE')}"
+        )
+
+        log(
+            f"Test RMSE    : {info.get('test_RMSE')}"
+        )
+
+        log(
+            f"Test MAPE    : {info.get('test_MAPE')}"
+        )
+
+    except Exception as e:
+        log(
+            f"⚠️ Cannot read best model info: {e}"
+        )
+
+
+# =========================
 # TRAIN INITIAL MODEL IF MISSING
 # =========================
 def train_initial_model_if_missing():
@@ -193,15 +272,15 @@ def train_initial_model_if_missing():
     ):
         return
 
-    print(
+    log(
         "\n⚠️ No model found."
     )
 
-    print(
+    log(
         "🚀 Training initial model..."
     )
 
-    print(
+    log(
         f"Train window: {INITIAL_TRAIN_START} → {INITIAL_TRAIN_END}"
     )
 
@@ -210,9 +289,11 @@ def train_initial_model_if_missing():
         train_end_date=INITIAL_TRAIN_END
     )
 
-    print(
+    log(
         "✅ Initial model created."
     )
+
+    print_best_model_info()
 
 
 # =========================
@@ -221,31 +302,37 @@ def train_initial_model_if_missing():
 def check_drift_once():
     ensure_folders()
 
-    print(
+    log(
         "\n=============================="
     )
 
-    print(
+    log(
         "🔍 DRIFT WORKER START CHECK"
     )
 
-    print(
+    log(
         "=============================="
     )
 
-    print(
+    log(
         f"DATA_PATH: {DATA_PATH}"
     )
 
-    print(
+    log(
         f"MODEL_PATH: {MODEL_PATH}"
     )
 
-    print(
+    log(
         f"MAE_THRESHOLD: {MAE_THRESHOLD}"
     )
 
+    log(
+        f"CHECK_WINDOW_DAYS: {CHECK_WINDOW_DAYS}"
+    )
+
     train_initial_model_if_missing()
+
+    print_best_model_info()
 
     state = load_state()
 
@@ -258,29 +345,51 @@ def check_drift_once():
     )
 
     if check_start >= drift_end_limit:
-        print(
+        log(
             "\n✅ All drift windows have been checked."
         )
 
-        print(
+        log(
             f"Current next_check_start: {check_start}"
+        )
+
+        state["last_status"] = "finished_all_windows"
+
+        save_state(
+            state
         )
 
         return
 
-    check_end = check_start + pd.DateOffset(
-        months=CHECK_WINDOW_MONTHS
+    check_end = check_start + pd.Timedelta(
+        days=CHECK_WINDOW_DAYS
     )
 
     if check_end > drift_end_limit:
         check_end = drift_end_limit
 
-    print(
+    log(
         "\n📦 Drift check window:"
     )
 
-    print(
+    log(
         f"{check_start} → {check_end}"
+    )
+
+    state["last_check_start"] = str(
+        check_start.date()
+    )
+
+    state["last_check_end"] = str(
+        check_end.date()
+    )
+
+    state["last_status"] = "checking_drift"
+
+    state["last_error"] = None
+
+    save_state(
+        state
     )
 
     df = load_data(
@@ -298,11 +407,11 @@ def check_drift_once():
     data_min = df["date_time"].min()
     data_max = df["date_time"].max()
 
-    print(
+    log(
         "\n📊 Dataset time range:"
     )
 
-    print(
+    log(
         f"{data_min} → {data_max}"
     )
 
@@ -313,7 +422,7 @@ def check_drift_once():
     ].copy()
 
     if len(current_window) == 0:
-        print(
+        log(
             "\n⚠️ No data found in this drift window."
         )
 
@@ -321,17 +430,26 @@ def check_drift_once():
             check_end.date()
         )
 
+        state["last_status"] = "no_data"
+
+        state["run_count"] = int(
+            state.get(
+                "run_count",
+                0
+            )
+        ) + 1
+
         save_state(
             state
         )
 
         return
 
-    print(
+    log(
         f"\n📦 Drift check rows: {len(current_window)}"
     )
 
-    print(
+    log(
         "\n📦 Loading current model..."
     )
 
@@ -339,7 +457,7 @@ def check_drift_once():
         MODEL_PATH
     )
 
-    print(
+    log(
         "✅ Model loaded"
     )
 
@@ -360,7 +478,7 @@ def check_drift_once():
         "traffic_volume"
     ]
 
-    print(
+    log(
         "\n🔮 Predicting drift window..."
     )
 
@@ -377,8 +495,26 @@ def check_drift_once():
         model_version=model_version
     )
 
+    state["last_drift"] = bool(
+        drift
+    )
+
+    state["last_mae"] = float(
+        mae
+    )
+
+    state["last_status"] = (
+        "drift_detected"
+        if drift
+        else "no_drift"
+    )
+
+    save_state(
+        state
+    )
+
     if drift:
-        print(
+        log(
             "\n🚨 Drift found → retraining model"
         )
 
@@ -388,12 +524,18 @@ def check_drift_once():
             check_end.date()
         )
 
-        print(
+        log(
             "\n📦 New train window:"
         )
 
-        print(
+        log(
             f"{new_train_start} → {new_train_end}"
+        )
+
+        state["last_status"] = "retraining"
+
+        save_state(
+            state
         )
 
         run_pipeline(
@@ -401,30 +543,20 @@ def check_drift_once():
             train_end_date=new_train_end
         )
 
-        print(
+        log(
             "\n✅ Retrain complete."
         )
 
+        state["last_status"] = "retrain_complete"
+
+        print_best_model_info()
+
     else:
-        print(
+        log(
             "\n✅ No drift → keep current model."
         )
 
-    state["last_check_start"] = str(
-        check_start.date()
-    )
-
-    state["last_check_end"] = str(
-        check_end.date()
-    )
-
-    state["last_drift"] = bool(
-        drift
-    )
-
-    state["last_mae"] = float(
-        mae
-    )
+        state["last_status"] = "no_drift_keep_model"
 
     state["next_check_start"] = str(
         check_end.date()
@@ -441,11 +573,11 @@ def check_drift_once():
         state
     )
 
-    print(
+    log(
         "\n📝 Drift state saved."
     )
 
-    print(
+    log(
         f"Next check starts at: {state['next_check_start']}"
     )
 
@@ -457,15 +589,15 @@ if __name__ == "__main__":
 
     ensure_folders()
 
-    print(
+    log(
         "\n🚀 Traffic Drift Worker Started"
     )
 
-    print(
+    log(
         f"RUN_ONCE: {RUN_ONCE}"
     )
 
-    print(
+    log(
         f"CHECK_INTERVAL_SECONDS: {CHECK_INTERVAL_SECONDS}"
     )
 
@@ -477,21 +609,33 @@ if __name__ == "__main__":
 
         except Exception as e:
 
-            print(
+            log(
                 "\n❌ Drift worker error:"
             )
 
-            print(
+            log(
+                str(e)
+            )
+
+            state = load_state()
+
+            state["last_status"] = "error"
+
+            state["last_error"] = str(
                 e
             )
 
+            save_state(
+                state
+            )
+
         if RUN_ONCE:
-            print(
+            log(
                 "\n✅ RUN_ONCE=true → worker stopped."
             )
             break
 
-        print(
+        log(
             f"\n⏳ Sleeping {CHECK_INTERVAL_SECONDS} seconds..."
         )
 

@@ -8,6 +8,10 @@ services:
     ports:
       - "8000:8000"
 
+    environment:
+      MLFLOW_ALLOW_FILE_STORE: "true"
+      PYTHONUNBUFFERED: "1"
+
     volumes:
       - ./models:/app/models
       - ./results:/app/results
@@ -23,14 +27,19 @@ services:
     build: .
     container_name: traffic-drift-worker-container
 
-    command: python retrain_job.py
+    command: python -u retrain_job.py
 
     environment:
+      PYTHONUNBUFFERED: "1"
+      MLFLOW_ALLOW_FILE_STORE: "true"
+
       DATA_PATH: "data/TrafficVolumeData.csv"
       MODEL_PATH: "models/best_model.pkl"
       STATE_PATH: "monitoring/drift_state.json"
 
-      MAE_THRESHOLD: "100"
+      # Ngưỡng 100 quá thấp, dễ drift liên tục.
+      # Tạm dùng 700 cho demo hợp lý hơn.
+      MAE_THRESHOLD: "700"
 
       DRIFT_START_DATE: "2014-01-01"
       DRIFT_END_LIMIT: "2014-09-01"
@@ -38,7 +47,8 @@ services:
       INITIAL_TRAIN_START: "2012-10-02"
       INITIAL_TRAIN_END: "2014-01-01"
 
-      CHECK_WINDOW_MONTHS: "1"
+      # Mỗi lần check/retrain theo cửa sổ 7 ngày
+      CHECK_WINDOW_DAYS: "7"
 
       # Demo: 60 giây check 1 lần
       # Làm thật có thể đổi thành 3600 hoặc 86400

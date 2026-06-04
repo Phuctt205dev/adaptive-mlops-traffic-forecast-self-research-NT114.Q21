@@ -2,6 +2,7 @@
 import pandas as pd
 import numpy as np
 
+
 def load_data(path):
     df = pd.read_csv(path)
     return df
@@ -36,12 +37,20 @@ def preprocess(df):
     # =========================
     # 4. ENCODE CATEGORICAL
     # =========================
-    df = pd.get_dummies(df, columns=["weather_type"], drop_first=True)
+    df = pd.get_dummies(
+        df,
+        columns=["weather_type"],
+        drop_first=True
+    )
 
     # =========================
     # ❗ CHỈ DROP DESCRIPTION
     # =========================
-    df = df.drop(["weather_description"], axis=1)
+    df = df.drop(
+        ["weather_description"],
+        axis=1,
+        errors="ignore"
+    )
 
     # =========================
     # 5. DROP NA
@@ -53,20 +62,42 @@ def preprocess(df):
 
 def split_data(df):
     # =========================
-    # 🔥 TIME-BASED SPLIT (CHỈ TRONG 2012–2013)
+    # 🔥 TIME-BASED SPLIT
     # =========================
-    df = df.sort_values("date_time")
+    # GIỮ LOGIC CŨ:
+    # - sort theo thời gian
+    # - chia 70% train, 15% val, 15% test
+    #
+    # UPDATE:
+    # - bỏ filter cứng date_time < 2014-01-01
+    # - lý do: khi drift worker retrain với dữ liệu 2014,
+    #   model cần được phép học thêm dữ liệu mới.
+    # =========================
 
-    # chỉ lấy data trước 2014
-    df = df[df["date_time"] < "2014-01-01"]
+    df = df.sort_values(
+        "date_time"
+    )
 
     n = len(df)
 
-    train_end = int(n * 0.7)
-    val_end = int(n * 0.85)
+    train_end = int(
+        n * 0.7
+    )
 
-    train_df = df[:train_end]
-    val_df = df[train_end:val_end]
-    test_df = df[val_end:]
+    val_end = int(
+        n * 0.85
+    )
+
+    train_df = df[
+        :train_end
+    ]
+
+    val_df = df[
+        train_end:val_end
+    ]
+
+    test_df = df[
+        val_end:
+    ]
 
     return train_df, val_df, test_df

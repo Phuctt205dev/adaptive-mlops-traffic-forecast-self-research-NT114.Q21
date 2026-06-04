@@ -1,3 +1,5 @@
+docker-compose.yml:
+
 version: "3.9"
 
 services:
@@ -14,3 +16,44 @@ services:
       - ./monitoring:/app/monitoring
       - ./mlruns:/app/mlruns
       - ./data_versions:/app/data_versions
+      - ./data:/app/data
+
+    restart: unless-stopped
+
+
+  traffic-drift-worker:
+    build: .
+    container_name: traffic-drift-worker-container
+
+    command: python retrain_job.py
+
+    environment:
+      DATA_PATH: data/TrafficVolumeData.csv
+      MODEL_PATH: models/best_model.pkl
+      STATE_PATH: monitoring/drift_state.json
+
+      MAE_THRESHOLD: 100
+
+      DRIFT_START_DATE: 2014-01-01
+      DRIFT_END_LIMIT: 2014-09-01
+
+      INITIAL_TRAIN_START: 2012-10-02
+      INITIAL_TRAIN_END: 2014-01-01
+
+      CHECK_WINDOW_MONTHS: 1
+
+      # Demo: 60 giây check 1 lần
+      # Làm thật có thể đổi thành 3600 hoặc 86400
+      CHECK_INTERVAL_SECONDS: 60
+
+      RUN_ONCE: "false"
+
+    volumes:
+      - ./models:/app/models
+      - ./results:/app/results
+      - ./monitoring:/app/monitoring
+      - ./mlruns:/app/mlruns
+      - ./data_versions:/app/data_versions
+      - ./data:/app/data
+
+    restart: unless-stopped

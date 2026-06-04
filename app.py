@@ -1,6 +1,8 @@
 # app.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import requests
 import pandas as pd
@@ -9,6 +11,24 @@ from src.inference import predict_single
 
 app = FastAPI(title="Traffic Volume Prediction API")
 
+
+# =========================
+# FRONTEND STATIC FILES
+# =========================
+app.mount(
+    "/web",
+    StaticFiles(directory="docs"),
+    name="web"
+)
+
+
+@app.get("/")
+def root():
+    return FileResponse(
+        "docs/index.html"
+    )
+
+
 # =========================
 # CORS (GIỮ NGUYÊN)
 # =========================
@@ -16,12 +36,17 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://phuctt205dev.github.io",
-        "https://traffic-son.duckdns.org"
+        "https://traffic-son.duckdns.org",
+        "http://traffic-son.duckdns.org",
+        "http://traffic-son.duckdns.org:8000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # =========================
 # REQUEST MODEL (GIỮ)

@@ -65,6 +65,14 @@
       font-weight: bold;
     }
 
+    #error {
+      margin-top: 15px;
+      font-size: 15px;
+      text-align: center;
+      color: red;
+      font-weight: bold;
+    }
+
     table {
       margin-top: 25px;
       width: 100%;
@@ -99,6 +107,8 @@
 
   <p id="result"></p>
 
+  <p id="error"></p>
+
   <div id="featuresTable"></div>
 </div>
 
@@ -113,52 +123,80 @@ async function predict() {
     return;
   }
 
+  document.getElementById("result").innerText =
+    "Predicting...";
+
+  document.getElementById("error").innerText =
+    "";
+
+  document.getElementById("featuresTable").innerHTML =
+    "";
+
   const payload = {
     date_time: dateTime
   };
 
-  const response = await fetch(
-    "https://traffic-son.duckdns.org/predict",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
+  try {
+
+    const response = await fetch(
+      "/predict",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        "API error: " + response.status
+      );
     }
-  );
 
-  const data = await response.json();
+    const data = await response.json();
 
-  document.getElementById("result").innerText =
-    "Prediction: " +
-    data.prediction +
-    " vehicles/hour";
+    document.getElementById("result").innerText =
+      "Prediction: " +
+      data.prediction +
+      " vehicles/hour";
 
-  let html = `
-    <table>
-      <tr>
-        <th>Feature</th>
-        <th>Value</th>
-      </tr>
-  `;
-
-  for (const [key, value] of Object.entries(
-    data.features_used
-  )) {
-    html += `
-      <tr>
-        <td>${key}</td>
-        <td>${value}</td>
-      </tr>
+    let html = `
+      <table>
+        <tr>
+          <th>Feature</th>
+          <th>Value</th>
+        </tr>
     `;
+
+    for (const [key, value] of Object.entries(
+      data.features_used
+    )) {
+      html += `
+        <tr>
+          <td>${key}</td>
+          <td>${value}</td>
+        </tr>
+      `;
+    }
+
+    html += "</table>";
+
+    document.getElementById(
+      "featuresTable"
+    ).innerHTML = html;
+
+  } catch (error) {
+
+    console.error(error);
+
+    document.getElementById("result").innerText =
+      "";
+
+    document.getElementById("error").innerText =
+      "Prediction failed. Please check API connection or server logs.";
   }
-
-  html += "</table>";
-
-  document.getElementById(
-    "featuresTable"
-  ).innerHTML = html;
 }
 </script>
 

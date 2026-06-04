@@ -1,0 +1,658 @@
+================================================================================
+KỀ HOẠCH THỰC HIỆN DỰ ÁN
+================================================================================
+
+Dự án: Xây dựng Quy Trình MLOps Thích Ứng Với Data Drift
+Cho Dự Báo Lưu Lượng Giao Thông
+
+Ngày tạo: 10/05/2026
+
+================================================================================
+I. TỔNG QUAN DỰ ÁN
+================================================================================
+
+Bối Cảnh:
+  Các hệ thống dự báo lưu lượng giao thông thường gặp vấn đề khi dữ liệu
+  trong thực tế thay đổi so với dữ liệu training, dẫn đến hiệu năng model
+  giảm. Việc phát hiện và xử lý những thay đổi này (drift) thường phải
+  thực hiện thủ công.
+
+Mục Tiêu Chính:
+  Xây dựng một quy trình MLOps hoàn chỉnh có khả năng:
+  - Tự động phát hiện khi model không còn hiệu quả (data drift detection)
+  - Tự động retrain model khi cần
+  - Lựa chọn model tốt nhất từ nhiều ứng cử viên
+  - Duy trì và theo dõi hiệu năng model liên tục
+
+Đối Tượng Sử Dụng:
+  Hệ thống được thiết kế cho nhóm data engineers, ML engineers, và operations
+  teams cần quản lý model machine learning trong thực tế.
+
+================================================================================
+II. KIẾN TRÚC HỆ THỐNG TỔNG QUAN
+================================================================================
+
+2.1 Các Thành Phần Chính:
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │                    Data Sources                             │
+  │              (CSV: TrafficVolumeData.csv)                   │
+  └────────────────────┬────────────────────────────────────────┘
+                       │
+                       ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │              Data Preprocessing Module                       │
+  │  - Load dữ liệu                                             │
+  │  - Feature engineering (time, weather, holiday encoding)   │
+  │  - Normalization, handling missing values                  │
+  └────────────────────┬────────────────────────────────────────┘
+                       │
+            ┌──────────┴──────────┐
+            ▼                     ▼
+  ┌─────────────────┐  ┌──────────────────┐
+  │  Training Data  │  │  Validation Data │
+  │      (85%)      │  │      (15%)       │
+  └────────┬────────┘  └────────┬─────────┘
+           │                    │
+           ▼                    ▼
+  ┌──────────────────────────────────────┐
+  │     Model Training Module             │
+  │  - RandomForest                       │
+  │  - XGBoost                            │
+  │  - LightGBM                           │
+  └────────────────┬─────────────────────┘
+                   │
+                   ▼
+  ┌──────────────────────────────────────┐
+  │  Model Evaluation & Selection         │
+  │  - Tính MAE, RMSE                     │
+  │  - Chọn best model                    │
+  │  - Lưu model                          │
+  └──────────────────┬────────────────────┘
+                     │
+                     ▼
+  ┌──────────────────────────────────────┐
+  │     Saved Model (best_model.pkl)     │
+  └────────────┬─────────────────────────┘
+               │
+               ▼
+  ┌──────────────────────────────────────┐
+  │   Inference & Drift Detection        │
+  │  - Dự đoán trên dữ liệu mới          │
+  │  - Tính MAE                           │
+  │  - So sánh với threshold              │
+  │  - Quyết định: Retrain hay Keep      │
+  └──────────────────────────────────────┘
+
+2.2 Luồng Dữ Liệu:
+  Input → Preprocess → Split → Train/Eval → Model Selection → Save
+           ↓
+           Predict → Drift Detection → [If Drift] → Retrain
+                                    → [If No Drift] → Keep
+
+2.3 Thành Phần Lưu Trữ:
+  - Models: Lưu model đã training
+  - Data: Lưu dataset nguồn
+  - Results: Lưu kết quả dự đoán
+  - Artifacts: Lưu logs, metrics, outputs
+
+================================================================================
+III. GIAI ĐOẠN 1: CHUẨN BỊ VÀ KHÁM PHÁ
+================================================================================
+
+Mục Đích: Hiểu rõ dữ liệu, môi trường, và xác định requirements chi tiết.
+
+Các Công Việc:
+
+  3.1 Khám Phá Dữ Liệu:
+    - Phân tích cấu trúc dữ liệu (columns, dtypes, size)
+    - Kiểm tra missing values, outliers
+    - Phân tích phân phối traffic_volume
+    - Xác định mối quan hệ giữa features và target
+    - Tìm patterns theo thời gian (hourly, daily, seasonal)
+
+  3.2 Chuẩn Bị Môi Trường:
+    - Cài đặt Python (version 3.8+)
+    - Tạo virtual environment
+    - Cài đặt dependencies: scikit-learn, pandas, numpy
+    - Cài đặt tools monitoring: matplotlib, joblib
+    - Setup folder structure
+
+  3.3 Định Nghĩa Requirements:
+    - Xác định metric chính (MAE, RMSE)
+    - Xác định drift threshold
+    - Xác định train window size
+    - Xác định validation split ratio
+    - Xác định output format
+
+  3.4 Deliverables:
+    - Báo cáo phân tích dữ liệu
+    - Môi trường development sẵn sàng
+    - Data dictionary
+    - Configuration file template
+
+Timeline: 2-3 ngày
+
+================================================================================
+IV. GIAI ĐOẠN 2: PHÁT TRIỂN MODULE PREPROCESSING
+================================================================================
+
+Mục Đích: Xây dựng bộ xử lý dữ liệu linh hoạt, có thể tái sử dụng.
+
+Các Công Việc:
+
+  4.1 Data Loading:
+    - Viết hàm load_data() đọc từ CSV
+    - Kiểm tra encoding, delimiter
+    - Validate dữ liệu ban đầu
+    - Handle errors, logging
+
+  4.2 Feature Engineering:
+    - Extract time features từ datetime column (hour, day, month)
+    - Tạo cyclical features cho time (sin/cos encoding)
+    - Tạo binary features (is_weekend, is_holiday)
+    - Encode categorical features (weather_type → one-hot)
+    - Scale/normalize numerical features
+
+  4.3 Data Cleaning:
+    - Handle missing values (drop, imputation)
+    - Remove outliers nếu cần
+    - Validate feature ranges
+    - Check data consistency
+
+  4.4 Data Splitting:
+    - Implement time-based split (không random shuffle vì time series)
+    - Train set: 70% toàn bộ data
+    - Validation set: từ phần còn lại
+    - Tùy chọn test set
+
+  4.5 Deliverables:
+    - src/preprocess.py với các hàm:
+      * load_data(path)
+      * preprocess(df)
+      * split_data(df)
+    - Tài liệu về features được tạo
+    - Test cases cho preprocessing
+
+Timeline: 3-4 ngày
+
+================================================================================
+V. GIAI ĐOẠN 3: PHÁT TRIỂN MODULE TRAINING
+================================================================================
+
+Mục Đích: Xây dựng training pipeline hỗ trợ nhiều models.
+
+Các Công Việc:
+
+  5.1 Triển Khai Model Training Functions:
+    - train_random_forest(X_train, y_train, params)
+      * 100 trees
+      * Random state để reproducibility
+    - train_xgboost(X_train, y_train, params)
+      * 300 trees, depth=6, learning_rate=0.1
+      * Subsample=0.8, colsample_bytree=0.8
+    - train_lightgbm(X_train, y_train, params)
+      * 300 trees, learning_rate=0.1
+      * Tối ưu hóa cho tốc độ
+
+  5.2 Triển Khai Model Evaluation:
+    - Viết hàm evaluate() tính MAE và RMSE
+    - So sánh predicted vs actual values
+    - Generate evaluation metrics
+
+  5.3 Triển Khai Model Selection:
+    - Chọn model có MAE thấp nhất
+    - Lưu best model vào file .pkl (joblib)
+    - Lưu metadata (model name, hyperparams, metrics)
+
+  5.4 Triển Khai Pipeline Orchestration:
+    - run_pipeline(train_start_date, train_end_date)
+    - Gọi preprocess
+    - Train tất cả models
+    - Evaluate tất cả models
+    - Select best
+    - Save best model
+
+  5.5 Deliverables:
+    - src/train.py với train functions
+    - src/pipeline.py với run_pipeline()
+    - models/ folder structure
+    - Configuration file cho hyperparameters
+
+Timeline: 4-5 ngày
+
+================================================================================
+VI. GIAI ĐOẠN 4: PHÁT TRIỂN MODULE DRIFT DETECTION
+================================================================================
+
+Mục Đích: Xây dựng khả năng phát hiện khi model cần retrain.
+
+Các Công Việc:
+
+  6.1 Triển Khai Hàm Drift Detection:
+    - detect_drift_by_mae(y_true, y_pred, threshold)
+    - Tính Mean Absolute Error
+    - So sánh với threshold có định
+    - Trả về: (drift_detected: bool, mae_value: float)
+
+  6.2 Cơ Chế Phát Hiện:
+    - Phương pháp: MAE-based (simple, effective)
+    - Threshold mặc định: 500 (tùy chỉnh được)
+    - Quy tắc: MAE > threshold → Drift = True
+    - Logging: In ra MAE, threshold, decision
+
+  6.3 Tích Hợp Vào Workflow:
+    - Sau mỗi prediction, gọi detect_drift()
+    - Lưu kết quả drift detection
+    - Prepare trigger cho retrain
+
+  6.4 Deliverables:
+    - src/drift.py với detect_drift_by_mae()
+    - Hướng dẫn cấu hình threshold
+    - Test cases cho drift detection
+
+Timeline: 2-3 ngày
+
+================================================================================
+VII. GIAI ĐOẠN 5: TRIỂN KHAI HỆ THỐNG ORCHESTRATION
+================================================================================
+
+Mục Đích: Kết nối tất cả modules thành 1 hệ thống hoàn chỉnh.
+
+Các Công Việc:
+
+  7.1 Triển Khai Main Orchestrator (main.py):
+    - Khởi động hệ thống
+    - Kiểm tra model có tồn tại?
+      * Nếu không: Training initial model
+      * Nếu có: Tiếp tục
+    - Load data, preprocess
+    - Load model
+    - Predict trên dữ liệu mới
+    - Detect drift
+    - [Nếu drift] Trigger retrain
+    - [Nếu không] Keep current model
+
+  7.2 Cấu Hình Tham Số Chính:
+    - TRAIN_START_DATE, TRAIN_END_DATE (initial training window)
+    - PREDICT_START, PREDICT_END (inference window)
+    - MAE_THRESHOLD (drift detection threshold)
+    - MODEL_PATH (nơi lưu model)
+
+  7.3 Workflow Chi Tiết:
+    Step 1: Check model existence
+    Step 2: Load/Create model
+    Step 3: Load & preprocess data
+    Step 4: Get new data window
+    Step 5: Make predictions
+    Step 6: Calculate metrics
+    Step 7: Detect drift
+    Step 8: Make retrain decision
+    Step 9: Log results
+
+  7.4 Logging & Monitoring:
+    - In ra quá trình chi tiết (Training, Predicting, Drift Check)
+    - Lưu logs vào file (optional)
+    - Track: timestamp, metric values, decisions
+
+  7.5 Deliverables:
+    - main.py file
+    - Configuration file (config.yaml hoặc hardcoded constants)
+    - Logging setup
+    - Usage documentation
+
+Timeline: 3-4 ngày
+
+================================================================================
+VIII. GIAI ĐOẠN 6: PHÁT TRIỂN INFERENCE SCRIPT
+================================================================================
+
+Mục Đích: Cung cấp script standalone để dự đoán và visualize kết quả.
+
+Các Công Việc:
+
+  8.1 Triển Khai Prediction Script (predict.py):
+    - Load trained model từ file
+    - Load dữ liệu mới
+    - Preprocess dữ liệu
+    - Make predictions
+    - Tính metrics (MAE)
+    - Save results to CSV
+
+  8.2 Visualization:
+    - Vẽ biểu đồ: Actual vs Prediction
+    - Xuất biểu đồ thành file (PNG/PDF)
+    - Optional: Interactive plot (Plotly)
+
+  8.3 Output Files:
+    - results/predict.csv (predictions + actuals)
+    - results/plot.png (visualization)
+
+  8.4 Deliverables:
+    - predict.py file
+    - Output samples
+    - Plotting configuration
+
+Timeline: 2 ngày
+
+================================================================================
+IX. GIAI ĐOẠN 7: TESTING & VALIDATION
+================================================================================
+
+Mục Đích: Đảm bảo hệ thống hoạt động đúng, reliable, robust.
+
+Các Công Việc:
+
+  9.1 Unit Testing:
+    - Test preprocess functions (feature engineering, splitting)
+    - Test training functions (model training, model saving)
+    - Test evaluation functions (metric calculation)
+    - Test drift detection function
+
+  9.2 Integration Testing:
+    - Test full pipeline end-to-end
+    - Test main orchestrator flow
+    - Test model retraining trigger
+    - Test prediction output
+
+  9.3 Validation Testing:
+    - Validate model performance là reasonable
+    - Validate drift detection sensitivity
+    - Validate retrain improves model
+    - Validate predictions format
+
+  9.4 Edge Case Testing:
+    - Empty data handling
+    - Single data point
+    - Missing values
+    - Extreme values/outliers
+    - Different data distributions
+
+  9.5 Performance Testing:
+    - Training time per model
+    - Inference time
+    - Memory usage
+    - Scalability test
+
+  9.6 Deliverables:
+    - Test files (pytest, unittest)
+    - Test coverage report
+    - Test results documentation
+    - Known limitations document
+
+Timeline: 3-4 ngày
+
+================================================================================
+X. GIAI ĐOẠN 8: DOCUMENTATION & DEPLOYMENT PREP
+================================================================================
+
+Mục Đích: Tạo tài liệu toàn diện, sẵn sàng cho deployment.
+
+Các Công Việc:
+
+  10.1 Code Documentation:
+    - Docstrings cho tất cả functions
+    - README.md chính (overview, quick start)
+    - API documentation (input/output specs)
+    - Configuration guide
+
+  10.2 Architecture Documentation:
+    - System architecture diagram
+    - Data flow diagram
+    - Component relationships
+    - Dependency diagram
+
+  10.3 User Guides:
+    - How to run initial training
+    - How to run inference
+    - How to monitor model performance
+    - How to manually retrain
+    - How to adjust threshold
+
+  10.4 Operational Guides:
+    - Maintenance procedures
+    - Troubleshooting guide
+    - Performance monitoring
+    - Backup & recovery
+
+  10.5 Deployment Preparation:
+    - requirements.txt (dependencies)
+    - .gitignore (what to exclude)
+    - Docker configuration (optional)
+    - CI/CD pipeline setup (optional)
+
+  10.6 Deliverables:
+    - README.md
+    - ARCHITECTURE.md
+    - USER_GUIDE.md
+    - DEPLOYMENT_GUIDE.md
+    - requirements.txt
+
+Timeline: 3-4 ngày
+
+================================================================================
+XI. GIAI ĐOẠN 9: ENHANCEMENT & OPTIMIZATION
+================================================================================
+
+Mục Đích: Cải tiến hệ thống dựa trên feedback và experience.
+
+Các Công Việc:
+
+  11.1 Performance Optimization:
+    - Profile code, find bottlenecks
+    - Optimize data loading
+    - Optimize feature engineering
+    - Cache intermediate results
+    - Parallel processing (nếu applicable)
+
+  11.2 Advanced Drift Detection:
+    - Implement multiple metrics (RMSE, R-squared, KL-divergence)
+    - Implement statistical tests (KS test, Anderson-Darling)
+    - Feature-level drift monitoring
+    - Adaptive threshold learning
+
+  11.3 Model Registry & Versioning:
+    - Implement MLflow integration
+    - Track experiments
+    - Model versioning
+    - Automatic best model selection
+
+  11.4 Monitoring & Alerting:
+    - Real-time performance dashboard
+    - Alert system (email/Slack)
+    - Metrics database
+    - Historical tracking
+
+  11.5 Automation:
+    - Scheduled training (cron jobs / Airflow)
+    - Scheduled inference
+    - Automated reporting
+    - Auto-scaling (cloud)
+
+  11.6 Deliverables:
+    - Optimized code
+    - MLflow integration
+    - Monitoring dashboard setup
+    - Automation scripts
+
+Timeline: 5-7 ngày (ongoing)
+
+================================================================================
+XII. TIMELINE TỔNG HỢP
+================================================================================
+
+Giai Đoạn 1 (Chuẩn Bị):            2-3 ngày
+Giai Đoạn 2 (Preprocessing):       3-4 ngày
+Giai Đoạn 3 (Training):            4-5 ngày
+Giai Đoạn 4 (Drift Detection):     2-3 ngày
+Giai Đoạn 5 (Orchestration):       3-4 ngày
+Giai Đoạn 6 (Inference):           2 ngày
+Giai Đoạn 7 (Testing):             3-4 ngày
+Giai Đoạn 8 (Documentation):       3-4 ngày
+Giai Đoạn 9 (Enhancement):         5-7 ngày
+
+TỔNG CỘNG: 27-37 ngày (4-5 tuần)
+
+Flexible timeline:
+- MVP (Giai Đoạn 1-6):             15-18 ngày (2-3 tuần)
+- Stable (Giai Đoạn 1-8):          26-32 ngày (3-4 tuần)
+- Production-ready (Giai Đoạn 1-9): 31-39 ngày (4-5 tuần)
+
+================================================================================
+XIII. CÔNG NGHỆ & TOOLS
+================================================================================
+
+Programming Language:
+  - Python 3.8+
+
+Core Libraries:
+  - pandas: Data manipulation
+  - scikit-learn: ML models (RandomForest)
+  - xgboost: XGBoost model
+  - lightgbm: LightGBM model
+  - numpy: Numerical computation
+  - joblib: Model serialization
+
+Data Visualization:
+  - matplotlib: Plotting
+  - seaborn: Statistical visualization (optional)
+
+Development Tools:
+  - Git: Version control
+  - VS Code/PyCharm: IDE
+  - Pytest: Testing framework
+
+Optional (Giai Đoạn 9+):
+  - MLflow: Experiment tracking
+  - Airflow: Workflow orchestration
+  - Grafana: Monitoring dashboard
+  - Docker: Containerization
+  - PostgreSQL: Database
+
+================================================================================
+XIV. FOLDER STRUCTURE
+================================================================================
+
+project/
+│
+├── data/
+│   ├── TrafficVolumeData.csv       (input data)
+│   └── (other data files)
+│
+├── src/
+│   ├── preprocess.py               (data loading & preprocessing)
+│   ├── train.py                    (model training functions)
+│   ├── pipeline.py                 (training pipeline)
+│   ├── drift.py                    (drift detection)
+│   └── __init__.py
+│
+├── models/
+│   └── best_model.pkl              (trained model)
+│
+├── results/
+│   ├── predict.csv                 (predictions output)
+│   └── plot.png                    (visualization)
+│
+├── tests/
+│   ├── test_preprocess.py
+│   ├── test_train.py
+│   ├── test_pipeline.py
+│   ├── test_drift.py
+│   └── __init__.py
+│
+├── main.py                         (main orchestrator)
+├── predict.py                      (inference script)
+├── requirements.txt                (dependencies)
+├── README.md                       (project overview)
+├── ARCHITECTURE.md                 (system design)
+└── .gitignore
+
+================================================================================
+XV. SUCCESS CRITERIA
+================================================================================
+
+Giai Đoạn 1:
+  ✓ Data được phân tích toàn diện
+  ✓ Môi trường setup xong
+  ✓ Requirements được định nghĩa rõ
+
+Giai Đoạn 2:
+  ✓ Preprocessing hoạt động chính xác
+  ✓ Features được tạo thành công
+  ✓ Data splitting hợp lý
+
+Giai Đoạn 3:
+  ✓ Ba models training thành công
+  ✓ Best model được chọn
+  ✓ Model performance là reasonable (MAE < X)
+
+Giai Đoạn 4:
+  ✓ Drift detection function hoạt động
+  ✓ Threshold có thể cấu hình
+  ✓ Logging chi tiết
+
+Giai Đoạn 5:
+  ✓ Main orchestrator chạy end-to-end
+  ✓ Initial model được tạo
+  ✓ Retrain được trigger khi drift detected
+
+Giai Đoạn 6:
+  ✓ Prediction script hoạt động
+  ✓ Results lưu thành file
+  ✓ Visualization được tạo
+
+Giai Đoạn 7:
+  ✓ Unit tests pass
+  ✓ Integration tests pass
+  ✓ Edge cases handled
+  ✓ Test coverage > 80%
+
+Giai Đoạn 8:
+  ✓ Documentation hoàn chỉnh
+  ✓ Code comments rõ ràng
+  ✓ Deployment guide sẵn sàng
+
+Giai Đoạn 9:
+  ✓ Performance optimized
+  ✓ Advanced features implemented
+  ✓ System production-ready
+
+================================================================================
+XVI. RISKS & MITIGATION
+================================================================================
+
+Risk 1: Data Quality Issues
+  Mitigation: Implement comprehensive data validation, early data exploration
+
+Risk 2: Model Overfitting
+  Mitigation: Use cross-validation, hold-out test set, regularization
+
+Risk 3: Drift Threshold Too Sensitive
+  Mitigation: Start conservative, tune based on historical data
+
+Risk 4: Retrain Takes Too Long
+  Mitigation: Optimize training, consider incremental learning
+
+Risk 5: Model Performance Regression
+  Mitigation: Keep previous best model, A/B test before rollout
+
+Risk 6: Production Failures
+  Mitigation: Comprehensive testing, graceful error handling, logging
+
+================================================================================
+XVII. NOTES & BEST PRACTICES
+================================================================================
+
+- Luôn sử dụng time-based splitting cho time series data, không random
+- Lưu model metadata (training date, hyperparams, metrics) cùng model
+- Implement logging từ sớm để dễ debug sau
+- Validate mọi input/output, không assume dữ liệu sạch
+- Use random state để đảm bảo reproducibility
+- Test code thường xuyên, không để tới cuối
+- Document assumptions, hạn chế, cách sử dụng
+- Keep it simple, không over-engineer sớm
+- Use version control, commit frequently with clear messages
+
+================================================================================
+END OF PLAN
+================================================================================

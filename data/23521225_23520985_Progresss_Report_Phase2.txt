@@ -1,0 +1,364 @@
+================================================================================
+BÁO CÁO TIẾN ĐỘ - GIAI ĐOẠN 2: TRIỂN KHAI DRIFT DETECTION
+================================================================================
+
+Dự án: Adaptive MLOps Traffic Forecast
+Ngày báo cáo: 10/05/2026
+Thành viên: 23521225, 23520985
+
+================================================================================
+1. GIỚI THIỆU
+================================================================================
+
+Giai đoạn 2 tập trung vào việc triển khai Drift Detection - một thành phần
+quan trọng giúp hệ thống tự động phát hiện khi model không còn đạt hiệu năng
+tốt và cần được retrain.
+
+Drift detection cho phép hệ thống:
+- Phát hiện thay đổi trong dữ liệu mới so với dữ liệu training
+- Quyết định tự động khi cần retrain model
+- Giảm downtime và độ lệch dự đoán
+
+================================================================================
+2. TRIỂN KHAI DRIFT DETECTION
+================================================================================
+
+2.1 CẤU TRÚC THÀNH PHẦN CHÍNH
+------------------------------
+
+Drift detection được triển khai qua 2 file chính:
+
+Thứ nhất là file src/drift.py, đây là module chứa hàm xử lý phát hiện drift.
+Hàm này nhận đầu vào là giá trị thực tế, giá trị dự đoán và một ngưỡng MAE.
+Nó tính toán sai số trung bình tuyệt đối (MAE) giữa hai giá trị này, sau đó
+so sánh với ngưỡng. Nếu MAE lớn hơn ngưỡng, hàm trả về True (drift detected),
+ngược lại trả về False. Hàm cũng in ra các giá trị MAE hiện tại và ngưỡng
+để dễ theo dõi.
+
+Thứ hai là file main.py, đây là file orchestration chính. Nó sử dụng hàm
+drift detection từ src/drift.py và tích hợp vào quy trình làm việc chính
+của hệ thống.
+
+2.2 PHƯƠNG PHÁP PHÁT HIỆN DRIFT
+--------------------------------
+
+Hệ thống sử dụng phương pháp MAE-based drift detection. Lý do chọn MAE là vì:
+
+Đầu tiên, MAE (Mean Absolute Error) là một metric phù hợp cho bài toán
+regression như dự đoán lưu lượng giao thông. Nó tính trung bình các sai số
+tuyệt đối giữa giá trị thực tế và dự đoán, đơn vị cũng dễ hiểu (số lượng
+xe cộ).
+
+Thứ hai, MAE dễ tính toán và nhanh, không tốn tài nguyên. Điều này quan trọng
+khi cần real-time monitoring.
+
+Thứ ba, ngưỡng MAE có thể cấu hình linh hoạt. Nếu MAE vượt quá ngưỡng này,
+có nghĩa là hiệu năng model đã giảm đáng kể và cần retrain.
+
+2.3 QUY TRÌNH HOẠT ĐỘNG CHI TIẾT
+---------------------------------
+
+Hệ thống thực hiện theo các bước sau:
+
+Bước 1: Kiểm tra xem model có tồn tại hay không. Nếu không, hệ thống sẽ
+tạo model ban đầu bằng cách training trên dữ liệu 6 tháng đầu (từ 01/01/2013
+đến 01/06/2013). Ba loại model sẽ được training: RandomForest, XGBoost và
+LightGBM. Sau đó, chương trình sẽ thoát và yêu cầu chạy lại lần nữa.
+
+Bước 2: Khi model đã có, hệ thống load model từ thư mục models/ và load dữ liệu
+từ file CSV. Dữ liệu được preprocess để tạo features (giờ, ngày, tháng,
+encoding tuần hoàn, mã hóa thời tiết, v.v.).
+
+Bước 3: Lấy dữ liệu mới cần dự đoán (ví dụ: tháng 12 năm 2013). Dữ liệu này
+được filter từ toàn bộ dataset dựa trên khoảng thời gian được cấu hình.
+
+Bước 4: Model hiện tại thực hiện dự đoán trên dữ liệu mới này.
+
+Bước 5: So sánh dự đoán với giá trị thực tế bằng cách tính MAE. Đây là bước
+phát hiện drift chính.
+
+Bước 6: So sánh MAE với ngưỡng (threshold). Nếu MAE lớn hơn ngưỡng, drift
+được phát hiện. Nếu nhỏ hơn, hệ thống tiếp tục sử dụng model hiện tại.
+
+Bước 7 (nếu drift được phát hiện): Hệ thống tự động kích hoạt quy trình
+retrain. Model sẽ được training lại trên dữ liệu mới (ví dụ: từ 01/08/2013
+đến 01/01/2014 - 6 tháng gần nhất). Sau khi training xong, model tốt nhất
+sẽ được lưu để sử dụng lần tiếp theo.
+
+Bước 8 (nếu không phát hiện drift): Hệ thống tiếp tục sử dụng model hiện tại
+và không thực hiện retrain, tiết kiệm tài nguyên.
+
+2.4 CẤU HÌNH THAM SỐ
+---------------------
+
+Các tham số chính được cấu hình trong main.py:
+
+Thứ nhất là TRAIN_START_DATE và TRAIN_END_DATE, xác định khoảng thời gian
+để training model ban đầu. Hiện tại là từ 01/01/2013 đến 01/06/2013 (6 tháng).
+
+Thứ hai là PREDICT_START và PREDICT_END, xác định khoảng thời gian dữ liệu
+để dự đoán và kiểm tra drift. Hiện tại là từ 01/12/2013 đến 01/01/2014 (1 tháng).
+
+Thứ ba là MAE_THRESHOLD, đây là ngưỡng MAE dùng để quyết định có drift hay không.
+Mặc định là 500, có thể tùy chỉnh cao hơn hoặc thấp hơn tùy nhu cầu.
+
+Khi phát hiện drift, hệ thống sử dụng training window mới: từ 01/08/2013 đến
+01/01/2014 (6 tháng gần nhất). Điều này đảm bảo rằng model được training trên
+dữ liệu mới nhất và đại diện cho xu hướng hiện tại.
+
+2.5 LUỒNG DỮ LIỆU
+------------------
+
+Dữ liệu đầu vào là file CSV chứa dữ liệu giao thông với các trường như datetime,
+traffic_volume, weather_type, is_holiday, v.v.
+
+Quá trình xử lý đầu tiên là preprocess. Dữ liệu thô được chuyển đổi thành
+các features hữu ích. Ví dụ, từ cột datetime, hệ thống trích xuất giờ, ngày
+trong tuần, tháng. Weather_type được mã hóa thành các cột binary. Is_holiday
+được chuyển đổi thành giá trị 0/1.
+
+Sau preprocess, dữ liệu được chia làm 2 phần: phần training (85%) và phần
+validation (15%).
+
+Phần training dùng để huấn luyện model (RandomForest, XGBoost, LightGBM).
+Mỗi model được training với các siêu tham số đã cấu hình.
+
+Phần validation dùng để đánh giá model. MAE và RMSE được tính toán. Model
+có MAE thấp nhất được chọn làm best model.
+
+Best model được lưu thành file để sử dụng cho dự đoán sau này.
+
+Khi có dữ liệu mới, model load từ file, nhận features mới, và thực hiện
+dự đoán. MAE được tính từ dự đoán này, so sánh với threshold.
+
+Kết quả cuối cùng là: drift_detected (True/False) và mae_value (giá trị MAE).
+
+2.6 CÁCH CHẠY HỆ THỐNG
+-----------------------
+
+Lần đầu tiên khi chạy main.py, hệ thống kiểm tra xem model có tồn tại hay không.
+Vì đây là lần đầu, model không tồn tại. Hệ thống sẽ:
+- In thông báo "No model found"
+- Bắt đầu quá trình training model ban đầu
+- Training 3 loại model trên dữ liệu 6 tháng
+- Đánh giá trên validation set
+- Chọn model tốt nhất
+- Lưu model vào thư mục models/
+- In thông báo "Initial model created"
+- Yêu cầu chạy lại main.py
+
+Lần thứ hai khi chạy main.py, hệ thống:
+- Tìm thấy model đã lưu, load vào bộ nhớ
+- Load dữ liệu và preprocess
+- Filter dữ liệu mới (tháng để dự đoán)
+- Thực hiện dự đoán trên dữ liệu mới
+- Tính MAE giữa dự đoán và giá trị thực tế
+- In ra MAE hiện tại và threshold
+- Kiểm tra: MAE > threshold?
+  * Nếu CÓ: In "DRIFT DETECTED", kích hoạt retrain
+  * Nếu KHÔNG: In "NO DRIFT", tiếp tục sử dụng model hiện tại
+
+Nếu retrain được kích hoạt, hệ thống:
+- Bắt đầu quy trình pipeline retrain
+- Training 3 model trên dữ liệu mới
+- Đánh giá và chọn best model
+- Lưu model mới, overwrite model cũ
+- Lần chạy tiếp theo sẽ sử dụng model này
+
+================================================================================
+3. KẾT QUẢ VÀ KIỂM THỬ
+================================================================================
+
+3.1 CÁC MODELS ĐƯỢC TRAINING
+------------------------------
+
+Hệ thống training ba loại model:
+
+RandomForest với 100 cây quyết định. Đây là thuật toán ensemble đơn giản
+nhưng hiệu quả, không cần tối ưu hóa nhiều.
+
+XGBoost với 300 cây, độ sâu tối đa là 6, learning rate là 0.1. Đây là
+thuật toán gradient boosting mạnh mẽ, có khả năng nắm bắt được những
+mối quan hệ phức tạp trong dữ liệu.
+
+LightGBM với 300 cây, learning rate là 0.1. Đây là phiên bản nhẹ hơn
+của gradient boosting, có thể train nhanh hơn XGBoost.
+
+Mỗi model được training trên 85% dữ liệu, đánh giá trên 15% còn lại.
+Hai metric được sử dụng: MAE (sai số trung bình tuyệt đối) và RMSE
+(căn bậc hai của sai số bình phương trung bình).
+
+Model có MAE thấp nhất sẽ được chọn làm best model và lưu vào file.
+
+3.2 WORKFLOW THỰC HIỆN
+-----------------------
+
+Chu kỳ training ban đầu sử dụng dữ liệu từ 01/01/2013 đến 01/06/2013
+(6 tháng). Dữ liệu này được chia 85% train, 15% validation. Ba models
+được training. Output là best_model.pkl được lưu.
+
+Chu kỳ dự đoán + drift detection sử dụng dữ liệu từ 01/12/2013 đến
+01/01/2014 (1 tháng). Model được load từ file, thực hiện dự đoán trên
+toàn bộ dữ liệu này. MAE được tính và so sánh với threshold (500).
+
+Nếu MAE nhỏ hơn hoặc bằng 500, không có drift, hệ thống tiếp tục.
+
+Nếu MAE lớn hơn 500, drift được phát hiện, chu kỳ retrain được kích hoạt.
+
+Chu kỳ retrain sử dụng dữ liệu từ 01/08/2013 đến 01/01/2014 (6 tháng gần nhất).
+Ba models được training lại. Best model được lưu, overwrite model cũ. Lần
+chạy tiếp theo sẽ sử dụng model mới này.
+
+3.3 OUTPUT CỦA SYSTEM
+----------------------
+
+Khi chạy main.py lần đầu, hệ thống in ra:
+
+Thông báo "No model found" và "Training initial model...". Sau đó, khi mỗi
+model hoàn thành training, MAE và RMSE được in ra. Cuối cùng, "Best: LightGBM"
+hoặc model nào có MAE thấp nhất được in. Message "Model saved" xác nhận
+model được lưu thành công.
+
+Khi chạy lần thứ hai, hệ thống in ra:
+
+"DRIFT CHECK (MAE)" tiêu đề, theo sau là giá trị "Current MAE: 450.75",
+"Threshold: 500". Nếu MAE nhỏ hơn threshold, "NO DRIFT" được in. Nếu
+MAE lớn hơn threshold, "DRIFT DETECTED" được in, theo sau là quá trình
+retrain bắt đầu.
+
+Nếu retrain xảy ra, output giống như lần training đầu tiên: các giá trị
+MAE/RMSE của mỗi model, best model được chọn, message "Model saved".
+
+================================================================================
+4. INTEGRATION VỚI PREDICTION SCRIPT (Bỏ ra)
+================================================================================
+
+Ngoài main.py, còn có file predict.py sử dụng model để thực hiện dự đoán
+và có tùy chọn visualize kết quả.
+
+Predict.py có quy trình tương tự: load model từ file, load dữ liệu,
+preprocess, và dự đoán. Tuy nhiên, thay vì kiểm tra drift, nó tính MAE
+và in ra giá trị này. Kết quả dự đoán được lưu vào file CSV (results/predict.csv)
+để có thể phân tích sau. Cuối cùng, một biểu đồ được vẽ so sánh giá trị
+thực tế (Actual) vs dự đoán (Prediction) để dễ visualize hiệu năng.
+
+Điều này có ích khi muốn kiểm tra kỹ hơn hoặc có nhu cầu xem kết quả
+chi tiết hơn so với main.py.
+
+================================================================================
+5. PIPELINE PREPROCESSING (Bỏ ra)
+================================================================================
+
+Trước khi dữ liệu có thể được sử dụng cho training hoặc dự đoán, nó phải
+được preprocess.
+
+Bước đầu tiên là xử lý cột is_holiday. Dữ liệu thô thường có giá trị null
+cho những ngày thường. Hệ thống chuyển đổi điều này thành giá trị 0/1:
+0 nếu không phải ngày lễ, 1 nếu là ngày lễ.
+
+Bước thứ hai là trích xuất thông tin thời gian. Từ cột datetime, hệ thống
+extract giờ (0-23), ngày trong tuần (0-6, 0 là thứ 2), và tháng (1-12).
+
+Bước thứ ba là xử lý tính tuần hoàn của thời gian. Giờ từ 0-23 có tính
+tuần hoàn: giờ 23 và giờ 0 gần nhau. Để model học được điều này, hệ thống
+sử dụng biến đổi sine/cosine. Cụ thể, sine(2π*hour/24) và cos(2π*hour/24)
+tạo ra một vòng tròn, nơi 23 và 0 gần nhau.
+
+Bước thứ tư là tạo feature weekend. Nếu ngày trong tuần là 5 (thứ 6) hoặc
+6 (thứ 7), giá trị là 1, ngược lại là 0. Điều này giúp model phân biệt
+lưu lượng giao thông khác biệt giữa ngày thường và cuối tuần.
+
+Bước thứ năm là mã hóa categorical. Cột weather_type có các giá trị như
+"Sunny", "Rainy", "Cloudy", v.v. Hệ thống sử dụng one-hot encoding,
+tạo ra các cột binary cho mỗi loại thời tiết.
+
+Bước cuối cùng là xóa các hàng có missing values. Nếu bất kỳ cột nào
+có giá trị null, toàn bộ hàng đó bị loại bỏ.
+
+Kết quả là dữ liệu được chuyển từ dạng thô thành ma trận features hữu ích
+cho model machine learning.
+
+================================================================================
+6. CÁC FILE CHÍNH CỦA GIAI ĐOẠN 2 (Bỏ ra)
+================================================================================
+
+src/drift.py là module chứa hàm detect_drift_by_mae(). Đây là phần lõi của
+drift detection, chỉ có một hàm nhỏ nhưng quan trọng.
+
+src/pipeline.py chứa hàm run_pipeline() quản lý toàn bộ quá trình training.
+Nó load dữ liệu, preprocess, chia train/validation, training các models,
+đánh giá, chọn best model, và lưu. Đây là quá trình được lặp lại mỗi khi
+phát hiện drift.
+
+src/train.py chứa ba hàm: train_random_forest(), train_xgboost(),
+train_lightgbm(). Mỗi hàm nhận training data và random_state, thực hiện
+training, và trả về model đã trained.
+
+src/preprocess.py chứa ba hàm: load_data() đọc CSV, preprocess() thực hiện
+các bước xử lý dữ liệu như mô tả ở trên, split_data() chia dữ liệu thành
+train/val/test (tuy nhiên hiện tại không được sử dụng trong main.py).
+
+main.py là orchestrator chính. Nó kiểm tra model, load model, dự đoán,
+kiểm tra drift, và quyết định retrain. Đây là file được chạy trực tiếp
+khi muốn sử dụng hệ thống.
+
+predict.py là script dự đoán độc lập. Nó load model, load dữ liệu, dự đoán,
+tính MAE, lưu kết quả CSV, và vẽ biểu đồ.
+
+================================================================================
+7. KẾT QUẢ CHÍNH
+================================================================================
+
+Trong giai đoạn 2, các kết quả chính đã hoàn thành:
+
+Thứ nhất, hàm detect_drift_by_mae() đã được xây dựng. Nó nhận dữ liệu
+thực tế và dự đoán, tính MAE, so sánh với threshold, và trả về quyết định.
+
+Thứ hai, hàm này đã được tích hợp vào main.py workflow. Sau khi dự đoán,
+hệ thống tự động gọi hàm này để kiểm tra drift.
+
+Thứ ba, automatic retrain trigger đã hoạt động. Khi drift được phát hiện,
+hệ thống tự động gọi run_pipeline() để retrain.
+
+Thứ tư, tham số threshold có thể cấu hình. Người dùng có thể dễ dàng
+thay đổi MAE_THRESHOLD trong main.py để điều chỉnh độ nhạy.
+
+Thứ năm, logging chi tiết đã được thêm. Mỗi lần kiểm tra drift, hệ thống
+in ra MAE hiện tại, threshold, và quyết định (drift detected hay không).
+
+Hệ thống hiện tại có khả năng tự động huấn luyện model ban đầu, định kỳ
+dự đoán trên dữ liệu mới, phát hiện khi model performance giảm, tự động
+retrain với dữ liệu mới, và lưu trữ model tốt nhất để sử dụng lần sau.
+
+================================================================================
+8. PHÁT TRIỂN TIẾP THEO (GIAI ĐOẠN 3) (Bỏ ra)
+================================================================================
+
+Giai đoạn 3 sẽ tập trung vào nâng cao và mở rộng hệ thống:
+
+Integrate MLflow: Sử dụng MLflow để tracking tất cả experiments, log
+hyperparameters, metrics, và artifacts. Implement Model Registry để
+version control models.
+
+Multiple drift metrics: Thay vì chỉ sử dụng MAE, sử dụng thêm RMSE,
+R-squared, hoặc KL-divergence để phát hiện drift từ nhiều góc độ.
+
+Feature-level drift monitoring: Theo dõi phân phối của từng feature riêng
+lẻ để phát hiện feature nào đang gây ra drift.
+
+Logging to database: Lưu trữ tất cả drift events, MAE values, timestamps
+vào database để có thể phân tích trends lịch sử.
+
+Real-time dashboard: Xây dựng dashboard (Grafana/Streamlit) để visualize
+model performance, drift detection status, prediction accuracy theo thời gian.
+
+Scheduled automation: Sử dụng cron jobs hoặc Apache Airflow để tự động
+chạy dự đoán và drift detection theo lịch trình (ví dụ: mỗi ngày hoặc
+mỗi tuần).
+
+Docker containerization: Đóng gói toàn bộ hệ thống vào Docker container
+để dễ deploy trên các environment khác nhau.
+
+================================================================================
+END OF REPORT
+================================================================================

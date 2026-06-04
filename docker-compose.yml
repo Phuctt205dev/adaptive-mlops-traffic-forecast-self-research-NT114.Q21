@@ -48,11 +48,11 @@ services:
       INITIAL_TRAIN_END: "2014-01-01"
 
       # Mỗi lần check/retrain theo cửa sổ 7 ngày
-      CHECK_WINDOW_DAYS: "7"
+      CHECK_WINDOW_DAYS: "30"
 
       # Demo: 60 giây check 1 lần
       # Làm thật có thể đổi thành 3600 hoặc 86400
-      CHECK_INTERVAL_SECONDS: "60"
+      CHECK_INTERVAL_SECONDS: "3"
 
       RUN_ONCE: "false"
 

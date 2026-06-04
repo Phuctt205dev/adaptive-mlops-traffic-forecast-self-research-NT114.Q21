@@ -44,8 +44,8 @@ services:
       DRIFT_START_DATE: "2014-01-01"
       DRIFT_END_LIMIT: "2014-09-01"
 
-      INITIAL_TRAIN_START: "2012-10-02"
-      INITIAL_TRAIN_END: "2014-01-01"
+      INITIAL_TRAIN_START: "2013-07-01"
+      INITIAL_TRAIN_END: "2013-12-31"
 
       # Mỗi lần check/retrain theo cửa sổ 7 ngày
       CHECK_WINDOW_DAYS: "30"

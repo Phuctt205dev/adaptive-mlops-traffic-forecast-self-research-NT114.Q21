@@ -38,32 +38,36 @@ services:
       STATE_PATH: "monitoring/drift_state.json"
 
       # Ngưỡng cứng.
-      # Nếu MAE > 700 thì chắc chắn drift.
+      # Nếu MAE > 700 thì drift.
       MAE_THRESHOLD: "700"
 
       # Ngưỡng tương đối.
-      # Nếu MAE hiện tại > baseline_MAE * 1.5 thì drift.
+      # Nếu current MAE > baseline MAE * 1.5 thì drift.
       DEGRADATION_RATIO: "1.5"
 
-      # Train ban đầu: 3 tháng đầu năm 2013.
-      # Lưu ý: INITIAL_TRAIN_END là mốc kết thúc dạng exclusive.
-      # Nghĩa là lấy dữ liệu >= 2013-01-01 và < 2013-04-01.
+      # Train ban đầu bằng nguyên năm 2013.
+      # Lấy dữ liệu từ 2013-01-01 đến hết 2013-12-31.
+      # Code nên hiểu train_end theo dạng exclusive:
+      # date_time >= 2013-01-01 và date_time < 2014-01-01.
       INITIAL_TRAIN_START: "2013-01-01"
-      INITIAL_TRAIN_END: "2013-04-01"
+      INITIAL_TRAIN_END: "2014-01-01"
 
-      # Check drift bắt đầu ngay sau train window.
-      DRIFT_START_DATE: "2013-04-01"
+      # Sau khi train hết năm 2013, bắt đầu check drift từ tháng 1/2014.
+      DRIFT_START_DATE: "2014-01-01"
 
-      # Dataset hiện tại kết thúc 2014-08-08.
-      # Để 2014-09-01 cho worker check hết tháng 8.
+      # Dataset hiện tại kết thúc khoảng 2014-08-08.
+      # Để 2014-09-01 để worker check hết tháng 8/2014.
       DRIFT_END_LIMIT: "2014-09-01"
 
       # Mỗi lần check 1 tháng lịch.
       CHECK_WINDOW_MONTHS: "1"
 
-      # Rolling train window 3 tháng.
-      # Nếu drift ở tháng 4 thì retrain bằng tháng 2,3,4.
-      TRAIN_WINDOW_MONTHS: "3"
+      # Rolling train window 12 tháng.
+      # Ví dụ:
+      # 2013-01-01 → 2014-01-01
+      # 2013-02-01 → 2014-02-01
+      # 2013-03-01 → 2014-03-01
+      TRAIN_WINDOW_MONTHS: "12"
 
       # Demo: 30 giây chạy một lần.
       CHECK_INTERVAL_SECONDS: "30"

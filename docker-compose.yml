@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   traffic-api:
     build: .
@@ -35,16 +33,28 @@ services:
 
       DATA_PATH: "data/TrafficVolumeData.csv"
       MODEL_PATH: "models/best_model.pkl"
+      MODEL_INFO_PATH: "models/best_model_info.json"
+      CANDIDATE_MODEL_PATH: "models/candidate_model.pkl"
+      CANDIDATE_INFO_PATH: "models/candidate_model_info.json"
       STATE_PATH: "monitoring/drift_state.json"
+      DRIFT_HISTORY_PATH: "monitoring/drift_history.csv"
+      PROMOTION_HISTORY_PATH: "monitoring/promotion_history.csv"
 
       # Ngưỡng cứng.
       # Nếu MAE > 700 thì drift.
       MAE_THRESHOLD: "700"
 
-      # Ngưỡng tương đối.
-      # Nếu current MAE > baseline MAE * 1.0 thì drift.
-      # Tức là current MAE chỉ cần lớn hơn baseline MAE là tính drift.
-      DEGRADATION_RATIO: "1.0"
+      # Baseline là median MAE của 6 cửa sổ production gần nhất
+      # thuộc đúng model champion hiện tại.
+      BASELINE_HISTORY_WINDOWS: "6"
+      MIN_BASELINE_WINDOWS: "3"
+
+      # Cho phép MAE tăng tối đa 20% so với baseline production.
+      DEGRADATION_RATIO: "1.2"
+
+      # Candidate phải giảm MAE ít nhất 5% trên promotion window
+      # mới được thay thế champion.
+      MIN_PROMOTION_IMPROVEMENT: "0.05"
 
       # Train ban đầu bằng 12 tháng:
       # 2012-11-01 → 2013-11-01

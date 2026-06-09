@@ -1,855 +1,533 @@
-import os
 import json
+import os
+import shutil
 import time
-import joblib
-import pandas as pd
 from datetime import datetime
 
-from src.preprocess import (
-    load_data,
-    preprocess
+import joblib
+import pandas as pd
+from sklearn.metrics import mean_absolute_error
+
+from src.drift import detect_drift_by_mae, get_historical_mae_baseline
+from src.pipeline import run_pipeline, save_model_info
+from src.preprocess import load_data, preprocess
+
+
+DATA_PATH = os.getenv("DATA_PATH", "data/TrafficVolumeData.csv")
+MODEL_PATH = os.getenv("MODEL_PATH", "models/best_model.pkl")
+MODEL_INFO_PATH = os.getenv(
+    "MODEL_INFO_PATH",
+    "models/best_model_info.json",
+)
+CANDIDATE_MODEL_PATH = os.getenv(
+    "CANDIDATE_MODEL_PATH",
+    "models/candidate_model.pkl",
+)
+CANDIDATE_INFO_PATH = os.getenv(
+    "CANDIDATE_INFO_PATH",
+    "models/candidate_model_info.json",
+)
+STATE_PATH = os.getenv("STATE_PATH", "monitoring/drift_state.json")
+DRIFT_HISTORY_PATH = os.getenv(
+    "DRIFT_HISTORY_PATH",
+    "monitoring/drift_history.csv",
+)
+PROMOTION_HISTORY_PATH = os.getenv(
+    "PROMOTION_HISTORY_PATH",
+    "monitoring/promotion_history.csv",
 )
 
-from src.drift import (
-    detect_drift_by_mae
+MAE_THRESHOLD = float(os.getenv("MAE_THRESHOLD", "700"))
+DEGRADATION_RATIO = float(os.getenv("DEGRADATION_RATIO", "1.2"))
+BASELINE_HISTORY_WINDOWS = int(
+    os.getenv("BASELINE_HISTORY_WINDOWS", "6")
 )
-
-from src.pipeline import (
-    run_pipeline
-)
-
-
-# =========================
-# CONFIG FROM ENV
-# =========================
-DATA_PATH = os.getenv(
-    "DATA_PATH",
-    "data/TrafficVolumeData.csv"
-)
-
-MODEL_PATH = os.getenv(
-    "MODEL_PATH",
-    "models/best_model.pkl"
-)
-
-STATE_PATH = os.getenv(
-    "STATE_PATH",
-    "monitoring/drift_state.json"
-)
-
-MAE_THRESHOLD = float(
-    os.getenv(
-        "MAE_THRESHOLD",
-        "700"
-    )
-)
-
-DEGRADATION_RATIO = float(
-    os.getenv(
-        "DEGRADATION_RATIO",
-        "1.5"
-    )
+MIN_BASELINE_WINDOWS = int(os.getenv("MIN_BASELINE_WINDOWS", "3"))
+MIN_PROMOTION_IMPROVEMENT = float(
+    os.getenv("MIN_PROMOTION_IMPROVEMENT", "0.05")
 )
 
 CHECK_INTERVAL_SECONDS = int(
-    os.getenv(
-        "CHECK_INTERVAL_SECONDS",
-        "60"
-    )
+    os.getenv("CHECK_INTERVAL_SECONDS", "60")
 )
+CHECK_WINDOW_MONTHS = int(os.getenv("CHECK_WINDOW_MONTHS", "1"))
+TRAIN_WINDOW_MONTHS = int(os.getenv("TRAIN_WINDOW_MONTHS", "12"))
 
-CHECK_WINDOW_MONTHS = int(
-    os.getenv(
-        "CHECK_WINDOW_MONTHS",
-        "1"
-    )
-)
-
-TRAIN_WINDOW_MONTHS = int(
-    os.getenv(
-        "TRAIN_WINDOW_MONTHS",
-        "3"
-    )
-)
-
-DRIFT_START_DATE = os.getenv(
-    "DRIFT_START_DATE",
-    "2013-04-01"
-)
-
-DRIFT_END_LIMIT = os.getenv(
-    "DRIFT_END_LIMIT",
-    "2014-09-01"
-)
-
-INITIAL_TRAIN_START = os.getenv(
-    "INITIAL_TRAIN_START",
-    "2013-01-01"
-)
-
-INITIAL_TRAIN_END = os.getenv(
-    "INITIAL_TRAIN_END",
-    "2013-04-01"
-)
-
-RUN_ONCE = os.getenv(
-    "RUN_ONCE",
-    "false"
-).lower() == "true"
+DRIFT_START_DATE = os.getenv("DRIFT_START_DATE", "2013-04-01")
+DRIFT_END_LIMIT = os.getenv("DRIFT_END_LIMIT", "2014-09-01")
+INITIAL_TRAIN_START = os.getenv("INITIAL_TRAIN_START", "2013-01-01")
+INITIAL_TRAIN_END = os.getenv("INITIAL_TRAIN_END", "2013-04-01")
+RUN_ONCE = os.getenv("RUN_ONCE", "false").lower() == "true"
 
 
-# =========================
-# PRINT HELPER
-# =========================
 def log(message):
-    print(
-        message,
-        flush=True
-    )
+    print(message, flush=True)
 
 
-# =========================
-# DATE HELPER
-# =========================
 def to_date_string(value):
-    return str(
-        pd.to_datetime(value).date()
-    )
+    return str(pd.to_datetime(value).date())
 
 
-# =========================
-# ENSURE FOLDERS
-# =========================
 def ensure_folders():
-    os.makedirs(
+    for folder in [
         "monitoring",
-        exist_ok=True
-    )
-
-    os.makedirs(
         "models",
-        exist_ok=True
-    )
-
-    os.makedirs(
         "mlruns",
-        exist_ok=True
-    )
-
-    os.makedirs(
         "data_versions",
-        exist_ok=True
-    )
-
-    os.makedirs(
         "results",
-        exist_ok=True
-    )
+    ]:
+        os.makedirs(folder, exist_ok=True)
 
 
-# =========================
-# DEFAULT STATE
-# =========================
 def get_default_state():
     return {
         "next_check_start": DRIFT_START_DATE,
-
-        "candidate_train_start": INITIAL_TRAIN_START,
-        "candidate_train_end": INITIAL_TRAIN_END,
-
         "model_train_start": INITIAL_TRAIN_START,
         "model_train_end": INITIAL_TRAIN_END,
-
         "last_check_start": None,
         "last_check_end": None,
-
         "last_candidate_train_start": None,
         "last_candidate_train_end": None,
-
         "last_drift": None,
         "last_mae": None,
         "last_baseline_mae": None,
         "last_ratio_threshold": None,
-
+        "last_promotion_decision": None,
+        "last_champion_mae": None,
+        "last_candidate_mae": None,
+        "last_improvement_ratio": None,
         "last_status": "initialized",
         "last_error": None,
-
         "run_count": 0,
-        "updated_at": datetime.now().isoformat()
+        "updated_at": datetime.now().isoformat(),
     }
 
 
-# =========================
-# NORMALIZE STATE
-# =========================
-def normalize_state(state):
-    default_state = get_default_state()
+def load_state():
+    state = get_default_state()
+    if not os.path.exists(STATE_PATH):
+        return state
 
-    for key, value in default_state.items():
-        if key not in state:
-            state[key] = value
+    try:
+        with open(STATE_PATH, "r", encoding="utf-8") as file:
+            saved_state = json.load(file)
+        state.update(saved_state)
+    except (OSError, json.JSONDecodeError):
+        log("Cannot read drift state. Default state will be used.")
 
     return state
 
 
-# =========================
-# LOAD STATE
-# =========================
-def load_state():
-    if os.path.exists(
-        STATE_PATH
-    ):
-        with open(
-            STATE_PATH,
-            "r",
-            encoding="utf-8"
-        ) as f:
-            state = json.load(f)
-
-        return normalize_state(
-            state
-        )
-
-    return get_default_state()
-
-
-# =========================
-# SAVE STATE
-# =========================
 def save_state(state):
     state["updated_at"] = datetime.now().isoformat()
+    state_directory = os.path.dirname(STATE_PATH)
+    if state_directory:
+        os.makedirs(state_directory, exist_ok=True)
 
-    os.makedirs(
-        os.path.dirname(STATE_PATH),
-        exist_ok=True
-    )
-
-    with open(
-        STATE_PATH,
-        "w",
-        encoding="utf-8"
-    ) as f:
-        json.dump(
-            state,
-            f,
-            indent=4,
-            ensure_ascii=False
-        )
+    with open(STATE_PATH, "w", encoding="utf-8") as file:
+        json.dump(state, file, indent=4, ensure_ascii=False)
 
 
-# =========================
-# GET LATEST MODEL VERSION
-# =========================
-def get_latest_model_version():
-    version_file = (
-        "models/model_versions.csv"
-    )
-
-    if not os.path.exists(
-        version_file
-    ):
-        return "unknown"
-
-    try:
-        df = pd.read_csv(
-            version_file
-        )
-
-        if len(df) == 0:
-            return "unknown"
-
-        return str(
-            df.iloc[-1]["version"]
-        )
-
-    except Exception:
-        return "unknown"
-
-
-# =========================
-# GET BEST MODEL INFO
-# =========================
-def get_best_model_info():
-    info_path = (
-        "models/best_model_info.json"
-    )
-
-    if not os.path.exists(
-        info_path
-    ):
+def load_json(path):
+    if not os.path.exists(path):
         return None
 
     try:
-        with open(
-            info_path,
-            "r",
-            encoding="utf-8"
-        ) as f:
-            return json.load(f)
-
-    except Exception:
+        with open(path, "r", encoding="utf-8") as file:
+            return json.load(file)
+    except (OSError, json.JSONDecodeError):
         return None
 
 
-# =========================
-# GET BASELINE MAE
-# =========================
-def get_baseline_mae():
-    info = get_best_model_info()
+def append_csv_row(path, row):
+    if os.path.exists(path):
+        history = pd.read_csv(path)
+    else:
+        history = pd.DataFrame()
 
-    if info is None:
-        return None
-
-    possible_keys = [
-        "test_MAE",
-        "MAE",
-        "mae",
-        "test_mae"
-    ]
-
-    for key in possible_keys:
-        if key in info:
-            try:
-                return float(
-                    info[key]
-                )
-            except Exception:
-                continue
-
-    return None
+    history = pd.concat(
+        [history, pd.DataFrame([row])],
+        ignore_index=True,
+    )
+    history.to_csv(path, index=False)
 
 
-# =========================
-# PRINT BEST MODEL INFO
-# =========================
-def print_best_model_info():
-    info = get_best_model_info()
+def get_champion_info():
+    return load_json(MODEL_INFO_PATH)
 
-    if info is None:
+
+def get_champion_version():
+    info = get_champion_info() or {}
+    return str(info.get("model_version", "unknown"))
+
+
+def candidate_exists():
+    return (
+        os.path.exists(CANDIDATE_MODEL_PATH)
+        and os.path.exists(CANDIDATE_INFO_PATH)
+    )
+
+
+def align_features(model, dataframe):
+    features = dataframe.drop(
+        ["traffic_volume", "date_time"],
+        axis=1,
+    )
+    if hasattr(model, "feature_names_in_"):
+        features = features.reindex(
+            columns=model.feature_names_in_,
+            fill_value=0,
+        )
+    return features
+
+
+def evaluate_model(model, dataframe):
+    features = align_features(model, dataframe)
+    predictions = model.predict(features)
+    actual = dataframe["traffic_volume"]
+    mae = mean_absolute_error(actual, predictions)
+    return float(mae), predictions
+
+
+def calculate_improvement_ratio(champion_mae, candidate_mae):
+    if champion_mae <= 0:
+        return 0.0
+    return (champion_mae - candidate_mae) / champion_mae
+
+
+def should_promote_candidate(
+    champion_mae,
+    candidate_mae,
+    minimum_improvement=MIN_PROMOTION_IMPROVEMENT,
+):
+    improvement = calculate_improvement_ratio(
+        champion_mae,
+        candidate_mae,
+    )
+    return improvement >= minimum_improvement, improvement
+
+
+def remove_pending_candidate():
+    for path in [CANDIDATE_MODEL_PATH, CANDIDATE_INFO_PATH]:
+        if os.path.exists(path):
+            os.remove(path)
+
+
+def promote_candidate(candidate_info, promotion_metrics):
+    """
+    Replace the champion only after an out-of-sample promotion comparison.
+
+    The versioned model created by the pipeline remains available for rollback.
+    """
+    temporary_model_path = f"{MODEL_PATH}.tmp"
+    shutil.copy2(CANDIDATE_MODEL_PATH, temporary_model_path)
+    os.replace(temporary_model_path, MODEL_PATH)
+
+    promoted_info = dict(candidate_info)
+    promoted_info.update(
+        {
+            "model_role": "champion",
+            "model_file": MODEL_PATH,
+            "promoted_at": datetime.now().isoformat(),
+            "promotion_metrics": promotion_metrics,
+        }
+    )
+    save_model_info(promoted_info, MODEL_INFO_PATH)
+    remove_pending_candidate()
+    return promoted_info
+
+
+def evaluate_pending_candidate(champion_model, evaluation_window):
+    """
+    Compare champion and candidate on the same unseen time window.
+
+    Candidate training ends before this window starts because the candidate was
+    created during the previous worker iteration.
+    """
+    if not candidate_exists():
+        champion_mae, champion_predictions = evaluate_model(
+            champion_model,
+            evaluation_window,
+        )
+        return {
+            "model": champion_model,
+            "predictions": champion_predictions,
+            "promoted": False,
+            "decision": "no_candidate",
+            "champion_mae": champion_mae,
+            "candidate_mae": None,
+            "improvement_ratio": None,
+        }
+
+    candidate_model = joblib.load(CANDIDATE_MODEL_PATH)
+    candidate_info = load_json(CANDIDATE_INFO_PATH)
+    if candidate_info is None:
+        remove_pending_candidate()
+        champion_mae, champion_predictions = evaluate_model(
+            champion_model,
+            evaluation_window,
+        )
+        log("Candidate metadata is invalid. Candidate was discarded.")
+        return {
+            "model": champion_model,
+            "predictions": champion_predictions,
+            "promoted": False,
+            "decision": "invalid_candidate",
+            "champion_mae": champion_mae,
+            "candidate_mae": None,
+            "improvement_ratio": None,
+        }
+
+    champion_info = get_champion_info() or {}
+
+    champion_mae, champion_predictions = evaluate_model(
+        champion_model,
+        evaluation_window,
+    )
+    candidate_mae, candidate_predictions = evaluate_model(
+        candidate_model,
+        evaluation_window,
+    )
+    promote, improvement = should_promote_candidate(
+        champion_mae,
+        candidate_mae,
+    )
+
+    decision = "promoted" if promote else "rejected"
+    promotion_row = {
+        "timestamp": datetime.now().isoformat(),
+        "evaluation_start": to_date_string(
+            evaluation_window["date_time"].min()
+        ),
+        "evaluation_end": to_date_string(
+            evaluation_window["date_time"].max()
+        ),
+        "champion_version": champion_info.get(
+            "model_version",
+            "unknown",
+        ),
+        "candidate_version": candidate_info.get(
+            "model_version",
+            "unknown",
+        ),
+        "champion_mae": round(champion_mae, 4),
+        "candidate_mae": round(candidate_mae, 4),
+        "improvement_ratio": round(improvement, 6),
+        "minimum_improvement": MIN_PROMOTION_IMPROVEMENT,
+        "decision": decision,
+    }
+    append_csv_row(PROMOTION_HISTORY_PATH, promotion_row)
+
+    log("\nChampion-Challenger comparison")
+    log(f"Champion MAE: {champion_mae:.2f}")
+    log(f"Candidate MAE: {candidate_mae:.2f}")
+    log(f"Improvement: {improvement * 100:.2f}%")
+
+    if promote:
+        promoted_info = promote_candidate(candidate_info, promotion_row)
         log(
-            "ℹ️ No best_model_info.json found yet."
+            "Candidate promoted to champion: "
+            f"{promoted_info.get('model_version')}"
         )
+        return {
+            "model": candidate_model,
+            "predictions": candidate_predictions,
+            "promoted": True,
+            "decision": decision,
+            "champion_mae": champion_mae,
+            "candidate_mae": candidate_mae,
+            "improvement_ratio": improvement,
+            "promoted_info": promoted_info,
+        }
+
+    remove_pending_candidate()
+    log("Candidate rejected. Current champion is kept.")
+    return {
+        "model": champion_model,
+        "predictions": champion_predictions,
+        "promoted": False,
+        "decision": decision,
+        "champion_mae": champion_mae,
+        "candidate_mae": candidate_mae,
+        "improvement_ratio": improvement,
+    }
+
+
+def train_initial_model_if_missing():
+    if os.path.exists(MODEL_PATH):
         return
 
-    log(
-        "\n🏆 CURRENT BEST MODEL INFO"
-    )
-
-    log(
-        f"Model type   : {info.get('best_model_name')}"
-    )
-
-    log(
-        f"Model version: {info.get('model_version')}"
-    )
-
-    log(
-        f"Data version : {info.get('data_version')}"
-    )
-
-    log(
-        f"Test MAE     : {info.get('test_MAE')}"
-    )
-
-    log(
-        f"Test RMSE    : {info.get('test_RMSE')}"
-    )
-
-    log(
-        f"Test MAPE    : {info.get('test_MAPE')}"
-    )
-
-
-# =========================
-# TRAIN INITIAL MODEL IF MISSING
-# =========================
-def train_initial_model_if_missing():
-    if os.path.exists(
-        MODEL_PATH
-    ):
-        return False
-
-    log(
-        "\n⚠️ No model found."
-    )
-
-    log(
-        "🚀 Training initial model..."
-    )
-
-    log(
-        f"Train window: {INITIAL_TRAIN_START} → {INITIAL_TRAIN_END}"
-    )
-
+    log("\nNo champion model found. Training the initial model...")
     run_pipeline(
         train_start_date=INITIAL_TRAIN_START,
-        train_end_date=INITIAL_TRAIN_END
+        train_end_date=INITIAL_TRAIN_END,
+        output_model_path=MODEL_PATH,
+        output_info_path=MODEL_INFO_PATH,
+        model_role="champion",
     )
-
-    log(
-        "✅ Initial model created."
-    )
-
-    print_best_model_info()
 
     state = load_state()
-
     state["model_train_start"] = INITIAL_TRAIN_START
     state["model_train_end"] = INITIAL_TRAIN_END
-
-    state["candidate_train_start"] = INITIAL_TRAIN_START
-    state["candidate_train_end"] = INITIAL_TRAIN_END
-
     state["last_status"] = "initial_model_created"
-
-    save_state(
-        state
-    )
-
-    return True
+    save_state(state)
 
 
-# =========================
-# BUILD NEXT ROLLING TRAIN WINDOW
-# =========================
 def build_rolling_train_window(check_end):
-    new_train_end = pd.to_datetime(
-        check_end
+    train_end = pd.to_datetime(check_end)
+    train_start = train_end - pd.DateOffset(months=TRAIN_WINDOW_MONTHS)
+    return to_date_string(train_start), to_date_string(train_end)
+
+
+def train_candidate(train_start, train_end):
+    log(f"\nTraining candidate on {train_start} -> {train_end}")
+    return run_pipeline(
+        train_start_date=train_start,
+        train_end_date=train_end,
+        output_model_path=CANDIDATE_MODEL_PATH,
+        output_info_path=CANDIDATE_INFO_PATH,
+        model_role="candidate",
     )
 
-    new_train_start = (
-        new_train_end
-        -
-        pd.DateOffset(
-            months=TRAIN_WINDOW_MONTHS
-        )
-    )
 
-    return (
-        to_date_string(new_train_start),
-        to_date_string(new_train_end)
-    )
-
-
-# =========================
-# CHECK DRIFT ONCE
-# =========================
 def check_drift_once():
     ensure_folders()
-
-    log(
-        "\n=============================="
-    )
-
-    log(
-        "🔍 DRIFT WORKER START CHECK"
-    )
-
-    log(
-        "=============================="
-    )
-
-    log(
-        f"DATA_PATH: {DATA_PATH}"
-    )
-
-    log(
-        f"MODEL_PATH: {MODEL_PATH}"
-    )
-
-    log(
-        f"MAE_THRESHOLD: {MAE_THRESHOLD}"
-    )
-
-    log(
-        f"DEGRADATION_RATIO: {DEGRADATION_RATIO}"
-    )
-
-    log(
-        f"CHECK_WINDOW_MONTHS: {CHECK_WINDOW_MONTHS}"
-    )
-
-    log(
-        f"TRAIN_WINDOW_MONTHS: {TRAIN_WINDOW_MONTHS}"
-    )
-
     train_initial_model_if_missing()
 
-    print_best_model_info()
-
     state = load_state()
-
-    check_start = pd.to_datetime(
-        state["next_check_start"]
-    )
-
-    drift_end_limit = pd.to_datetime(
-        DRIFT_END_LIMIT
-    )
+    check_start = pd.to_datetime(state["next_check_start"])
+    drift_end_limit = pd.to_datetime(DRIFT_END_LIMIT)
 
     if check_start >= drift_end_limit:
-        log(
-            "\n✅ All drift windows have been checked."
-        )
-
-        log(
-            f"Current next_check_start: {check_start}"
-        )
-
         state["last_status"] = "finished_all_windows"
-
-        save_state(
-            state
-        )
-
+        save_state(state)
+        log("All drift windows have been checked.")
         return
 
-    check_end = (
-        check_start
-        +
-        pd.DateOffset(
-            months=CHECK_WINDOW_MONTHS
-        )
+    check_end = check_start + pd.DateOffset(
+        months=CHECK_WINDOW_MONTHS
     )
+    check_end = min(check_end, drift_end_limit)
 
-    if check_end > drift_end_limit:
-        check_end = drift_end_limit
-
-    candidate_train_start, candidate_train_end = build_rolling_train_window(
-        check_end
+    state.update(
+        {
+            "last_check_start": to_date_string(check_start),
+            "last_check_end": to_date_string(check_end),
+            "last_status": "checking_drift",
+            "last_error": None,
+        }
     )
+    save_state(state)
 
-    log(
-        "\n📦 Current model train window:"
-    )
-
-    log(
-        f"{state['model_train_start']} → {state['model_train_end']}"
-    )
-
-    log(
-        "\n📦 Candidate train window:"
-    )
-
-    log(
-        f"{candidate_train_start} → {candidate_train_end}"
-    )
-
-    log(
-        "\n📦 Drift check window:"
-    )
-
-    log(
-        f"{check_start} → {check_end}"
-    )
-
-    state["last_check_start"] = to_date_string(
-        check_start
-    )
-
-    state["last_check_end"] = to_date_string(
-        check_end
-    )
-
-    state["last_candidate_train_start"] = candidate_train_start
-    state["last_candidate_train_end"] = candidate_train_end
-
-    state["last_status"] = "checking_drift"
-    state["last_error"] = None
-
-    save_state(
-        state
-    )
-
-    df = load_data(
-        DATA_PATH
-    )
-
-    df = preprocess(
-        df
-    )
-
-    df = df.sort_values(
-        "date_time"
-    )
-
-    data_min = df["date_time"].min()
-    data_max = df["date_time"].max()
-
-    log(
-        "\n📊 Dataset time range:"
-    )
-
-    log(
-        f"{data_min} → {data_max}"
-    )
-
-    current_window = df[
-        (df["date_time"] >= check_start)
-        &
-        (df["date_time"] < check_end)
+    dataframe = preprocess(load_data(DATA_PATH)).sort_values("date_time")
+    current_window = dataframe[
+        (dataframe["date_time"] >= check_start)
+        & (dataframe["date_time"] < check_end)
     ].copy()
 
-    if len(current_window) == 0:
-        log(
-            "\n⚠️ No data found in this drift window."
-        )
-
-        state["next_check_start"] = to_date_string(
-            check_end
-        )
-
-        state["candidate_train_start"] = candidate_train_start
-        state["candidate_train_end"] = candidate_train_end
-
+    if current_window.empty:
+        state["next_check_start"] = to_date_string(check_end)
         state["last_status"] = "no_data"
-
-        state["run_count"] = int(
-            state.get(
-                "run_count",
-                0
-            )
-        ) + 1
-
-        save_state(
-            state
-        )
-
+        state["run_count"] = int(state.get("run_count", 0)) + 1
+        save_state(state)
+        log("No data found in the current drift window.")
         return
 
     log(
-        f"\n📦 Drift check rows: {len(current_window)}"
+        f"\nChecking {len(current_window)} rows: "
+        f"{to_date_string(check_start)} -> {to_date_string(check_end)}"
     )
 
-    log(
-        "\n📦 Loading current model..."
+    champion_model = joblib.load(MODEL_PATH)
+    comparison = evaluate_pending_candidate(
+        champion_model,
+        current_window,
     )
 
-    model = joblib.load(
-        MODEL_PATH
+    active_model = comparison["model"]
+    active_predictions = comparison["predictions"]
+    active_version = get_champion_version()
+
+    # The baseline only uses earlier production windows of this exact champion.
+    baseline_mae = get_historical_mae_baseline(
+        model_version=active_version,
+        history_size=BASELINE_HISTORY_WINDOWS,
+        minimum_windows=MIN_BASELINE_WINDOWS,
+        log_path=DRIFT_HISTORY_PATH,
     )
 
-    log(
-        "✅ Model loaded"
-    )
-
-    X = current_window.drop(
-        [
-            "traffic_volume",
-            "date_time"
-        ],
-        axis=1
-    )
-
-    if hasattr(
-        model,
-        "feature_names_in_"
-    ):
-        X = X.reindex(
-            columns=model.feature_names_in_,
-            fill_value=0
-        )
-
-    y_true = current_window[
-        "traffic_volume"
-    ]
-
-    log(
-        "\n🔮 Predicting drift window..."
-    )
-
-    y_pred = model.predict(
-        X
-    )
-
-    model_version = get_latest_model_version()
-
-    baseline_mae = get_baseline_mae()
-
-    if baseline_mae is None:
-        log(
-            "\n⚠️ Cannot find baseline MAE. Ratio-based drift will be disabled."
-        )
-    else:
-        log(
-            f"\n📌 Baseline MAE: {baseline_mae}"
-        )
-
-    drift, mae = detect_drift_by_mae(
-        y_true=y_true,
-        y_pred=y_pred,
+    drift, current_mae = detect_drift_by_mae(
+        y_true=current_window["traffic_volume"],
+        y_pred=active_predictions,
         mae_threshold=MAE_THRESHOLD,
-        model_version=model_version,
+        model_version=active_version,
         baseline_mae=baseline_mae,
-        degradation_ratio=DEGRADATION_RATIO
+        degradation_ratio=DEGRADATION_RATIO,
+        log_path=DRIFT_HISTORY_PATH,
     )
 
-    ratio_threshold = None
-
-    if baseline_mae is not None:
-        ratio_threshold = (
-            baseline_mae
-            *
-            DEGRADATION_RATIO
-        )
-
-    state["last_drift"] = bool(
-        drift
-    )
-
-    state["last_mae"] = float(
-        mae
-    )
-
-    state["last_baseline_mae"] = (
-        float(baseline_mae)
+    ratio_threshold = (
+        baseline_mae * DEGRADATION_RATIO
         if baseline_mae is not None
         else None
     )
-
-    state["last_ratio_threshold"] = (
-        float(ratio_threshold)
-        if ratio_threshold is not None
-        else None
+    state.update(
+        {
+            "last_drift": bool(drift),
+            "last_mae": float(current_mae),
+            "last_baseline_mae": baseline_mae,
+            "last_ratio_threshold": ratio_threshold,
+            "last_promotion_decision": comparison["decision"],
+            "last_champion_mae": comparison["champion_mae"],
+            "last_candidate_mae": comparison["candidate_mae"],
+            "last_improvement_ratio": comparison["improvement_ratio"],
+        }
     )
 
-    state["candidate_train_start"] = candidate_train_start
-    state["candidate_train_end"] = candidate_train_end
-
-    state["last_status"] = (
-        "drift_detected"
-        if drift
-        else "no_drift"
-    )
-
-    save_state(
-        state
-    )
+    if comparison["promoted"]:
+        promoted_info = comparison["promoted_info"]
+        state["model_train_start"] = promoted_info["train_start_date"]
+        state["model_train_end"] = promoted_info["train_end_date"]
 
     if drift:
-        log(
-            "\n🚨 Drift found → retraining model"
+        candidate_train_start, candidate_train_end = (
+            build_rolling_train_window(check_end)
         )
+        state["last_status"] = "training_candidate"
+        state["last_candidate_train_start"] = candidate_train_start
+        state["last_candidate_train_end"] = candidate_train_end
+        save_state(state)
 
-        log(
-            "\n📦 Retrain with rolling train window:"
-        )
-
-        log(
-            f"{candidate_train_start} → {candidate_train_end}"
-        )
-
-        state["last_status"] = "retraining"
-
-        save_state(
-            state
-        )
-
-        run_pipeline(
-            train_start_date=candidate_train_start,
-            train_end_date=candidate_train_end
-        )
-
-        log(
-            "\n✅ Retrain complete."
-        )
-
-        state["model_train_start"] = candidate_train_start
-        state["model_train_end"] = candidate_train_end
-
-        state["last_status"] = "retrain_complete"
-
-        print_best_model_info()
-
+        train_candidate(candidate_train_start, candidate_train_end)
+        state["last_status"] = "candidate_waiting_for_promotion"
     else:
-        log(
-            "\n✅ No drift → keep current model."
-        )
+        state["last_status"] = "no_drift_keep_champion"
 
-        log(
-            "📌 Candidate train window updated, but model is not retrained."
-        )
+    state["next_check_start"] = to_date_string(check_end)
+    state["run_count"] = int(state.get("run_count", 0)) + 1
+    save_state(state)
 
-        state["last_status"] = "no_drift_keep_model"
-
-    state["next_check_start"] = to_date_string(
-        check_end
-    )
-
-    state["run_count"] = int(
-        state.get(
-            "run_count",
-            0
-        )
-    ) + 1
-
-    save_state(
-        state
-    )
-
-    log(
-        "\n📝 Drift state saved."
-    )
-
-    log(
-        f"Next check starts at: {state['next_check_start']}"
-    )
+    log(f"Current MAE: {current_mae:.2f}")
+    log(f"Next check starts at: {state['next_check_start']}")
 
 
-# =========================
-# MAIN LOOP
-# =========================
 if __name__ == "__main__":
-
     ensure_folders()
-
-    log(
-        "\n🚀 Traffic Drift Worker Started"
-    )
-
-    log(
-        f"RUN_ONCE: {RUN_ONCE}"
-    )
-
-    log(
-        f"CHECK_INTERVAL_SECONDS: {CHECK_INTERVAL_SECONDS}"
-    )
+    log("Traffic drift worker started.")
 
     while True:
-
         try:
             check_drift_once()
-
-        except Exception as e:
-            log(
-                "\n❌ Drift worker error:"
-            )
-
-            log(
-                str(e)
-            )
-
+        except Exception as error:
+            log(f"Drift worker error: {error}")
             state = load_state()
-
             state["last_status"] = "error"
-            state["last_error"] = str(
-                e
-            )
-
-            save_state(
-                state
-            )
+            state["last_error"] = str(error)
+            save_state(state)
 
         if RUN_ONCE:
-            log(
-                "\n✅ RUN_ONCE=true → worker stopped."
-            )
+            log("RUN_ONCE=true. Worker stopped.")
             break
 
-        log(
-            f"\n⏳ Sleeping {CHECK_INTERVAL_SECONDS} seconds..."
-        )
-
-        time.sleep(
-            CHECK_INTERVAL_SECONDS
-        )
+        log(f"Sleeping {CHECK_INTERVAL_SECONDS} seconds...")
+        time.sleep(CHECK_INTERVAL_SECONDS)

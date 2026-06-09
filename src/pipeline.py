@@ -1,1150 +1,334 @@
-# # src/pipeline.py
-# import joblib
-# import os
-# import random
-# import numpy as np
-# import pandas as pd
-# import mlflow
-# import mlflow.sklearn
-# import mlflow.data
-
-# from sklearn.metrics import (
-#     mean_absolute_error,
-#     mean_squared_error,
-#     mean_absolute_percentage_error
-# )
-
-# from src.preprocess import (
-#     load_data,
-#     preprocess,
-#     split_data
-# )
-
-# from src.train import (
-#     train_random_forest,
-#     train_xgboost,
-#     train_lightgbm
-# )
-
-
-# def evaluate(
-#     y_true,
-#     y_pred
-# ):
-#     mae = mean_absolute_error(
-#         y_true,
-#         y_pred
-#     )
-
-#     mse = mean_squared_error(
-#         y_true,
-#         y_pred
-#     )
-
-#     rmse = np.sqrt(
-#         mse
-#     )
-
-#     mape = mean_absolute_percentage_error(
-#         y_true,
-#         y_pred
-#     ) * 100
-
-#     return mae, rmse, mape
-
-
-# # ====================================
-# # CREATE DATA VERSION
-# # ====================================
-# def create_data_version(
-#     df,
-#     train_start_date,
-#     train_end_date
-# ):
-#     os.makedirs(
-#         "data_versions",
-#         exist_ok=True
-#     )
-
-#     log_path = (
-#         "data_versions/version_log.csv"
-#     )
-
-#     if os.path.exists(
-#         log_path
-#     ):
-#         log_df = pd.read_csv(
-#             log_path
-#         )
-
-#         version_num = (
-#             len(log_df) + 1
-#         )
-
-#     else:
-#         log_df = pd.DataFrame(
-#             columns=[
-#                 "version",
-#                 "train_start",
-#                 "train_end",
-#                 "rows"
-#             ]
-#         )
-
-#         version_num = 1
-
-#     version_name = (
-#         f"data_v{version_num}"
-#     )
-
-#     version_file = (
-#         f"data_versions/{version_name}.csv"
-#     )
-
-#     df.to_csv(
-#         version_file,
-#         index=False
-#     )
-
-#     new_row = pd.DataFrame(
-#         [{
-#             "version":
-#             version_name,
-
-#             "train_start":
-#             train_start_date,
-
-#             "train_end":
-#             train_end_date,
-
-#             "rows":
-#             len(df)
-#         }]
-#     )
-
-#     log_df = pd.concat(
-#         [
-#             log_df,
-#             new_row
-#         ],
-#         ignore_index=True
-#     )
-
-#     log_df.to_csv(
-#         log_path,
-#         index=False
-#     )
-
-#     print(
-#         "\n📦 Data version created:"
-#     )
-
-#     print(
-#         version_name
-#     )
-
-#     return version_name
-
-
-# # ====================================
-# # CREATE MODEL VERSION
-# # ====================================
-# def create_model_version():
-#     os.makedirs(
-#         "models",
-#         exist_ok=True
-#     )
-
-#     version_file = (
-#         "models/model_versions.csv"
-#     )
-
-#     if os.path.exists(
-#         version_file
-#     ):
-#         df = pd.read_csv(
-#             version_file
-#         )
-
-#         version_num = (
-#             len(df) + 1
-#         )
-
-#     else:
-#         df = pd.DataFrame(
-#             columns=[
-#                 "version"
-#             ]
-#         )
-
-#         version_num = 1
-
-#     model_version = (
-#         f"model_v{version_num}"
-#     )
-
-#     new_row = pd.DataFrame(
-#         [{
-#             "version":
-#             model_version
-#         }]
-#     )
-
-#     df = pd.concat(
-#         [
-#             df,
-#             new_row
-#         ],
-#         ignore_index=True
-#     )
-
-#     df.to_csv(
-#         version_file,
-#         index=False
-#     )
-
-#     print(
-#         "\n🧠 Model version:"
-#     )
-
-#     print(
-#         model_version
-#     )
-
-#     return model_version
-
-
-# def run_pipeline(
-#     train_start_date,
-#     train_end_date
-# ):
-#     print(
-#         "\n🚀 Retraining model..."
-#     )
-
-#     mlflow.set_tracking_uri(
-#         "file:./mlruns"
-#     )
-
-#     mlflow.set_experiment(
-#         "Traffic Forecast"
-#     )
-
-#     random_state = random.randint(
-#         1,
-#         100000
-#     )
-
-#     print(
-#         "🎲 Random state:",
-#         random_state
-#     )
-
-#     df = load_data(
-#         "data/TrafficVolumeData.csv"
-#     )
-
-#     df = preprocess(
-#         df
-#     )
-
-#     df = df[
-#         (df["date_time"] >= train_start_date)
-#         &
-#         (df["date_time"] < train_end_date)
-#     ].copy()
-
-#     data_version = create_data_version(
-#         df,
-#         train_start_date,
-#         train_end_date
-#     )
-
-#     train_part, val_part, test_part = split_data(
-#         df
-#     )
-
-#     print(
-#         f"\n📦 Train size: {len(train_part)}"
-#     )
-
-#     print(
-#         f"📦 Val size  : {len(val_part)}"
-#     )
-
-#     print(
-#         f"📦 Test size : {len(test_part)}"
-#     )
-
-#     X_train = train_part.drop(
-#         ["traffic_volume", "date_time"],
-#         axis=1
-#     )
-
-#     y_train = train_part[
-#         "traffic_volume"
-#     ]
-
-#     X_val = val_part.drop(
-#         ["traffic_volume", "date_time"],
-#         axis=1
-#     )
-
-#     y_val = val_part[
-#         "traffic_volume"
-#     ]
-
-#     X_test = test_part.drop(
-#         ["traffic_volume", "date_time"],
-#         axis=1
-#     )
-
-#     y_test = test_part[
-#         "traffic_volume"
-#     ]
-
-#     mlflow_dataset = mlflow.data.from_pandas(
-#         df,
-#         source="data/TrafficVolumeData.csv",
-#         name="TrafficVolumeData"
-#     )
-
-#     results = []
-
-#     for name, func in [
-
-#         (
-#             "RandomForest",
-#             train_random_forest
-#         ),
-
-#         (
-#             "XGBoost",
-#             train_xgboost
-#         ),
-
-#         (
-#             "LightGBM",
-#             train_lightgbm
-#         ),
-#     ]:
-
-#         with mlflow.start_run(
-#             run_name=name
-#         ):
-
-#             mlflow.log_input(
-#                 mlflow_dataset,
-#                 context="training"
-#             )
-
-#             model = func(
-#                 X_train,
-#                 y_train,
-#                 random_state
-#             )
-
-#             pred = model.predict(
-#                 X_val
-#             )
-
-#             mae, rmse, mape = evaluate(
-#                 y_val,
-#                 pred
-#             )
-
-#             print(
-#                 f"\n{name}"
-#             )
-
-#             print(
-#                 f"MAE  : {mae:.2f}"
-#             )
-
-#             print(
-#                 f"RMSE : {rmse:.2f}"
-#             )
-
-#             print(
-#                 f"MAPE : {mape:.2f}%"
-#             )
-
-#             mlflow.set_tag(
-#                 "Models",
-#                 name
-#             )
-
-#             mlflow.set_tag(
-#                 "data_version",
-#                 data_version
-#             )
-
-#             mlflow.log_param(
-#                 "train_start_date",
-#                 train_start_date
-#             )
-
-#             mlflow.log_param(
-#                 "train_end_date",
-#                 train_end_date
-#             )
-
-#             mlflow.log_param(
-#                 "random_state",
-#                 random_state
-#             )
-
-#             mlflow.log_metric(
-#                 "MAE",
-#                 mae
-#             )
-
-#             mlflow.log_metric(
-#                 "RMSE",
-#                 rmse
-#             )
-
-#             mlflow.log_metric(
-#                 "MAPE",
-#                 mape
-#             )
-
-#             mlflow.sklearn.log_model(
-#                 sk_model=model,
-#                 name=name
-#             )
-
-#             results.append(
-#                 (
-#                     name,
-#                     model,
-#                     rmse
-#                 )
-#             )
-
-#     best = min(
-#         results,
-#         key=lambda x: x[2]
-#     )
-
-#     print(
-#         "\n🏆 BEST:",
-#         best[0]
-#     )
-
-#     model_version = create_model_version()
-
-#     best_pred = best[1].predict(
-#         X_test
-#     )
-
-#     best_mae, best_rmse, best_mape = evaluate(
-#         y_test,
-#         best_pred
-#     )
-
-#     print(
-#         "\n🧪 BEST MODEL TEST"
-#     )
-
-#     print(
-#         f"MAE  : {best_mae:.2f}"
-#     )
-
-#     print(
-#         f"RMSE : {best_rmse:.2f}"
-#     )
-
-#     print(
-#         f"MAPE : {best_mape:.2f}%"
-#     )
-
-#     os.makedirs(
-#         "models",
-#         exist_ok=True
-#     )
-
-#     joblib.dump(
-#         best[1],
-#         "models/best_model.pkl"
-#     )
-
-#     joblib.dump(
-#         best[1],
-#         f"models/{model_version}.pkl"
-#     )
-
-#     print(
-#         "✅ Model saved"
-#     )
-
-#     with mlflow.start_run(
-#         run_name="Best_Model"
-#     ):
-
-#         mlflow.log_input(
-#             mlflow_dataset,
-#             context="training"
-#         )
-
-#         mlflow.set_tag(
-#             "Models",
-#             best[0]
-#         )
-
-#         mlflow.set_tag(
-#             "data_version",
-#             data_version
-#         )
-
-#         mlflow.set_tag(
-#             "model_version",
-#             model_version
-#         )
-
-#         mlflow.log_metric(
-#             "test_MAE",
-#             best_mae
-#         )
-
-#         mlflow.log_metric(
-#             "test_RMSE",
-#             best_rmse
-#         )
-
-#         mlflow.log_metric(
-#             "test_MAPE",
-#             best_mape
-#         )
-
-#         mlflow.log_artifact(
-#             "models/best_model.pkl"
-#         )
-
-#         mlflow.sklearn.log_model(
-#             sk_model=best[1],
-#             name=best[0]
-#         )
-
-
-
-
-# src/pipeline.py
-import joblib
-import os
 import json
-import random
-import numpy as np
-import pandas as pd
-import mlflow
-import mlflow.sklearn
-import mlflow.data
-
+import os
 from datetime import datetime
 
+import joblib
+import mlflow
+import mlflow.data
+import mlflow.sklearn
+import numpy as np
+import pandas as pd
 from sklearn.metrics import (
     mean_absolute_error,
+    mean_absolute_percentage_error,
     mean_squared_error,
-    mean_absolute_percentage_error
 )
+from sklearn.model_selection import TimeSeriesSplit
 
-from src.preprocess import (
-    load_data,
-    preprocess,
-    split_data
-)
-
+from src.preprocess import load_data, preprocess, split_data
 from src.train import (
+    train_lightgbm,
     train_random_forest,
     train_xgboost,
-    train_lightgbm
 )
 
 
-# =========================
-# MLflow file store allow
-# =========================
-os.environ.setdefault(
-    "MLFLOW_ALLOW_FILE_STORE",
-    "true"
-)
+DATA_PATH = "data/TrafficVolumeData.csv"
+DEFAULT_RANDOM_STATE = 42
+DEFAULT_CV_SPLITS = 3
+
+os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
 
 
-def evaluate(
-    y_true,
-    y_pred
-):
-    mae = mean_absolute_error(
-        y_true,
-        y_pred
-    )
-
-    mse = mean_squared_error(
-        y_true,
-        y_pred
-    )
-
-    rmse = np.sqrt(
-        mse
-    )
-
-    mape = mean_absolute_percentage_error(
-        y_true,
-        y_pred
-    ) * 100
-
+def evaluate(y_true, y_pred):
+    """Return the metrics used to compare regression models."""
+    mae = mean_absolute_error(y_true, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+    mape = mean_absolute_percentage_error(y_true, y_pred) * 100
     return mae, rmse, mape
 
 
-# ====================================
-# CREATE DATA VERSION
-# ====================================
-def create_data_version(
-    df,
-    train_start_date,
-    train_end_date
-):
-    os.makedirs(
-        "data_versions",
-        exist_ok=True
-    )
-
-    log_path = (
-        "data_versions/version_log.csv"
-    )
-
-    if os.path.exists(
-        log_path
-    ):
-        log_df = pd.read_csv(
-            log_path
-        )
-
-        version_num = (
-            len(log_df) + 1
-        )
-
+def _append_csv_row(path, row, columns):
+    """Append one structured row while remaining compatible with old CSV files."""
+    if os.path.exists(path):
+        dataframe = pd.read_csv(path)
     else:
-        log_df = pd.DataFrame(
-            columns=[
-                "version",
-                "train_start",
-                "train_end",
-                "rows"
-            ]
-        )
+        dataframe = pd.DataFrame(columns=columns)
 
-        version_num = 1
-
-    version_name = (
-        f"data_v{version_num}"
+    dataframe = pd.concat(
+        [dataframe, pd.DataFrame([row])],
+        ignore_index=True,
     )
+    dataframe.to_csv(path, index=False)
 
-    version_file = (
-        f"data_versions/{version_name}.csv"
-    )
 
-    df.to_csv(
-        version_file,
-        index=False
-    )
+def create_data_version(df, train_start_date, train_end_date):
+    os.makedirs("data_versions", exist_ok=True)
+    log_path = "data_versions/version_log.csv"
 
-    new_row = pd.DataFrame(
-        [{
-            "version":
-            version_name,
+    if os.path.exists(log_path):
+        version_number = len(pd.read_csv(log_path)) + 1
+    else:
+        version_number = 1
 
-            "train_start":
-            train_start_date,
+    version_name = f"data_v{version_number}"
+    version_file = f"data_versions/{version_name}.csv"
+    df.to_csv(version_file, index=False)
 
-            "train_end":
-            train_end_date,
-
-            "rows":
-            len(df)
-        }]
-    )
-
-    log_df = pd.concat(
-        [
-            log_df,
-            new_row
-        ],
-        ignore_index=True
-    )
-
-    log_df.to_csv(
+    _append_csv_row(
         log_path,
-        index=False
+        {
+            "version": version_name,
+            "train_start": train_start_date,
+            "train_end": train_end_date,
+            "rows": len(df),
+        },
+        ["version", "train_start", "train_end", "rows"],
     )
 
-    print(
-        "\n📦 Data version created:"
-    )
-
-    print(
-        version_name
-    )
-
+    print(f"\nData version created: {version_name}")
     return version_name
 
 
-# ====================================
-# CREATE MODEL VERSION
-# ====================================
 def create_model_version():
-    os.makedirs(
-        "models",
-        exist_ok=True
-    )
+    os.makedirs("models", exist_ok=True)
+    version_file = "models/model_versions.csv"
 
-    version_file = (
-        "models/model_versions.csv"
-    )
-
-    if os.path.exists(
-        version_file
-    ):
-        df = pd.read_csv(
-            version_file
-        )
-
-        version_num = (
-            len(df) + 1
-        )
-
+    if os.path.exists(version_file):
+        version_number = len(pd.read_csv(version_file)) + 1
     else:
-        df = pd.DataFrame(
-            columns=[
-                "version"
-            ]
-        )
+        version_number = 1
 
-        version_num = 1
-
-    model_version = (
-        f"model_v{version_num}"
-    )
-
-    new_row = pd.DataFrame(
-        [{
-            "version":
-            model_version
-        }]
-    )
-
-    df = pd.concat(
-        [
-            df,
-            new_row
-        ],
-        ignore_index=True
-    )
-
-    df.to_csv(
+    model_version = f"model_v{version_number}"
+    _append_csv_row(
         version_file,
-        index=False
+        {
+            "version": model_version,
+            "created_at": datetime.now().isoformat(),
+        },
+        ["version", "created_at"],
     )
 
-    print(
-        "\n🧠 Model version:"
-    )
-
-    print(
-        model_version
-    )
-
+    print(f"\nModel version created: {model_version}")
     return model_version
 
 
-# ====================================
-# SAVE BEST MODEL INFO
-# ====================================
-def save_best_model_info(
-    best_model_name,
-    model_version,
-    data_version,
-    train_start_date,
-    train_end_date,
-    test_mae,
-    test_rmse,
-    test_mape
-):
-    os.makedirs(
-        "models",
-        exist_ok=True
-    )
+def save_model_info(info, output_path):
+    output_directory = os.path.dirname(output_path)
+    if output_directory:
+        os.makedirs(output_directory, exist_ok=True)
 
-    info = {
-        "best_model_name": best_model_name,
-        "model_version": model_version,
-        "data_version": data_version,
-        "train_start_date": train_start_date,
-        "train_end_date": train_end_date,
-        "test_MAE": round(float(test_mae), 4),
-        "test_RMSE": round(float(test_rmse), 4),
-        "test_MAPE": round(float(test_mape), 4),
-        "saved_at": datetime.now().isoformat(),
-        "model_file": "models/best_model.pkl"
-    }
+    temporary_path = f"{output_path}.tmp"
+    with open(temporary_path, "w", encoding="utf-8") as file:
+        json.dump(info, file, indent=4, ensure_ascii=False)
+    os.replace(temporary_path, output_path)
 
-    info_path = (
-        "models/best_model_info.json"
-    )
 
-    with open(
-        info_path,
-        "w",
-        encoding="utf-8"
-    ) as f:
-        json.dump(
-            info,
-            f,
-            indent=4,
-            ensure_ascii=False
-        )
+def _validate_training_data(df):
+    if df.empty:
+        raise ValueError("No training data exists in the requested date range.")
 
-    print(
-        "\n📝 Best model info saved:"
-    )
-
-    print(
-        info_path
-    )
-
-    print(
-        f"🏆 Best model type: {best_model_name}"
-    )
+    # Each split must contain data before model training can start.
+    if len(df) < 7:
+        raise ValueError("Training data is too small for train/validation/test split.")
 
 
 def run_pipeline(
     train_start_date,
-    train_end_date
+    train_end_date,
+    output_model_path="models/best_model.pkl",
+    output_info_path="models/best_model_info.json",
+    model_role="champion",
+    random_state=DEFAULT_RANDOM_STATE,
+    cv_splits=DEFAULT_CV_SPLITS,
 ):
-    print(
-        "\n🚀 Retraining model..."
-    )
+    """
+    Train all supported models and save the best validation-MAE model.
 
-    os.environ.setdefault(
-        "MLFLOW_ALLOW_FILE_STORE",
-        "true"
-    )
+    Retraining workers should use model_role="candidate" and candidate output
+    paths. Only the promotion step is allowed to replace the champion model.
+    """
+    print(f"\nTraining {model_role} model...")
+    print(f"Random state: {random_state}")
 
-    mlflow.set_tracking_uri(
-        "file:./mlruns"
-    )
+    mlflow.set_tracking_uri("file:./mlruns")
+    mlflow.set_experiment("Traffic Forecast")
 
-    mlflow.set_experiment(
-        "Traffic Forecast"
-    )
-
-    random_state = random.randint(
-        1,
-        100000
-    )
-
-    print(
-        "🎲 Random state:",
-        random_state
-    )
-
-    df = load_data(
-        "data/TrafficVolumeData.csv"
-    )
-
-    df = preprocess(
-        df
-    )
-
+    df = preprocess(load_data(DATA_PATH))
     df = df[
         (df["date_time"] >= train_start_date)
-        &
-        (df["date_time"] < train_end_date)
+        & (df["date_time"] < train_end_date)
     ].copy()
+    _validate_training_data(df)
 
     data_version = create_data_version(
         df,
         train_start_date,
-        train_end_date
+        train_end_date,
     )
+    train_part, val_part, test_part = split_data(df)
+    development_part = pd.concat(
+        [train_part, val_part],
+        ignore_index=True,
+    ).sort_values("date_time")
 
-    train_part, val_part, test_part = split_data(
-        df
-    )
+    print(f"\nTrain size: {len(train_part)}")
+    print(f"Validation size: {len(val_part)}")
+    print(f"Test size: {len(test_part)}")
 
-    print(
-        f"\n📦 Train size: {len(train_part)}"
-    )
-
-    print(
-        f"📦 Val size  : {len(val_part)}"
-    )
-
-    print(
-        f"📦 Test size : {len(test_part)}"
-    )
-
-    X_train = train_part.drop(
-        ["traffic_volume", "date_time"],
-        axis=1
-    )
-
-    y_train = train_part[
-        "traffic_volume"
-    ]
-
-    X_val = val_part.drop(
-        ["traffic_volume", "date_time"],
-        axis=1
-    )
-
-    y_val = val_part[
-        "traffic_volume"
-    ]
-
-    X_test = test_part.drop(
-        ["traffic_volume", "date_time"],
-        axis=1
-    )
-
-    y_test = test_part[
-        "traffic_volume"
-    ]
+    feature_columns = ["traffic_volume", "date_time"]
+    X_development = development_part.drop(feature_columns, axis=1)
+    y_development = development_part["traffic_volume"]
+    X_test = test_part.drop(feature_columns, axis=1)
+    y_test = test_part["traffic_volume"]
 
     mlflow_dataset = mlflow.data.from_pandas(
         df,
-        source="data/TrafficVolumeData.csv",
-        name="TrafficVolumeData"
+        source=DATA_PATH,
+        name="TrafficVolumeData",
     )
 
+    trainers = [
+        ("RandomForest", train_random_forest),
+        ("XGBoost", train_xgboost),
+        ("LightGBM", train_lightgbm),
+    ]
     results = []
+    time_series_split = TimeSeriesSplit(n_splits=cv_splits)
 
-    for name, func in [
+    for model_name, trainer in trainers:
+        with mlflow.start_run(run_name=f"{model_role}_{model_name}"):
+            mlflow.log_input(mlflow_dataset, context="training")
+            fold_metrics = []
 
-        (
-            "RandomForest",
-            train_random_forest
-        ),
-
-        (
-            "XGBoost",
-            train_xgboost
-        ),
-
-        (
-            "LightGBM",
-            train_lightgbm
-        ),
-    ]:
-
-        with mlflow.start_run(
-            run_name=name
-        ):
-
-            mlflow.log_input(
-                mlflow_dataset,
-                context="training"
-            )
-
-            model = func(
-                X_train,
-                y_train,
-                random_state
-            )
-
-            pred = model.predict(
-                X_val
-            )
-
-            mae, rmse, mape = evaluate(
-                y_val,
-                pred
-            )
-
-            print(
-                f"\n{name}"
-            )
-
-            print(
-                f"MAE  : {mae:.2f}"
-            )
-
-            print(
-                f"RMSE : {rmse:.2f}"
-            )
-
-            print(
-                f"MAPE : {mape:.2f}%"
-            )
-
-            mlflow.set_tag(
-                "Models",
-                name
-            )
-
-            mlflow.set_tag(
-                "data_version",
-                data_version
-            )
-
-            mlflow.log_param(
-                "train_start_date",
-                train_start_date
-            )
-
-            mlflow.log_param(
-                "train_end_date",
-                train_end_date
-            )
-
-            mlflow.log_param(
-                "random_state",
-                random_state
-            )
-
-            mlflow.log_metric(
-                "MAE",
-                mae
-            )
-
-            mlflow.log_metric(
-                "RMSE",
-                rmse
-            )
-
-            mlflow.log_metric(
-                "MAPE",
-                mape
-            )
-
-            mlflow.sklearn.log_model(
-                sk_model=model,
-                name=name
-            )
-
-            results.append(
-                (
-                    name,
-                    model,
-                    rmse
+            # TimeSeriesSplit always trains on the past and validates on the
+            # following period. This is more stable than one validation slice.
+            for fold_number, (train_indices, val_indices) in enumerate(
+                time_series_split.split(X_development),
+                start=1,
+            ):
+                fold_model = trainer(
+                    X_development.iloc[train_indices],
+                    y_development.iloc[train_indices],
+                    random_state,
                 )
+                predictions = fold_model.predict(
+                    X_development.iloc[val_indices]
+                )
+                fold_mae, fold_rmse, fold_mape = evaluate(
+                    y_development.iloc[val_indices],
+                    predictions,
+                )
+                fold_metrics.append(
+                    (fold_mae, fold_rmse, fold_mape)
+                )
+                mlflow.log_metrics(
+                    {
+                        f"fold_{fold_number}_MAE": fold_mae,
+                        f"fold_{fold_number}_RMSE": fold_rmse,
+                        f"fold_{fold_number}_MAPE": fold_mape,
+                    }
+                )
+
+            mae = float(np.mean([item[0] for item in fold_metrics]))
+            rmse = float(np.mean([item[1] for item in fold_metrics]))
+            mape = float(np.mean([item[2] for item in fold_metrics]))
+
+            print(
+                f"\n{model_name}: "
+                f"CV MAE={mae:.2f}, CV RMSE={rmse:.2f}, "
+                f"CV MAPE={mape:.2f}%"
             )
 
-    best = min(
-        results,
-        key=lambda x: x[2]
-    )
+            mlflow.set_tags(
+                {
+                    "model_name": model_name,
+                    "model_role": model_role,
+                    "data_version": data_version,
+                }
+            )
+            mlflow.log_params(
+                {
+                    "train_start_date": train_start_date,
+                    "train_end_date": train_end_date,
+                    "random_state": random_state,
+                    "cv_splits": cv_splits,
+                }
+            )
+            mlflow.log_metrics(
+                {
+                    "cv_MAE": mae,
+                    "cv_RMSE": rmse,
+                    "cv_MAPE": mape,
+                }
+            )
 
-    print(
-        "\n🏆 BEST:",
-        best[0]
-    )
+            # MAE is also the production drift metric, so selection uses MAE.
+            results.append(
+                {
+                    "name": model_name,
+                    "trainer": trainer,
+                    "validation_mae": mae,
+                    "validation_rmse": rmse,
+                    "validation_mape": mape,
+                }
+            )
 
+    best = min(results, key=lambda result: result["validation_mae"])
     model_version = create_model_version()
 
-    best_pred = best[1].predict(
-        X_test
+    # Retrain the selected algorithm on all development data before the final
+    # untouched test evaluation.
+    best_model = best["trainer"](
+        X_development,
+        y_development,
+        random_state,
     )
+    test_predictions = best_model.predict(X_test)
+    test_mae, test_rmse, test_mape = evaluate(y_test, test_predictions)
 
-    best_mae, best_rmse, best_mape = evaluate(
-        y_test,
-        best_pred
-    )
-
+    print(f"\nBest validation-MAE model: {best['name']}")
     print(
-        "\n🧪 BEST MODEL TEST"
+        f"Test metrics: "
+        f"MAE={test_mae:.2f}, RMSE={test_rmse:.2f}, MAPE={test_mape:.2f}%"
     )
 
-    print(
-        f"MAE  : {best_mae:.2f}"
-    )
+    os.makedirs("models", exist_ok=True)
+    versioned_model_path = f"models/{model_version}.pkl"
+    joblib.dump(best_model, output_model_path)
+    joblib.dump(best_model, versioned_model_path)
 
-    print(
-        f"RMSE : {best_rmse:.2f}"
-    )
+    model_info = {
+        "best_model_name": best["name"],
+        "model_version": model_version,
+        "model_role": model_role,
+        "data_version": data_version,
+        "train_start_date": train_start_date,
+        "train_end_date": train_end_date,
+        "validation_MAE": round(float(best["validation_mae"]), 4),
+        "validation_RMSE": round(float(best["validation_rmse"]), 4),
+        "validation_MAPE": round(float(best["validation_mape"]), 4),
+        "cv_splits": int(cv_splits),
+        "test_MAE": round(float(test_mae), 4),
+        "test_RMSE": round(float(test_rmse), 4),
+        "test_MAPE": round(float(test_mape), 4),
+        "random_state": int(random_state),
+        "saved_at": datetime.now().isoformat(),
+        "model_file": output_model_path,
+        "versioned_model_file": versioned_model_path,
+    }
+    save_model_info(model_info, output_info_path)
 
-    print(
-        f"MAPE : {best_mape:.2f}%"
-    )
-
-    os.makedirs(
-        "models",
-        exist_ok=True
-    )
-
-    joblib.dump(
-        best[1],
-        "models/best_model.pkl"
-    )
-
-    joblib.dump(
-        best[1],
-        f"models/{model_version}.pkl"
-    )
-
-    save_best_model_info(
-        best_model_name=best[0],
-        model_version=model_version,
-        data_version=data_version,
-        train_start_date=train_start_date,
-        train_end_date=train_end_date,
-        test_mae=best_mae,
-        test_rmse=best_rmse,
-        test_mape=best_mape
-    )
-
-    print(
-        "✅ Model saved"
-    )
-
-    with mlflow.start_run(
-        run_name="Best_Model"
-    ):
-
-        mlflow.log_input(
-            mlflow_dataset,
-            context="training"
+    with mlflow.start_run(run_name=f"{model_role}_selected_model"):
+        mlflow.log_input(mlflow_dataset, context="training")
+        mlflow.set_tags(
+            {
+                "model_name": best["name"],
+                "model_role": model_role,
+                "data_version": data_version,
+                "model_version": model_version,
+            }
         )
-
-        mlflow.set_tag(
-            "Models",
-            best[0]
+        mlflow.log_metrics(
+            {
+                "test_MAE": test_mae,
+                "test_RMSE": test_rmse,
+                "test_MAPE": test_mape,
+            }
         )
+        mlflow.log_artifact(output_model_path)
+        mlflow.log_artifact(output_info_path)
+        mlflow.sklearn.log_model(best_model, name=best["name"])
 
-        mlflow.set_tag(
-            "data_version",
-            data_version
-        )
-
-        mlflow.set_tag(
-            "model_version",
-            model_version
-        )
-
-        mlflow.log_metric(
-            "test_MAE",
-            best_mae
-        )
-
-        mlflow.log_metric(
-            "test_RMSE",
-            best_rmse
-        )
-
-        mlflow.log_metric(
-            "test_MAPE",
-            best_mape
-        )
-
-        mlflow.log_artifact(
-            "models/best_model.pkl"
-        )
-
-        mlflow.log_artifact(
-            "models/best_model_info.json"
-        )
-
-        mlflow.sklearn.log_model(
-            sk_model=best[1],
-            name=best[0]
-        )
+    print(f"Model saved: {output_model_path}")
+    return model_info

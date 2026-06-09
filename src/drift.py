@@ -8,10 +8,58 @@ from sklearn.metrics import mean_absolute_error
 # ENSURE LOG FOLDER
 # =========================
 def ensure_monitoring_folder():
-    os.makedirs(
-        "monitoring",
-        exist_ok=True
+    os.makedirs("monitoring", exist_ok=True)
+
+
+def get_historical_mae_baseline(
+    model_version,
+    history_size=6,
+    minimum_windows=3,
+    log_path="monitoring/drift_history.csv",
+):
+    """
+    Return the median MAE of recent production windows for one champion.
+
+    A new champion has no trustworthy production baseline yet. Ratio-based
+    drift remains disabled until enough windows have been observed.
+    """
+    if not model_version or str(model_version).lower() == "unknown":
+        return None
+
+    if not os.path.exists(log_path):
+        return None
+
+    history = pd.read_csv(log_path)
+    required_columns = {"model_version", "current_mae"}
+    if not required_columns.issubset(history.columns):
+        return None
+
+    model_history = history[
+        history["model_version"].astype(str) == str(model_version)
+    ].copy()
+
+    # Drifted windows describe abnormal behavior and must not redefine what
+    # "normal" means. Old logs without this column remain supported.
+    if "drift" in model_history.columns:
+        stable_values = {"false", "0", "0.0"}
+        model_history = model_history[
+            model_history["drift"]
+            .astype(str)
+            .str.lower()
+            .isin(stable_values)
+        ]
+
+    model_history["current_mae"] = pd.to_numeric(
+        model_history["current_mae"],
+        errors="coerce",
     )
+    model_history = model_history.dropna(subset=["current_mae"])
+
+    recent_maes = model_history["current_mae"].tail(history_size)
+    if len(recent_maes) < minimum_windows:
+        return None
+
+    return float(recent_maes.median())
 
 
 # =========================
@@ -26,21 +74,7 @@ def detect_drift_by_mae(
     degradation_ratio=1.5,
     log_path="monitoring/drift_history.csv"
 ):
-    """
-    Drift rule:
-
-    Drift = True nếu:
-    1. Current MAE > mae_threshold
-       hoặc
-    2. Current MAE > baseline_mae * degradation_ratio
-
-    Ý nghĩa:
-    - mae_threshold là ngưỡng cứng.
-    - baseline_mae là MAE ban đầu của model hiện tại.
-    - degradation_ratio là mức suy giảm cho phép.
-      Ví dụ baseline_mae = 300, degradation_ratio = 1.5
-      => nếu current_mae > 450 thì xem là drift.
-    """
+    """Detect drift using a fixed limit and a production-history baseline."""
 
     ensure_monitoring_folder()
 

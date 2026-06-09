@@ -18,3 +18,6 @@ tools/checkDataset.py
 
 #MLFlow
 mlruns/
+
+#others
+docs/HUONG_DAN_DU_AN.md

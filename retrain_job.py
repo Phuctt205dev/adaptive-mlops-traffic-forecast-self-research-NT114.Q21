@@ -1,4 +1,3 @@
-# retrain_job.py
 import os
 import json
 import time
@@ -45,6 +44,13 @@ MAE_THRESHOLD = float(
     )
 )
 
+DEGRADATION_RATIO = float(
+    os.getenv(
+        "DEGRADATION_RATIO",
+        "1.5"
+    )
+)
+
 CHECK_INTERVAL_SECONDS = int(
     os.getenv(
         "CHECK_INTERVAL_SECONDS",
@@ -52,16 +58,23 @@ CHECK_INTERVAL_SECONDS = int(
     )
 )
 
-CHECK_WINDOW_DAYS = int(
+CHECK_WINDOW_MONTHS = int(
     os.getenv(
-        "CHECK_WINDOW_DAYS",
-        "7"
+        "CHECK_WINDOW_MONTHS",
+        "1"
+    )
+)
+
+TRAIN_WINDOW_MONTHS = int(
+    os.getenv(
+        "TRAIN_WINDOW_MONTHS",
+        "3"
     )
 )
 
 DRIFT_START_DATE = os.getenv(
     "DRIFT_START_DATE",
-    "2014-01-01"
+    "2013-04-01"
 )
 
 DRIFT_END_LIMIT = os.getenv(
@@ -71,12 +84,12 @@ DRIFT_END_LIMIT = os.getenv(
 
 INITIAL_TRAIN_START = os.getenv(
     "INITIAL_TRAIN_START",
-    "2012-10-02"
+    "2013-01-01"
 )
 
 INITIAL_TRAIN_END = os.getenv(
     "INITIAL_TRAIN_END",
-    "2014-01-01"
+    "2013-04-01"
 )
 
 RUN_ONCE = os.getenv(
@@ -92,6 +105,15 @@ def log(message):
     print(
         message,
         flush=True
+    )
+
+
+# =========================
+# DATE HELPER
+# =========================
+def to_date_string(value):
+    return str(
+        pd.to_datetime(value).date()
     )
 
 
@@ -126,6 +148,51 @@ def ensure_folders():
 
 
 # =========================
+# DEFAULT STATE
+# =========================
+def get_default_state():
+    return {
+        "next_check_start": DRIFT_START_DATE,
+
+        "candidate_train_start": INITIAL_TRAIN_START,
+        "candidate_train_end": INITIAL_TRAIN_END,
+
+        "model_train_start": INITIAL_TRAIN_START,
+        "model_train_end": INITIAL_TRAIN_END,
+
+        "last_check_start": None,
+        "last_check_end": None,
+
+        "last_candidate_train_start": None,
+        "last_candidate_train_end": None,
+
+        "last_drift": None,
+        "last_mae": None,
+        "last_baseline_mae": None,
+        "last_ratio_threshold": None,
+
+        "last_status": "initialized",
+        "last_error": None,
+
+        "run_count": 0,
+        "updated_at": datetime.now().isoformat()
+    }
+
+
+# =========================
+# NORMALIZE STATE
+# =========================
+def normalize_state(state):
+    default_state = get_default_state()
+
+    for key, value in default_state.items():
+        if key not in state:
+            state[key] = value
+
+    return state
+
+
+# =========================
 # LOAD STATE
 # =========================
 def load_state():
@@ -137,19 +204,13 @@ def load_state():
             "r",
             encoding="utf-8"
         ) as f:
-            return json.load(f)
+            state = json.load(f)
 
-    return {
-        "next_check_start": DRIFT_START_DATE,
-        "last_check_start": None,
-        "last_check_end": None,
-        "last_drift": None,
-        "last_mae": None,
-        "last_status": "initialized",
-        "last_error": None,
-        "run_count": 0,
-        "updated_at": datetime.now().isoformat()
-    }
+        return normalize_state(
+            state
+        )
+
+    return get_default_state()
 
 
 # =========================
@@ -206,9 +267,9 @@ def get_latest_model_version():
 
 
 # =========================
-# PRINT BEST MODEL INFO
+# GET BEST MODEL INFO
 # =========================
-def print_best_model_info():
+def get_best_model_info():
     info_path = (
         "models/best_model_info.json"
     )
@@ -216,10 +277,7 @@ def print_best_model_info():
     if not os.path.exists(
         info_path
     ):
-        log(
-            "ℹ️ No best_model_info.json found yet."
-        )
-        return
+        return None
 
     try:
         with open(
@@ -227,40 +285,79 @@ def print_best_model_info():
             "r",
             encoding="utf-8"
         ) as f:
-            info = json.load(f)
+            return json.load(f)
 
-        log(
-            "\n🏆 CURRENT BEST MODEL INFO"
-        )
+    except Exception:
+        return None
 
-        log(
-            f"Model type   : {info.get('best_model_name')}"
-        )
 
-        log(
-            f"Model version: {info.get('model_version')}"
-        )
+# =========================
+# GET BASELINE MAE
+# =========================
+def get_baseline_mae():
+    info = get_best_model_info()
 
-        log(
-            f"Data version : {info.get('data_version')}"
-        )
+    if info is None:
+        return None
 
-        log(
-            f"Test MAE     : {info.get('test_MAE')}"
-        )
+    possible_keys = [
+        "test_MAE",
+        "MAE",
+        "mae",
+        "test_mae"
+    ]
 
-        log(
-            f"Test RMSE    : {info.get('test_RMSE')}"
-        )
+    for key in possible_keys:
+        if key in info:
+            try:
+                return float(
+                    info[key]
+                )
+            except Exception:
+                continue
 
-        log(
-            f"Test MAPE    : {info.get('test_MAPE')}"
-        )
+    return None
 
-    except Exception as e:
+
+# =========================
+# PRINT BEST MODEL INFO
+# =========================
+def print_best_model_info():
+    info = get_best_model_info()
+
+    if info is None:
         log(
-            f"⚠️ Cannot read best model info: {e}"
+            "ℹ️ No best_model_info.json found yet."
         )
+        return
+
+    log(
+        "\n🏆 CURRENT BEST MODEL INFO"
+    )
+
+    log(
+        f"Model type   : {info.get('best_model_name')}"
+    )
+
+    log(
+        f"Model version: {info.get('model_version')}"
+    )
+
+    log(
+        f"Data version : {info.get('data_version')}"
+    )
+
+    log(
+        f"Test MAE     : {info.get('test_MAE')}"
+    )
+
+    log(
+        f"Test RMSE    : {info.get('test_RMSE')}"
+    )
+
+    log(
+        f"Test MAPE    : {info.get('test_MAPE')}"
+    )
 
 
 # =========================
@@ -270,7 +367,7 @@ def train_initial_model_if_missing():
     if os.path.exists(
         MODEL_PATH
     ):
-        return
+        return False
 
     log(
         "\n⚠️ No model found."
@@ -294,6 +391,44 @@ def train_initial_model_if_missing():
     )
 
     print_best_model_info()
+
+    state = load_state()
+
+    state["model_train_start"] = INITIAL_TRAIN_START
+    state["model_train_end"] = INITIAL_TRAIN_END
+
+    state["candidate_train_start"] = INITIAL_TRAIN_START
+    state["candidate_train_end"] = INITIAL_TRAIN_END
+
+    state["last_status"] = "initial_model_created"
+
+    save_state(
+        state
+    )
+
+    return True
+
+
+# =========================
+# BUILD NEXT ROLLING TRAIN WINDOW
+# =========================
+def build_rolling_train_window(check_end):
+    new_train_end = pd.to_datetime(
+        check_end
+    )
+
+    new_train_start = (
+        new_train_end
+        -
+        pd.DateOffset(
+            months=TRAIN_WINDOW_MONTHS
+        )
+    )
+
+    return (
+        to_date_string(new_train_start),
+        to_date_string(new_train_end)
+    )
 
 
 # =========================
@@ -327,7 +462,15 @@ def check_drift_once():
     )
 
     log(
-        f"CHECK_WINDOW_DAYS: {CHECK_WINDOW_DAYS}"
+        f"DEGRADATION_RATIO: {DEGRADATION_RATIO}"
+    )
+
+    log(
+        f"CHECK_WINDOW_MONTHS: {CHECK_WINDOW_MONTHS}"
+    )
+
+    log(
+        f"TRAIN_WINDOW_MONTHS: {TRAIN_WINDOW_MONTHS}"
     )
 
     train_initial_model_if_missing()
@@ -361,12 +504,36 @@ def check_drift_once():
 
         return
 
-    check_end = check_start + pd.Timedelta(
-        days=CHECK_WINDOW_DAYS
+    check_end = (
+        check_start
+        +
+        pd.DateOffset(
+            months=CHECK_WINDOW_MONTHS
+        )
     )
 
     if check_end > drift_end_limit:
         check_end = drift_end_limit
+
+    candidate_train_start, candidate_train_end = build_rolling_train_window(
+        check_end
+    )
+
+    log(
+        "\n📦 Current model train window:"
+    )
+
+    log(
+        f"{state['model_train_start']} → {state['model_train_end']}"
+    )
+
+    log(
+        "\n📦 Candidate train window:"
+    )
+
+    log(
+        f"{candidate_train_start} → {candidate_train_end}"
+    )
 
     log(
         "\n📦 Drift check window:"
@@ -376,16 +543,18 @@ def check_drift_once():
         f"{check_start} → {check_end}"
     )
 
-    state["last_check_start"] = str(
-        check_start.date()
+    state["last_check_start"] = to_date_string(
+        check_start
     )
 
-    state["last_check_end"] = str(
-        check_end.date()
+    state["last_check_end"] = to_date_string(
+        check_end
     )
+
+    state["last_candidate_train_start"] = candidate_train_start
+    state["last_candidate_train_end"] = candidate_train_end
 
     state["last_status"] = "checking_drift"
-
     state["last_error"] = None
 
     save_state(
@@ -426,9 +595,12 @@ def check_drift_once():
             "\n⚠️ No data found in this drift window."
         )
 
-        state["next_check_start"] = str(
-            check_end.date()
+        state["next_check_start"] = to_date_string(
+            check_end
         )
+
+        state["candidate_train_start"] = candidate_train_start
+        state["candidate_train_end"] = candidate_train_end
 
         state["last_status"] = "no_data"
 
@@ -469,10 +641,14 @@ def check_drift_once():
         axis=1
     )
 
-    X = X.reindex(
-        columns=model.feature_names_in_,
-        fill_value=0
-    )
+    if hasattr(
+        model,
+        "feature_names_in_"
+    ):
+        X = X.reindex(
+            columns=model.feature_names_in_,
+            fill_value=0
+        )
 
     y_true = current_window[
         "traffic_volume"
@@ -488,12 +664,34 @@ def check_drift_once():
 
     model_version = get_latest_model_version()
 
+    baseline_mae = get_baseline_mae()
+
+    if baseline_mae is None:
+        log(
+            "\n⚠️ Cannot find baseline MAE. Ratio-based drift will be disabled."
+        )
+    else:
+        log(
+            f"\n📌 Baseline MAE: {baseline_mae}"
+        )
+
     drift, mae = detect_drift_by_mae(
-        y_true,
-        y_pred,
+        y_true=y_true,
+        y_pred=y_pred,
         mae_threshold=MAE_THRESHOLD,
-        model_version=model_version
+        model_version=model_version,
+        baseline_mae=baseline_mae,
+        degradation_ratio=DEGRADATION_RATIO
     )
+
+    ratio_threshold = None
+
+    if baseline_mae is not None:
+        ratio_threshold = (
+            baseline_mae
+            *
+            DEGRADATION_RATIO
+        )
 
     state["last_drift"] = bool(
         drift
@@ -502,6 +700,21 @@ def check_drift_once():
     state["last_mae"] = float(
         mae
     )
+
+    state["last_baseline_mae"] = (
+        float(baseline_mae)
+        if baseline_mae is not None
+        else None
+    )
+
+    state["last_ratio_threshold"] = (
+        float(ratio_threshold)
+        if ratio_threshold is not None
+        else None
+    )
+
+    state["candidate_train_start"] = candidate_train_start
+    state["candidate_train_end"] = candidate_train_end
 
     state["last_status"] = (
         "drift_detected"
@@ -518,18 +731,12 @@ def check_drift_once():
             "\n🚨 Drift found → retraining model"
         )
 
-        new_train_start = INITIAL_TRAIN_START
-
-        new_train_end = str(
-            check_end.date()
+        log(
+            "\n📦 Retrain with rolling train window:"
         )
 
         log(
-            "\n📦 New train window:"
-        )
-
-        log(
-            f"{new_train_start} → {new_train_end}"
+            f"{candidate_train_start} → {candidate_train_end}"
         )
 
         state["last_status"] = "retraining"
@@ -539,13 +746,16 @@ def check_drift_once():
         )
 
         run_pipeline(
-            train_start_date=new_train_start,
-            train_end_date=new_train_end
+            train_start_date=candidate_train_start,
+            train_end_date=candidate_train_end
         )
 
         log(
             "\n✅ Retrain complete."
         )
+
+        state["model_train_start"] = candidate_train_start
+        state["model_train_end"] = candidate_train_end
 
         state["last_status"] = "retrain_complete"
 
@@ -556,10 +766,14 @@ def check_drift_once():
             "\n✅ No drift → keep current model."
         )
 
+        log(
+            "📌 Candidate train window updated, but model is not retrained."
+        )
+
         state["last_status"] = "no_drift_keep_model"
 
-    state["next_check_start"] = str(
-        check_end.date()
+    state["next_check_start"] = to_date_string(
+        check_end
     )
 
     state["run_count"] = int(
@@ -604,11 +818,9 @@ if __name__ == "__main__":
     while True:
 
         try:
-
             check_drift_once()
 
         except Exception as e:
-
             log(
                 "\n❌ Drift worker error:"
             )
@@ -620,7 +832,6 @@ if __name__ == "__main__":
             state = load_state()
 
             state["last_status"] = "error"
-
             state["last_error"] = str(
                 e
             )

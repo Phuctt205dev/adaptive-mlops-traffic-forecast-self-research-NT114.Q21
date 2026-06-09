@@ -50,7 +50,7 @@ services:
       MIN_BASELINE_WINDOWS: "3"
 
       # Cho phép MAE tăng tối đa 20% so với baseline production.
-      DEGRADATION_RATIO: "1.2"
+      DEGRADATION_RATIO: "1.0"
 
       # Candidate phải giảm MAE ít nhất 5% trên promotion window
       # mới được thay thế champion.

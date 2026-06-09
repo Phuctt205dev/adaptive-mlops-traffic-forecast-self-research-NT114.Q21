@@ -72,9 +72,15 @@ def detect_drift_by_mae(
     model_version="unknown",
     baseline_mae=None,
     degradation_ratio=1.5,
-    log_path="monitoring/drift_history.csv"
+    log_path="monitoring/drift_history.csv",
+    force_drift=False,
 ):
-    """Detect drift using a fixed limit and a production-history baseline."""
+    """
+    Detect drift using fixed and relative MAE limits.
+
+    force_drift is reserved for dry-run operational tests. It must not be
+    enabled in normal production monitoring.
+    """
 
     ensure_monitoring_folder()
 
@@ -113,11 +119,12 @@ def detect_drift_by_mae(
             ratio_threshold = None
             drift_by_degradation_ratio = False
 
-    drift = (
+    natural_drift = (
         drift_by_fixed_threshold
         or
         drift_by_degradation_ratio
     )
+    drift = natural_drift or bool(force_drift)
 
     print(
         "\n=== DRIFT CHECK (MAE) ===",
@@ -170,14 +177,20 @@ def detect_drift_by_mae(
         flush=True
     )
 
+    if force_drift:
+        print(
+            "Forced test drift  : True",
+            flush=True,
+        )
+
     if drift:
         print(
-            "🚨 DRIFT DETECTED",
+            "DRIFT DETECTED",
             flush=True
         )
     else:
         print(
-            "✅ NO DRIFT",
+            "NO DRIFT",
             flush=True
         )
 
@@ -203,6 +216,8 @@ def detect_drift_by_mae(
         "drift_by_degradation_ratio": bool(
             drift_by_degradation_ratio
         ),
+        "forced_test_drift": bool(force_drift),
+        "natural_drift": bool(natural_drift),
         "drift": bool(
             drift
         )
@@ -233,7 +248,7 @@ def detect_drift_by_mae(
     )
 
     print(
-        "📝 Drift log saved",
+        "Drift log saved",
         flush=True
     )
 

@@ -42,18 +42,19 @@ services:
       MAE_THRESHOLD: "700"
 
       # Ngưỡng tương đối.
-      # Nếu current MAE > baseline MAE * 1.5 thì drift.
-      DEGRADATION_RATIO: "1.5"
+      # Nếu current MAE > baseline MAE * 1.0 thì drift.
+      # Tức là current MAE chỉ cần lớn hơn baseline MAE là tính drift.
+      DEGRADATION_RATIO: "1.0"
 
-      # Train ban đầu bằng nguyên năm 2013.
-      # Lấy dữ liệu từ 2013-01-01 đến hết 2013-12-31.
-      # Code nên hiểu train_end theo dạng exclusive:
-      # date_time >= 2013-01-01 và date_time < 2014-01-01.
-      INITIAL_TRAIN_START: "2013-01-01"
-      INITIAL_TRAIN_END: "2014-01-01"
+      # Train ban đầu bằng 12 tháng:
+      # 2012-11-01 → 2013-11-01
+      # Code hiểu train_end theo dạng exclusive:
+      # date_time >= 2012-11-01 và date_time < 2013-11-01.
+      INITIAL_TRAIN_START: "2012-11-01"
+      INITIAL_TRAIN_END: "2013-11-01"
 
-      # Sau khi train hết năm 2013, bắt đầu check drift từ tháng 1/2014.
-      DRIFT_START_DATE: "2014-01-01"
+      # Sau khi train xong 12 tháng đầu, bắt đầu check drift từ tháng 11/2013.
+      DRIFT_START_DATE: "2013-11-01"
 
       # Dataset hiện tại kết thúc khoảng 2014-08-08.
       # Để 2014-09-01 để worker check hết tháng 8/2014.
@@ -64,9 +65,9 @@ services:
 
       # Rolling train window 12 tháng.
       # Ví dụ:
+      # 2012-11-01 → 2013-11-01
+      # 2012-12-01 → 2013-12-01
       # 2013-01-01 → 2014-01-01
-      # 2013-02-01 → 2014-02-01
-      # 2013-03-01 → 2014-03-01
       TRAIN_WINDOW_MONTHS: "12"
 
       # Demo: 30 giây chạy một lần.

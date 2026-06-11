@@ -1,194 +1,229 @@
 # Adaptive MLOps Traffic Forecast
 
-This project implements an adaptive MLOps workflow for traffic volume forecasting. It supports multi-model training, best model selection, data/model versioning, MAE-based drift detection, automatic retraining, and a FastAPI service for online prediction.
+Dự án dự báo lưu lượng giao thông theo giờ. Hệ thống huấn luyện 8 biến thể
+model, so sánh bằng time-series cross-validation và lưu model tốt nhất thành
+Champion.
 
-## Main Components
-
-- `data/TrafficVolumeData.csv`: source dataset used for training and evaluation.
-- `src/preprocess.py`: data loading, preprocessing, time feature engineering, weather one-hot encoding, and time-based splitting.
-- `src/train.py`: model training functions for RandomForest, XGBoost, and LightGBM.
-- `src/pipeline.py`: training/retraining pipeline, model evaluation, best model selection, MLflow logging, and versioning.
-- `src/drift.py`: drift detection based on MAE.
-- `src/inference.py`: single-input preprocessing and prediction logic.
-- `main.py`: batch orchestrator for model initialization, prediction, drift detection, and retraining.
-- `predict.py`: batch prediction script that saves predictions and metrics to `results/`.
-- `app.py`: FastAPI service for online traffic prediction.
-- `docs/index.html`: simple web interface that calls the prediction API.
-- `models/`: stores `best_model.pkl` and model versions.
-- `data_versions/`: stores versioned training datasets.
-- `monitoring/`: stores drift history.
-- `mlruns/` and `mlflow.db`: MLflow experiment tracking artifacts.
-
-## Workflow
-
-### 1. Training Pipeline
+## 1. Luồng hoạt động
 
 ```text
-TrafficVolumeData.csv
-  -> preprocess()
-  -> filter training window
-  -> create data version
-  -> time-based train/validation/test split
-  -> train RandomForest, XGBoost, and LightGBM
-  -> evaluate on validation set
-  -> select the best model by RMSE
-  -> evaluate the best model on test set
-  -> save best_model.pkl and model_vN.pkl
-  -> log metrics and artifacts to MLflow
+Dữ liệu CSV gốc
+    |
+    v
+Chuẩn hóa thành chuỗi giờ liên tục
+    |
+    v
+Tạo lag và rolling feature
+    |
+    v
+Train 8 biến thể model
+    |
+    v
+So sánh CV Mean MAE
+    |
+    v
+Lưu model thắng vào models/champion/
 ```
 
-### 2. Drift Detection and Retraining
+Quy tắc chia dữ liệu:
 
-`main.py` checks whether `models/best_model.pkl` exists.
-
-- If no model exists, it runs the initial training pipeline.
-- If a model exists, it loads the data, predicts on a new data window, and computes MAE.
-- If `MAE > MAE_THRESHOLD`, drift is logged and the model is retrained.
-- If no drift is detected, the current model is kept.
-
-### 3. Online Prediction API
-
-`app.py` exposes the following endpoints:
-
-- `GET /health`: service health check.
-- `GET /model-info`: returns the model file currently used by the API.
-- `POST /predict`: receives `date_time`, fetches weather data from Open-Meteo, builds features, and returns a traffic prediction.
-
-Example input:
-
-```json
-{
-  "date_time": "2013-12-01T08:00"
-}
+```text
+Development : từ đầu dữ liệu đến 2015-09-30 23:00
+Final Test  : từ 2015-10-01 đến 2015-12-31 23:00
+Production  : từ 2016-01-01, không dùng để train hoặc chọn model
+CV          : 5 expanding-window folds, không shuffle
 ```
 
-Example output:
+## 2. Cấu trúc dễ nhớ
 
-```json
-{
-  "prediction": 4321,
-  "features_used": {
-    "date_time": "2013-12-01T08:00",
-    "temperature": 20,
-    "humidity": 60
-  }
-}
+```text
+.
+|-- app.py                         FastAPI và giao diện dự đoán
+|-- retrain_job.py                 Theo dõi drift và retrain production cũ
+|-- scripts/
+|   |-- data/
+|   |   |-- prepare_hourly_data.py
+|   |   `-- create_time_series_features.py
+|   `-- training/
+|       |-- train_all_models.py
+|       |-- train_random_forest_no_lag.py
+|       |-- train_random_forest_lag.py
+|       |-- train_xgboost_no_lag.py
+|       |-- train_xgboost_lag.py
+|       |-- train_lightgbm_no_lag.py
+|       |-- train_lightgbm_lag.py
+|       |-- train_lstm.py
+|       `-- train_gru.py
+|-- src/                            Code xử lý chính được các script sử dụng
+|-- tests/                          Unit test
+|-- docs/                           Hướng dẫn và tài liệu cũ
+|-- data/                           Dữ liệu
+|-- models/                         Model đã huấn luyện
+`-- results/                        Báo cáo và bảng xếp hạng
 ```
 
-## Installation
+Quy ước:
 
-Python 3.11 or a compatible version is recommended.
+- `scripts/data/`: các lệnh tạo dữ liệu đầu vào cho model.
+- `scripts/training/`: các lệnh train và chọn model.
+- `src/`: phần logic dùng lại, thường không chạy trực tiếp.
+- `app.py` và `retrain_job.py`: giữ ở thư mục gốc vì Docker gọi trực tiếp.
+
+## 3. Cài đặt
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m pip check
 ```
 
-If the `.venv` folder already exists, activate it directly:
+Mọi lệnh dưới đây cần chạy tại thư mục gốc của dự án.
+
+## 4. Chuẩn bị dữ liệu
+
+### Bước 1: tạo chuỗi giờ liên tục
 
 ```powershell
-.venv\Scripts\activate
+python -m scripts.data.prepare_hourly_data
 ```
 
-## Usage
+Nguồn mặc định:
 
-### Run the Training/Drift/Retraining Orchestrator
+```text
+data/raw/TrafficVolumeData_original_2012_2017.csv
+```
+
+Kết quả chính:
+
+```text
+data/processed/TrafficVolumeData_hourly.csv
+data/processed/TrafficVolumeData_hourly_audit.csv
+data/processed/hourly_quality_report.json
+```
+
+### Bước 2: tạo lag và rolling feature
 
 ```powershell
-python main.py
+python -m scripts.data.create_time_series_features
 ```
 
-On the first run, if `models/best_model.pkl` does not exist, the script trains the initial model and asks you to run it again. The main configuration values are currently hardcoded in `main.py`:
+Kết quả:
 
-- `TRAIN_START_DATE`
-- `TRAIN_END_DATE`
-- `PREDICT_START`
-- `PREDICT_END`
-- `MAE_THRESHOLD`
-- `MODEL_PATH`
+```text
+data/processed/TrafficVolumeData_features.csv
+data/processed/time_series_feature_report.json
+```
 
-### Run Batch Prediction
+## 5. Huấn luyện model
+
+### Train toàn bộ và chọn Champion
 
 ```powershell
-python predict.py
+python -m scripts.training.train_all_models --max-epochs 20
 ```
 
-Outputs are saved to:
+Lệnh này lần lượt train:
 
-- `results/predict.csv`
-- `results/predict_log.csv`
+1. Random Forest không lag
+2. Random Forest có lag
+3. XGBoost không lag
+4. XGBoost có lag
+5. LightGBM không lag
+6. LightGBM có lag
+7. LSTM với sequence 168 giờ
+8. GRU với sequence 168 giờ
 
-### Test Single-Input Inference
+Model có `CV Mean MAE` thấp nhất được chọn. `Final Test MAE` chỉ dùng để báo
+cáo lần cuối, không dùng để thay đổi thứ hạng.
+
+### Train riêng một model
 
 ```powershell
-python test_inference.py
+python -m scripts.training.train_xgboost_lag
+python -m scripts.training.train_lightgbm_no_lag
+python -m scripts.training.train_lstm --max-epochs 20
+python -m scripts.training.train_gru --max-epochs 20
 ```
 
-### Run the API Locally
+### Kiểm tra nhanh
+
+```powershell
+python -m scripts.training.train_all_models `
+  --only lightgbm_no_lag lightgbm_lag `
+  --cv-splits 2
+
+python -m scripts.training.train_lstm `
+  --cv-splits 2 `
+  --max-epochs 1 `
+  --quiet
+```
+
+Kết quả smoke test không dùng để kết luận model nào tốt nhất.
+
+### Xếp hạng lại từ report có sẵn
+
+```powershell
+python -m scripts.training.train_all_models --skip-training
+```
+
+Chỉ dùng khi đã có đủ 8 report được tạo với cùng cấu hình và cùng cách chia
+dữ liệu.
+
+## 6. Kết quả huấn luyện
+
+```text
+results/time_series_cross_validation/  Report của từng model
+results/model_selection/               Bảng xếp hạng 8 model
+models/time_series/cross_validation/   Artifact của từng model
+models/champion/                       Model Champion có version
+```
+
+Hai file nên xem trước:
+
+```text
+results/model_selection/eight_model_ranking.csv
+models/champion/best_model_info.json
+```
+
+## 7. Chạy API và Docker
+
+Chạy trực tiếp:
 
 ```powershell
 uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
-After the API starts, open:
-
-- `http://localhost:8000/health`
-- `http://localhost:8000/model-info`
-- `http://localhost:8000/docs`
-
-### Run with Docker
+Chạy bằng Docker:
 
 ```powershell
-docker compose up --build
+docker compose up --build -d
+docker compose ps
+docker compose logs -f
 ```
 
-The service exposes port `8000`.
-
-## Monitoring and Versioning
-
-The project stores several artifacts for tracking the MLOps workflow:
-
-- `models/model_versions.csv`: list of model versions.
-- `models/model_vN.pkl`: versioned trained models.
-- `models/best_model.pkl`: model currently used for inference.
-- `data_versions/version_log.csv`: metadata for data versions.
-- `data_versions/data_vN.csv`: training data snapshots.
-- `monitoring/drift_history.csv`: MAE, threshold, and drift decision history.
-- `results/predict_log.csv`: metrics from batch prediction runs.
-- `mlflow.db` and `mlruns/`: MLflow tracking data.
-
-## Operational Notes
-
-- `MAE_THRESHOLD` in `main.py` should be tuned based on historical model performance. If it is too low, the system will retrain too frequently.
-- The API in `app.py` calls Open-Meteo, so online prediction requires internet access.
-- `predict.py` currently uses `plt.show()`, which may not be suitable for server or headless environments.
-- Scripts in `tools/` are experimental model testing scripts, not the main production workflow.
-- Some Vietnamese comments in the source files appear to have encoding issues, but the program logic is still readable.
-
-## Simplified Folder Structure
+Địa chỉ:
 
 ```text
-.
-|-- app.py
-|-- main.py
-|-- predict.py
-|-- test_inference.py
-|-- requirements.txt
-|-- Dockerfile
-|-- docker-compose.yml
-|-- data/
-|-- data_versions/
-|-- docs/
-|-- mlruns/
-|-- models/
-|-- monitoring/
-|-- results/
-|-- src/
-|   |-- preprocess.py
-|   |-- train.py
-|   |-- pipeline.py
-|   |-- inference.py
-|   `-- drift.py
-`-- tools/
+http://localhost:8000/
+http://localhost:8000/health
+http://localhost:8000/docs
+```
+
+Lưu ý: API production cũ vẫn đọc `models/best_model.pkl`. Champion mới trong
+`models/champion/` chưa được nối vào API và drift worker.
+
+## 8. Chạy test
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+## 9. Tài liệu nên đọc
+
+```text
+docs/guides/HUONG_DAN_TRAIN_8_MODELS.md
+docs/phases/GIAI_DOAN_1_CHUAN_HOA_TIME_SERIES.md
+docs/phases/GIAI_DOAN_2_FEATURE_TIME_SERIES.md
+docs/changes/CHANGES_CHAMPION_CHALLENGER.md
 ```

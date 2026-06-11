@@ -15,7 +15,11 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import TimeSeriesSplit
 
-from src.preprocess import load_data, preprocess, split_data
+from src.preprocess import (
+    load_observed_target_data,
+    preprocess,
+    split_data,
+)
 from src.train import (
     train_lightgbm,
     train_random_forest,
@@ -144,7 +148,7 @@ def run_pipeline(
     mlflow.set_tracking_uri("file:./mlruns")
     mlflow.set_experiment("Traffic Forecast")
 
-    df = preprocess(load_data(DATA_PATH))
+    df = preprocess(load_observed_target_data(DATA_PATH))
     df = df[
         (df["date_time"] >= train_start_date)
         & (df["date_time"] < train_end_date)

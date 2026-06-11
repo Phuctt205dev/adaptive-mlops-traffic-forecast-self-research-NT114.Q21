@@ -10,10 +10,14 @@ from sklearn.metrics import mean_absolute_error
 
 from src.drift import detect_drift_by_mae, get_historical_mae_baseline
 from src.pipeline import run_pipeline, save_model_info
-from src.preprocess import load_data, preprocess
+from src.preprocess import load_observed_target_data, preprocess
 
 
 DATA_PATH = os.getenv("DATA_PATH", "data/TrafficVolumeData.csv")
+DATA_AUDIT_PATH = os.getenv(
+    "DATA_AUDIT_PATH",
+    "data/processed/TrafficVolumeData_hourly_audit.csv",
+)
 MODEL_PATH = os.getenv("MODEL_PATH", "models/best_model.pkl")
 MODEL_INFO_PATH = os.getenv(
     "MODEL_INFO_PATH",
@@ -419,7 +423,12 @@ def check_drift_once():
     )
     save_state(state)
 
-    dataframe = preprocess(load_data(DATA_PATH)).sort_values("date_time")
+    dataframe = preprocess(
+        load_observed_target_data(
+            DATA_PATH,
+            audit_path=DATA_AUDIT_PATH,
+        )
+    ).sort_values("date_time")
     current_window = dataframe[
         (dataframe["date_time"] >= check_start)
         & (dataframe["date_time"] < check_end)

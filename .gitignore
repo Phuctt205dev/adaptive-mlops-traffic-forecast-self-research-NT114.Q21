@@ -1,24 +1,22 @@
-# Tự tải Data cũng được
-
+# Dữ liệu có thể tạo lại
+data/processed/
 data_versions/
 monitoring/
-# Python hồi sinh được
+
+# Môi trường và cache Python
 .venv/
-src/__pycache__/
+__pycache__/
 *.pyc
-# model có thể build lại
+
+# Model và kết quả có thể tạo lại
 models/*.csv
 models/*.pkl
-
-#test
+models/time_series/
+models/champion/
 results/
 
-#Tools
+# Tool local
 tools/checkDataset.py
 
-#MLFlow
+# MLflow
 mlruns/
-
-#others
-docs/HUONG_DAN_DU_AN.md
-docs/CHANGES_CHAMPION_CHALLENGER.md

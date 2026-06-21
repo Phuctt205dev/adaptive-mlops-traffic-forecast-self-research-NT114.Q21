@@ -1,5 +1,23 @@
 # Adaptive MLOps Traffic Forecast
 
+> Phase 0 architecture and application-management contracts are documented in
+> [`docs/phase-0/README.md`](docs/phase-0/README.md). The approved chronological
+> split policy for the upcoming multi-region system is 70% Development, 15%
+> Final Test, and 15% Production. The current implementation still uses fixed
+> date boundaries until the pipeline refactor phase.
+>
+> Phase 1 local infrastructure instructions are documented in
+> [`docs/phase-1/README.md`](docs/phase-1/README.md).
+>
+> Phase 2 backend and database instructions are documented in
+> [`docs/phase-2/README.md`](docs/phase-2/README.md).
+>
+> Deployment Phase 1 configuration for GitHub Pages + EKS is documented in
+> [`docs/deploy/phase-1-config.md`](docs/deploy/phase-1-config.md).
+>
+> Deployment Phase 2 frontend GitHub Pages instructions are documented in
+> [`docs/deploy/phase-2-github-pages.md`](docs/deploy/phase-2-github-pages.md).
+
 Dự án dự báo lưu lượng giao thông theo giờ. Hệ thống huấn luyện 8 biến thể
 model, so sánh bằng time-series cross-validation và lưu model tốt nhất thành
 Champion.

@@ -17,6 +17,15 @@ results/
 
 # Tool local
 tools/checkDataset.py
+frontend/node_modules/
+frontend/dist/
+
+# Local infrastructure secrets
+.env
+.env.*
+!.env.example
+!*.example
+!*.example.*
 
 # MLflow
 mlruns/

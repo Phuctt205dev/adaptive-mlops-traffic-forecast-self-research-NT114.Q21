@@ -1,0 +1,28 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: traffic-smoke-test
+  namespace: traffic-mlops
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: smoke-test
+          image: traffic-api:local
+          imagePullPolicy: IfNotPresent
+          command: ["python", "scripts/ops/smoke_test.py"]
+          env:
+            - name: SMOKE_API_BASE_URL
+              value: http://traffic-api:8000/api/v1
+            - name: SMOKE_ADMIN_EMAIL
+              valueFrom:
+                configMapKeyRef:
+                  name: traffic-config
+                  key: BOOTSTRAP_ADMIN_EMAIL
+            - name: SMOKE_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: traffic-secrets
+                  key: BOOTSTRAP_ADMIN_PASSWORD
+  backoffLimit: 0

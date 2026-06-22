@@ -1,0 +1,203 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow-webserver
+  namespace: traffic-mlops
+spec:
+  type: NodePort
+  selector:
+    app: airflow-webserver
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30081
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: airflow-logs
+  namespace: traffic-mlops
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: airflow-init
+  namespace: traffic-mlops
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: airflow-init
+          image: apache/airflow:2.10.5-python3.11
+          command:
+            - bash
+            - -c
+            - |
+              airflow db migrate
+              airflow users create \
+                --username "$AIRFLOW_ADMIN_USERNAME" \
+                --password "$AIRFLOW_ADMIN_PASSWORD" \
+                --firstname Traffic \
+                --lastname Admin \
+                --role Admin \
+                --email "$AIRFLOW_ADMIN_EMAIL" || true
+          envFrom:
+            - configMapRef:
+                name: traffic-config
+            - secretRef:
+                name: traffic-secrets
+          env:
+            - name: AIRFLOW__CORE__EXECUTOR
+              value: LocalExecutor
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: traffic-secrets
+                  key: AIRFLOW_SQL_ALCHEMY_CONN
+            - name: AIRFLOW__WEBSERVER__SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: traffic-secrets
+                  key: AIRFLOW_SECRET_KEY
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-webserver
+  namespace: traffic-mlops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow-webserver
+  template:
+    metadata:
+      labels:
+        app: airflow-webserver
+    spec:
+      containers:
+        - name: airflow-webserver
+          image: apache/airflow:2.10.5-python3.11
+          args: ["webserver"]
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: traffic-config
+            - secretRef:
+                name: traffic-secrets
+          env:
+            - name: AIRFLOW__CORE__EXECUTOR
+              value: LocalExecutor
+            - name: AIRFLOW__CORE__LOAD_EXAMPLES
+              value: "false"
+            - name: AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION
+              value: "true"
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: traffic-secrets
+                  key: AIRFLOW_SQL_ALCHEMY_CONN
+            - name: AIRFLOW__API__AUTH_BACKENDS
+              value: airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
+            - name: AIRFLOW__WEBSERVER__SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: traffic-secrets
+                  key: AIRFLOW_SECRET_KEY
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow:5000
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: http://minio:9000
+            - name: TRAFFIC_API_URL
+              value: http://traffic-api:8000
+          volumeMounts:
+            - name: dags
+              mountPath: /opt/airflow/dags/traffic_region_training.py
+              subPath: traffic_region_training.py
+            - name: logs
+              mountPath: /opt/airflow/logs
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: dags
+          configMap:
+            name: airflow-dags
+        - name: logs
+          persistentVolumeClaim:
+            claimName: airflow-logs
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-scheduler
+  namespace: traffic-mlops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow-scheduler
+  template:
+    metadata:
+      labels:
+        app: airflow-scheduler
+    spec:
+      containers:
+        - name: airflow-scheduler
+          image: apache/airflow:2.10.5-python3.11
+          args: ["scheduler"]
+          envFrom:
+            - configMapRef:
+                name: traffic-config
+            - secretRef:
+                name: traffic-secrets
+          env:
+            - name: AIRFLOW__CORE__EXECUTOR
+              value: LocalExecutor
+            - name: AIRFLOW__CORE__LOAD_EXAMPLES
+              value: "false"
+            - name: AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION
+              value: "true"
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: traffic-secrets
+                  key: AIRFLOW_SQL_ALCHEMY_CONN
+            - name: AIRFLOW__API__AUTH_BACKENDS
+              value: airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
+            - name: AIRFLOW__WEBSERVER__SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: traffic-secrets
+                  key: AIRFLOW_SECRET_KEY
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow:5000
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: http://minio:9000
+            - name: TRAFFIC_API_URL
+              value: http://traffic-api:8000
+          volumeMounts:
+            - name: dags
+              mountPath: /opt/airflow/dags/traffic_region_training.py
+              subPath: traffic_region_training.py
+            - name: logs
+              mountPath: /opt/airflow/logs
+      volumes:
+        - name: dags
+          configMap:
+            name: airflow-dags
+        - name: logs
+          persistentVolumeClaim:
+            claimName: airflow-logs

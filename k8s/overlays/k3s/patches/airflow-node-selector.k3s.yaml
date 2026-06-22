@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-webserver
+  namespace: traffic-mlops
+spec:
+  template:
+    spec:
+      nodeSelector:
+        traffic-role: compute
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-scheduler
+  namespace: traffic-mlops
+spec:
+  template:
+    spec:
+      nodeSelector:
+        traffic-role: compute
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: airflow-init
+  namespace: traffic-mlops
+spec:
+  template:
+    spec:
+      nodeSelector:
+        traffic-role: compute

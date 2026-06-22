@@ -1,0 +1,10 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traffic-api
+  namespace: traffic-mlops
+spec:
+  template:
+    spec:
+      nodeSelector:
+        traffic-role: compute

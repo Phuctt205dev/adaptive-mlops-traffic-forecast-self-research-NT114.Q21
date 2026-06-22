@@ -28,3 +28,4 @@ patches:
   - path: ../k3s/patches/minio-storage.k3s.yaml
   - path: ../k3s/patches/api-storage.k3s.yaml
   - path: ../k3s/patches/api-service.k3s.yaml
+  - path: ../k3s/patches/api-node-selector.k3s.yaml

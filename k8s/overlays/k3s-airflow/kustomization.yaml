@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: traffic-mlops
+
+resources:
+  - ../../base/airflow.yaml
+
+configMapGenerator:
+  - name: airflow-dags
+    namespace: traffic-mlops
+    files:
+      - traffic_region_training.py=../../base/airflow-dags/traffic_region_training.py
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+images:
+  - name: apache/airflow
+    newName: docker.io/tannampham23/traffic-airflow
+    newTag: v1
+
+patches:
+  - path: ../k3s/patches/airflow-storage.k3s.yaml
+  - path: ../k3s/patches/airflow-service.k3s.yaml
+  - path: ../k3s/patches/airflow-node-selector.k3s.yaml

@@ -19,6 +19,12 @@ SSH to the k3s server node:
 ssh -i .\traffic-k3s-key.pem ubuntu@54.206.56.204
 ```
 
+Label the worker node as the compute node. Traffic API is pinned there because the current training execution runs inside the API container through the internal training endpoint.
+
+```bash
+kubectl label node traffic-k3s-worker traffic-role=compute --overwrite
+```
+
 On the server, go to the repository directory and apply:
 
 ```bash

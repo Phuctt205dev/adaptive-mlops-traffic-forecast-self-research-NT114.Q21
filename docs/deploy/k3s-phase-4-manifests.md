@@ -16,7 +16,7 @@ The React frontend is not deployed inside k3s because it is hosted by GitHub Pag
 
 The overlay uses Docker Hub images:
 
-- `docker.io/tannampham23/traffic-api:v1`
+- `docker.io/tannampham23/traffic-api:v2`
 - `docker.io/tannampham23/traffic-mlflow:v1`
 - `docker.io/tannampham23/traffic-airflow:v1`
 

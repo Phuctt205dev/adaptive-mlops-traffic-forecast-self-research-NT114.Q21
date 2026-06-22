@@ -19,9 +19,15 @@ SSH to the k3s server node:
 ssh -i .\traffic-k3s-key.pem ubuntu@54.206.56.204
 ```
 
-Label the worker node as the compute node. Traffic API is pinned there because the current training execution runs inside the API container through the internal training endpoint.
+Label the server node as the infrastructure node and the worker node as the compute node.
+
+The intended placement is:
+
+- Node 1 / `traffic-k3s-server`: PostgreSQL, MinIO, MLflow, ingress layer.
+- Node 2 / `traffic-k3s-worker`: Traffic API, Airflow, training workload.
 
 ```bash
+kubectl label node traffic-k3s-server traffic-role=infra --overwrite
 kubectl label node traffic-k3s-worker traffic-role=compute --overwrite
 ```
 

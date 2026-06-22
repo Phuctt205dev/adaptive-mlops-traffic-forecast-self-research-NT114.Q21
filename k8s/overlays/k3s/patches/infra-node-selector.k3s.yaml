@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: traffic-mlops
+spec:
+  template:
+    spec:
+      nodeSelector:
+        traffic-role: infra
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+  namespace: traffic-mlops
+spec:
+  template:
+    spec:
+      nodeSelector:
+        traffic-role: infra
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow
+  namespace: traffic-mlops
+spec:
+  template:
+    spec:
+      nodeSelector:
+        traffic-role: infra
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-init
+  namespace: traffic-mlops
+spec:
+  template:
+    spec:
+      nodeSelector:
+        traffic-role: infra

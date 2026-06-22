@@ -40,5 +40,6 @@ patches:
   - path: patches/api-storage.k3s.yaml
   - path: patches/api-service.k3s.yaml
   - path: patches/airflow-service.k3s.yaml
+  - path: patches/infra-node-selector.k3s.yaml
   - path: patches/api-node-selector.k3s.yaml
   - path: patches/airflow-node-selector.k3s.yaml

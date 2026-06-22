@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: traffic-api-artifacts
+  namespace: traffic-mlops
+spec:
+  storageClassName: local-path

@@ -1,0 +1,42 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: traffic-mlops
+
+resources:
+  - ../../base/namespace.yaml
+  - ../../base/configmap.yaml
+  - secret.k3s.example.yaml
+  - ../../base/postgres.yaml
+  - ../../base/minio.yaml
+  - ../../base/mlflow.yaml
+  - ../../base/airflow.yaml
+  - ../../base/traffic-api.yaml
+
+configMapGenerator:
+  - name: airflow-dags
+    namespace: traffic-mlops
+    files:
+      - traffic_region_training.py=../../base/airflow-dags/traffic_region_training.py
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+images:
+  - name: traffic-api
+    newName: docker.io/tannampham23/traffic-api
+    newTag: v1
+  - name: traffic-mlflow
+    newName: docker.io/tannampham23/traffic-mlflow
+    newTag: v1
+  - name: apache/airflow
+    newName: docker.io/tannampham23/traffic-airflow
+    newTag: v1
+
+patches:
+  - path: patches/configmap.k3s.yaml
+  - path: patches/postgres-storage.k3s.yaml
+  - path: patches/minio-storage.k3s.yaml
+  - path: patches/airflow-storage.k3s.yaml
+  - path: patches/api-storage.k3s.yaml
+  - path: patches/api-service.k3s.yaml
+  - path: patches/airflow-service.k3s.yaml

@@ -1,5 +1,6 @@
 import uuid
 import json
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header
@@ -23,6 +24,7 @@ from src.region_training_variants import (
 
 
 router = APIRouter()
+_RECURRENT_TRAINING_LOCK = threading.Lock()
 
 
 def require_internal_token(x_internal_token: str | None = Header(default=None)) -> None:
@@ -175,16 +177,17 @@ def execute_recurrent_training_branch(
 
     try:
         data_path = _ensure_dataset_downloaded(dataset, training_run)
-        branch_result = train_region_recurrent_candidate(
-            selected_models=config.get("selected_models"),
-            model_name=normalized_model_name,
-            data_path=str(data_path),
-            artifact_root=config.get("artifact_root", "models/regions"),
-            region_id=training_run.region_id,
-            dataset_id=training_run.dataset_id,
-            training_run_id=training_run.id,
-            config=config,
-        )
+        with _RECURRENT_TRAINING_LOCK:
+            branch_result = train_region_recurrent_candidate(
+                selected_models=config.get("selected_models"),
+                model_name=normalized_model_name,
+                data_path=str(data_path),
+                artifact_root=config.get("artifact_root", "models/regions"),
+                region_id=training_run.region_id,
+                dataset_id=training_run.dataset_id,
+                training_run_id=training_run.id,
+                config=config,
+            )
         _write_branch_result(
             training_run,
             normalized_model_name.lower(),

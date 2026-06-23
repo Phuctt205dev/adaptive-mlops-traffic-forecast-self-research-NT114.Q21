@@ -12,15 +12,15 @@ def build_recurrent_model(
     dropout_rate=0.2,
     learning_rate=0.001,
 ):
-    """Tạo LSTM hoặc GRU cho sequence traffic nhiều giờ."""
+    """Build an LSTM or GRU model for hourly traffic sequences."""
     normalized_name = model_name.upper()
     if normalized_name not in RECURRENT_MODEL_NAMES:
         raise ValueError(
-            f"Model không được hỗ trợ: {model_name}. "
-            f"Chỉ dùng: {', '.join(RECURRENT_MODEL_NAMES)}."
+            f"Unsupported model: {model_name}. "
+            f"Use one of: {', '.join(RECURRENT_MODEL_NAMES)}."
         )
     if len(input_shape) != 2:
-        raise ValueError("input_shape phải có dạng (time_steps, features).")
+        raise ValueError("input_shape must be shaped as (time_steps, features).")
 
     recurrent_layer = (
         keras.layers.LSTM
@@ -49,10 +49,8 @@ def build_recurrent_model(
         name=f"traffic_{normalized_name.lower()}",
     )
     model.compile(
-        optimizer=keras.optimizers.Adam(
-            learning_rate=learning_rate
-        ),
-        # Huber giảm ảnh hưởng của một số giờ traffic quá bất thường.
+        optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
+        # Huber loss reduces the impact of traffic outliers.
         loss=keras.losses.Huber(),
         metrics=[keras.metrics.MeanAbsoluteError(name="mae")],
     )
@@ -60,7 +58,7 @@ def build_recurrent_model(
 
 
 def build_training_callbacks():
-    """Dừng sớm và giảm learning rate khi validation không tốt thêm."""
+    """Stop early and reduce learning rate when validation stops improving."""
     return [
         keras.callbacks.EarlyStopping(
             monitor="val_loss",

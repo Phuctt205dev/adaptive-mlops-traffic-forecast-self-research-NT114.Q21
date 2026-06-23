@@ -132,6 +132,41 @@ def _comparison_entry(model_info: dict) -> dict:
     }
 
 
+def _metric_entry(model_info: dict) -> dict:
+    return {
+        "best_model_name": model_info.get("best_model_name"),
+        "model_family": model_info.get("model_family"),
+        "validation_MAE": model_info.get("validation_MAE"),
+        "validation_MAE_std": model_info.get("validation_MAE_std"),
+        "test_MAE": model_info.get("test_MAE"),
+        "test_RMSE": model_info.get("test_RMSE"),
+        "test_MAPE": model_info.get("test_MAPE"),
+        "model_version": model_info.get("model_version"),
+        "benchmark_only": bool(model_info.get("benchmark_only")),
+        "inference_supported": bool(model_info.get("inference_supported", True)),
+    }
+
+
+def _branch_xcom_response(training_run: TrainingRun, branch_result: dict) -> dict:
+    candidates = branch_result.get("candidates", [])
+    best = None
+    if candidates:
+        best = branch_result.get("production_candidate") or select_best_candidate(candidates)
+    response = {
+        "training_run_id": str(training_run.id),
+        "branch": branch_result.get("branch"),
+        "status": branch_result.get("status"),
+        "trained_models": [
+            item["best_model_name"]
+            for item in candidates
+        ],
+        "candidates": [_metric_entry(item) for item in candidates],
+    }
+    if best:
+        response.update(_metric_entry(best))
+    return response
+
+
 @router.post("/training-runs/{training_run_id}/execute/tree")
 def execute_tree_training_branch(
     training_run_id: uuid.UUID,
@@ -171,15 +206,7 @@ def execute_tree_training_branch(
             "candidates": [model_info],
         }
         _write_branch_result(training_run, "tree", branch_result)
-        return {
-            "training_run_id": str(training_run.id),
-            "branch": "tree",
-            "status": branch_result["status"],
-            "trained_models": [
-                item["best_model_name"]
-                for item in branch_result.get("candidates", [])
-            ],
-        }
+        return _branch_xcom_response(training_run, branch_result)
     except Exception as error:
         mark_training_run_failed(db, training_run.id, str(error))
         raise
@@ -220,12 +247,7 @@ def execute_recurrent_training_branch(
                 normalized_model_name.lower(),
                 branch_result,
             )
-            return {
-                "training_run_id": str(training_run.id),
-                "branch": normalized_model_name.lower(),
-                "status": "skipped",
-                "trained_models": [],
-            }
+            return _branch_xcom_response(training_run, branch_result)
 
         data_path = _ensure_dataset_downloaded(dataset, training_run)
         with _RECURRENT_TRAINING_LOCK:
@@ -247,15 +269,7 @@ def execute_recurrent_training_branch(
             normalized_model_name.lower(),
             branch_result,
         )
-        return {
-            "training_run_id": str(training_run.id),
-            "branch": normalized_model_name.lower(),
-            "status": branch_result["status"],
-            "trained_models": [
-                item["best_model_name"]
-                for item in branch_result.get("candidates", [])
-            ],
-        }
+        return _branch_xcom_response(training_run, branch_result)
     except Exception as error:
         mark_training_run_failed(db, training_run.id, str(error))
         raise
@@ -335,7 +349,14 @@ def finalize_parallel_training_run(
             "training_run_id": str(completed_run.id),
             "training_run_status": completed_run.status.value,
             "model_version_id": str(model_version.id),
+            "model_version": model_version.version,
+            "model_variant": model_version.variant,
             "model_version_status": model_version.status.value,
+            "best_model_name": best_info.get("best_model_name"),
+            "validation_MAE": best_info.get("validation_MAE"),
+            "validation_MAE_std": best_info.get("validation_MAE_std"),
+            "test_MAE": best_info.get("test_MAE"),
+            "candidates": model_comparison,
         }
     except Exception as error:
         mark_training_run_failed(db, training_run.id, str(error))

@@ -72,7 +72,7 @@ class TrainingRunCreate(BaseModel):
         ]
     )
     recurrent_sequence_length: int = 168
-    recurrent_epochs: int = 20
+    recurrent_epochs: int = 5
     recurrent_batch_size: int = 128
     final_test_ratio: float = 0.15
 

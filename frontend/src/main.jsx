@@ -789,7 +789,7 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
     cv_splits: 3,
     random_state: 42,
     recurrent_sequence_length: 168,
-    recurrent_epochs: 20,
+    recurrent_epochs: 5,
     recurrent_batch_size: 128,
     final_test_ratio: 0.15,
   });
@@ -924,7 +924,7 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
         cv_splits: Number(trainingConfig.cv_splits),
         random_state: Number(trainingConfig.random_state),
         recurrent_sequence_length: Number(trainingConfig.recurrent_sequence_length || 168),
-        recurrent_epochs: Number(trainingConfig.recurrent_epochs || 20),
+        recurrent_epochs: Number(trainingConfig.recurrent_epochs || 5),
         recurrent_batch_size: Number(trainingConfig.recurrent_batch_size || 128),
         final_test_ratio: Number(trainingConfig.final_test_ratio || 0.15),
         selected_models: selectedModels,

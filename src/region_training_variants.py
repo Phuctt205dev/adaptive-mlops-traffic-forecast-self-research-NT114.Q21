@@ -182,7 +182,7 @@ def _train_variant(
         audit_df=prepared["audit_df"],
         n_splits=int(config.get("cv_splits", 3)),
         sequence_length=int(config.get("recurrent_sequence_length", 168)),
-        max_epochs=int(config.get("recurrent_epochs", config.get("max_epochs", 20))),
+        max_epochs=int(config.get("recurrent_epochs", config.get("max_epochs", 5))),
         batch_size=int(config.get("recurrent_batch_size", config.get("batch_size", 128))),
         random_state=int(config.get("random_state", 42)),
         output_directory=str(output_directory),

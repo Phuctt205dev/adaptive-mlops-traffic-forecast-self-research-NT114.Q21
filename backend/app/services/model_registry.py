@@ -1,5 +1,8 @@
 import uuid
+import re
+import shutil
 from datetime import UTC, datetime
+from pathlib import Path
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -19,6 +22,7 @@ from backend.app.db.models import (
 
 
 SPLIT_POLICY = "time_series_cv_70_15_15"
+MODEL_VERSION_PATTERN = re.compile(r"^model_v(?P<number>\d+)$")
 
 
 def list_region_model_versions(
@@ -69,7 +73,11 @@ def activate_model_version(db: Session, model_version_id: uuid.UUID) -> ModelVer
     configuration = training_run.configuration_json if training_run else {}
     model_family = (configuration or {}).get("model_family")
     inference_supported = (configuration or {}).get("inference_supported", True)
-    if not inference_supported or model_family not in {None, "legacy_sklearn"}:
+    if not inference_supported or model_family not in {
+        None,
+        "legacy_sklearn",
+        "neural_sequence",
+    }:
         raise ApplicationError(
             "model_version_not_activatable",
             "This model version is benchmark-only and cannot be activated for web inference.",
@@ -104,6 +112,48 @@ def delete_model_version(db: Session, model_version_id: uuid.UUID) -> None:
     db.execute(delete(Prediction).where(Prediction.model_version_id == model_version.id))
     db.delete(model_version)
     db.commit()
+
+
+def _next_available_model_version(
+    db: Session,
+    region_id: uuid.UUID,
+    desired_version: str,
+) -> str:
+    existing_versions = set(
+        db.scalars(
+            select(ModelVersion.version).where(ModelVersion.region_id == region_id)
+        )
+    )
+    if (
+        MODEL_VERSION_PATTERN.match(desired_version)
+        and desired_version not in existing_versions
+    ):
+        return desired_version
+
+    numeric_versions = []
+    for version in existing_versions:
+        match = MODEL_VERSION_PATTERN.match(version)
+        if match:
+            numeric_versions.append(int(match.group("number")))
+    return f"model_v{(max(numeric_versions) if numeric_versions else 0) + 1}"
+
+
+def _copy_versioned_artifact(model_info: dict, new_version: str) -> None:
+    old_version = model_info.get("model_version")
+    artifact_path = model_info.get("versioned_model_file")
+    if not old_version or old_version == new_version or not artifact_path:
+        return
+
+    source = Path(str(artifact_path))
+    if not source.exists():
+        return
+    suffix = source.suffix or ".pkl"
+    target = source.with_name(f"{new_version}{suffix}")
+    if target != source:
+        shutil.copy2(source, target)
+        model_info["versioned_model_file"] = str(target)
+        if model_info.get("mlflow_model_uri") == str(source):
+            model_info["mlflow_model_uri"] = str(target)
 
 
 def register_training_result(
@@ -162,6 +212,13 @@ def register_training_result(
                 "Training run was not found.",
                 404,
             )
+        if training_run.recommended_model_version_id is not None:
+            model_version = db.get(
+                ModelVersion,
+                training_run.recommended_model_version_id,
+            )
+            if model_version is not None:
+                return training_run, model_version
         training_run.status = TrainingRunStatus.COMPLETED
         training_run.configuration_json = {
             **(training_run.configuration_json or {}),
@@ -183,6 +240,15 @@ def register_training_result(
         )
         db.add(training_run)
     db.flush()
+
+    model_info = dict(model_info)
+    model_version = _next_available_model_version(
+        db,
+        region_id,
+        model_info["model_version"],
+    )
+    _copy_versioned_artifact(model_info, model_version)
+    model_info["model_version"] = model_version
 
     mlflow_run_id = model_info.get("mlflow_run_id") or f"local-{training_run.id}"
     mlflow_model_uri = (

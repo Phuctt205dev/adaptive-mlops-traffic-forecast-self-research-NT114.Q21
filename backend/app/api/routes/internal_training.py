@@ -18,6 +18,7 @@ from scripts.training.run_region_pipeline import download_dataset
 from src.pipeline import run_pipeline
 from src.region_training_variants import (
     normalize_selected_models,
+    select_best_candidate,
     train_region_recurrent_candidate,
 )
 
@@ -204,8 +205,8 @@ def execute_recurrent_training_branch(
                 config=config,
             )
         for candidate in branch_result.get("candidates", []):
-            candidate["benchmark_only"] = True
-            candidate["inference_supported"] = False
+            candidate["benchmark_only"] = False
+            candidate["inference_supported"] = True
         _write_branch_result(
             training_run,
             normalized_model_name.lower(),
@@ -266,23 +267,25 @@ def finalize_parallel_training_run(
                 409,
             )
 
-        best_info = tree_info.get("production_candidate")
-        if best_info is None:
-            tree_candidates = tree_info.get("candidates", [])
-            best_info = tree_candidates[0] if tree_candidates else None
+        production_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.get("inference_supported", True)
+            and not candidate.get("benchmark_only", False)
+        ]
+        best_info = select_best_candidate(production_candidates)
         if best_info is None:
             raise ApplicationError(
                 "production_model_missing",
-                "Tree training did not produce a production-compatible model.",
+                "Training did not produce a production-compatible model.",
                 409,
             )
         model_comparison = [_comparison_entry(item) for item in candidates]
         best_info["model_comparison"] = model_comparison
         best_info["selected_from_candidates"] = selected_models
         best_info["selected_model_policy"] = (
-            "best_legacy_tree_model_for_web_inference; recurrent_models_benchmark_only"
+            "lowest_cross_validation_mean_MAE_then_CV_std_among_inference_supported_models"
         )
-        best_info["model_family"] = "legacy_sklearn"
         best_info["benchmark_only"] = False
         best_info["inference_supported"] = True
 

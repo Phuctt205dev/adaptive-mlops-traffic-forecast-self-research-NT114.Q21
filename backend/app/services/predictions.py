@@ -2,6 +2,7 @@ import os
 import uuid
 from io import BytesIO
 from datetime import datetime, timedelta
+from functools import lru_cache
 from zoneinfo import ZoneInfo
 
 import joblib
@@ -65,8 +66,8 @@ def _load_model(model_version: ModelVersion):
     return joblib.load(model_path)
 
 
-def _load_keras_model(model_version: ModelVersion):
-    model_path = _resolve_model_path(model_version.artifact_uri)
+@lru_cache(maxsize=4)
+def _load_keras_model_from_path(model_path: str):
     if not os.path.exists(model_path):
         raise ApplicationError(
             "model_artifact_not_found",
@@ -76,6 +77,22 @@ def _load_keras_model(model_version: ModelVersion):
     from tensorflow import keras
 
     return keras.models.load_model(model_path)
+
+
+def _load_keras_model(model_version: ModelVersion):
+    model_path = _resolve_model_path(model_version.artifact_uri)
+    return _load_keras_model_from_path(model_path)
+
+
+@lru_cache(maxsize=8)
+def _load_neural_preprocessors(preprocessor_path: str):
+    if not os.path.exists(preprocessor_path):
+        raise ApplicationError(
+            "neural_preprocessor_not_found",
+            "Active neural model preprocessor artifact was not found.",
+            500,
+        )
+    return joblib.load(preprocessor_path)
 
 
 def _parse_s3_uri(uri: str) -> tuple[str, str]:
@@ -321,15 +338,9 @@ def _predict_neural_sequence(
             500,
         )
     preprocessor_path = _resolve_model_path(preprocessor_file)
-    if not os.path.exists(preprocessor_path):
-        raise ApplicationError(
-            "neural_preprocessor_not_found",
-            "Active neural model preprocessor artifact was not found.",
-            500,
-        )
 
     model = _load_keras_model(model_version)
-    preprocessors = joblib.load(preprocessor_path)
+    preprocessors = _load_neural_preprocessors(preprocessor_path)
     sequence_length = int(config.get("recurrent_sequence_length") or 72)
     hourly_df, audit_df = _hourly_context(dataset)
     source = prepare_sequence_source(hourly_df, audit_df).sort_values("date_time")
@@ -357,12 +368,70 @@ def _predict_neural_sequence(
     }
 
 
+def _predict_neural_sequence_batch(
+    model_version: ModelVersion,
+    training_run: TrainingRun,
+    dataset: Dataset,
+    snapshots: list[dict],
+) -> dict[datetime, float]:
+    config = training_run.configuration_json or {}
+    preprocessor_file = config.get("preprocessor_file")
+    if not preprocessor_file:
+        raise ApplicationError(
+            "neural_preprocessor_not_found",
+            "Active neural model preprocessor path is missing.",
+            500,
+        )
+    model = _load_keras_model(model_version)
+    preprocessors = _load_neural_preprocessors(_resolve_model_path(preprocessor_file))
+    sequence_length = int(config.get("recurrent_sequence_length") or 72)
+    hourly_df, audit_df = _hourly_context(dataset)
+    source = prepare_sequence_source(hourly_df, audit_df).sort_values("date_time")
+    source_times = pd.to_datetime(source["date_time"], errors="raise").to_numpy()
+    transformed = transform_sequence_source(source, preprocessors)
+
+    sequences = []
+    output_times = []
+    for snapshot in snapshots:
+        target_time = pd.Timestamp(snapshot["date_time"]).tz_localize(None)
+        end_index = int(np.searchsorted(source_times, target_time.to_datetime64(), side="left"))
+        if end_index < sequence_length:
+            continue
+        sequences.append(transformed[end_index - sequence_length:end_index])
+        output_times.append(target_time.to_pydatetime())
+
+    if not sequences:
+        raise ApplicationError(
+            "prediction_history_insufficient",
+            "Not enough history exists for the active sequence model.",
+            409,
+        )
+    scaled_predictions = model.predict(np.asarray(sequences), batch_size=256, verbose=0)
+    predictions = preprocessors["target_scaler"].inverse_transform(
+        np.asarray(scaled_predictions).reshape(-1, 1)
+    ).reshape(-1)
+    return {
+        when: float(prediction)
+        for when, prediction in zip(output_times, predictions)
+    }
+
+
 def _predict_value(
     model_version: ModelVersion,
     training_run: TrainingRun,
     dataset: Dataset,
     feature_snapshot: dict,
 ) -> tuple[float, dict]:
+    model_family = (training_run.configuration_json or {}).get("model_family")
+    if model_family == "neural_sequence":
+        target_time = pd.Timestamp(feature_snapshot["date_time"]).tz_localize(None)
+        return _predict_neural_sequence(
+            model_version,
+            training_run,
+            dataset,
+            target_time,
+        )
+
     model = _load_model(model_version)
     features = prepare_input(feature_snapshot, model)
     prediction_value = float(model.predict(features)[0])
@@ -398,13 +467,21 @@ def get_forecast_dashboard(
             404,
         )
 
-    model = _load_model(model_version)
-    features = _prepare_batch_input(snapshots, model)
-    predictions = model.predict(features)
-    predicted_by_time = {
-        pd.Timestamp(snapshot["date_time"]).to_pydatetime(): float(prediction)
-        for snapshot, prediction in zip(snapshots, predictions)
-    }
+    if (training_run.configuration_json or {}).get("model_family") == "neural_sequence":
+        predicted_by_time = _predict_neural_sequence_batch(
+            model_version,
+            training_run,
+            dataset,
+            snapshots,
+        )
+    else:
+        model = _load_model(model_version)
+        features = _prepare_batch_input(snapshots, model)
+        predictions = model.predict(features)
+        predicted_by_time = {
+            pd.Timestamp(snapshot["date_time"]).to_pydatetime(): float(prediction)
+            for snapshot, prediction in zip(snapshots, predictions)
+        }
 
     hourly = [
         {"forecast_for": when, "prediction": value}

@@ -124,8 +124,9 @@ def _candidate_from_report(
 ):
     saved_at = datetime.now().isoformat()
     variant = report["variant"]
+    display_name = report.get("model", variant)
     return {
-        "best_model_name": variant,
+        "best_model_name": display_name,
         "model_version": f"{variant}_{saved_at.replace(':', '').replace('-', '')}",
         "model_role": model_role,
         "model_family": report["family"],

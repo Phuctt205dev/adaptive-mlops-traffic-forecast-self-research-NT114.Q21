@@ -47,7 +47,13 @@ def _post_internal_training(path):
         headers={"X-Internal-Token": token},
         timeout=None,
     )
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as error:
+        raise RuntimeError(
+            f"Internal training API failed: {response.status_code} "
+            f"{response.text}"
+        ) from error
     return response.json()
 
 

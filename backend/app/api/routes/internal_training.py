@@ -15,11 +15,10 @@ from backend.app.services.model_registry import (
     register_training_result,
 )
 from scripts.training.run_region_pipeline import download_dataset
+from src.pipeline import run_pipeline
 from src.region_training_variants import (
     normalize_selected_models,
-    select_best_candidate,
     train_region_recurrent_candidate,
-    train_region_tree_lag_candidates,
 )
 
 
@@ -132,15 +131,31 @@ def execute_tree_training_branch(
 
     try:
         data_path = _ensure_dataset_downloaded(dataset, training_run)
-        branch_result = train_region_tree_lag_candidates(
-            selected_models=config.get("selected_models"),
+        model_info = run_pipeline(
+            train_start_date=config["train_start_date"],
+            train_end_date=config["train_end_date"],
+            model_role=config.get("model_role", "candidate"),
+            random_state=int(config.get("random_state", 42)),
+            cv_splits=int(config.get("cv_splits", 3)),
             data_path=str(data_path),
             artifact_root=config.get("artifact_root", "models/regions"),
             region_id=training_run.region_id,
             dataset_id=training_run.dataset_id,
-            training_run_id=training_run.id,
-            config=config,
         )
+        model_info.update(
+            {
+                "model_family": "legacy_sklearn",
+                "benchmark_only": False,
+                "inference_supported": True,
+                "selection_metric": "cross_validation_mean_MAE",
+            }
+        )
+        branch_result = {
+            "branch": "tree",
+            "status": "completed",
+            "production_candidate": model_info,
+            "candidates": [model_info],
+        }
         _write_branch_result(training_run, "tree", branch_result)
         return {
             "training_run_id": str(training_run.id),
@@ -188,6 +203,9 @@ def execute_recurrent_training_branch(
                 training_run_id=training_run.id,
                 config=config,
             )
+        for candidate in branch_result.get("candidates", []):
+            candidate["benchmark_only"] = True
+            candidate["inference_supported"] = False
         _write_branch_result(
             training_run,
             normalized_model_name.lower(),
@@ -230,24 +248,43 @@ def finalize_parallel_training_run(
             for branch in branch_infos
             for candidate in branch.get("candidates", [])
         ]
-        trained_model_names = {item["best_model_name"] for item in candidates}
-        missing = sorted(
-            set(selected_models) - trained_model_names
+        selected_recurrent = {
+            model for model in selected_models if model in {"lstm", "gru"}
+        }
+        trained_recurrent = {
+            item["best_model_name"].lower()
+            for item in candidates
+            if item.get("model_family") == "neural_sequence"
+        }
+        missing_recurrent = sorted(
+            selected_recurrent - trained_recurrent
         )
-        if missing:
+        if missing_recurrent:
             raise ApplicationError(
                 "training_selected_models_missing",
-                f"Selected models were not trained: {', '.join(missing)}.",
+                f"Selected recurrent models were not trained: {', '.join(missing_recurrent)}.",
                 409,
             )
 
-        best_info = select_best_candidate(candidates)
+        best_info = tree_info.get("production_candidate")
+        if best_info is None:
+            tree_candidates = tree_info.get("candidates", [])
+            best_info = tree_candidates[0] if tree_candidates else None
+        if best_info is None:
+            raise ApplicationError(
+                "production_model_missing",
+                "Tree training did not produce a production-compatible model.",
+                409,
+            )
         model_comparison = [_comparison_entry(item) for item in candidates]
         best_info["model_comparison"] = model_comparison
         best_info["selected_from_candidates"] = selected_models
         best_info["selected_model_policy"] = (
-            "lowest_cross_validation_mean_MAE_then_CV_std"
+            "best_legacy_tree_model_for_web_inference; recurrent_models_benchmark_only"
         )
+        best_info["model_family"] = "legacy_sklearn"
+        best_info["benchmark_only"] = False
+        best_info["inference_supported"] = True
 
         completed_run, model_version = register_training_result(
             db,
@@ -278,13 +315,22 @@ def execute_training_run(
     # the best selected tree model only; Airflow uses the parallel branch endpoints above.
     training_run, _dataset = _get_training_context(db, training_run_id)
     tree_branch = _read_branch_result(training_run, "tree")
-    tree_info = select_best_candidate(tree_branch.get("candidates", []))
+    tree_info = tree_branch.get("production_candidate")
+    if tree_info is None:
+        tree_candidates = tree_branch.get("candidates", [])
+        tree_info = tree_candidates[0] if tree_candidates else None
+    if tree_info is None:
+        raise ApplicationError(
+            "production_model_missing",
+            "Tree training did not produce a production-compatible model.",
+            409,
+        )
     tree_info["model_comparison"] = [
         _comparison_entry(item)
         for item in tree_branch.get("candidates", [])
     ]
     tree_info["selected_model_policy"] = (
-        "lowest_cross_validation_mean_MAE_then_CV_std_tree_only"
+        "best_legacy_tree_model_for_web_inference"
     )
     completed_run, model_version = register_training_result(
         db,

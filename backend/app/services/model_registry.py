@@ -65,6 +65,16 @@ def get_training_run_or_404(db: Session, training_run_id: uuid.UUID) -> Training
 def activate_model_version(db: Session, model_version_id: uuid.UUID) -> ModelVersion:
     model_version = get_model_version_or_404(db, model_version_id)
     region = ensure_region_exists(db, model_version.region_id)
+    training_run = db.get(TrainingRun, model_version.training_run_id)
+    configuration = training_run.configuration_json if training_run else {}
+    model_family = (configuration or {}).get("model_family")
+    inference_supported = (configuration or {}).get("inference_supported", True)
+    if not inference_supported or model_family not in {None, "legacy_sklearn"}:
+        raise ApplicationError(
+            "model_version_not_activatable",
+            "This model version is benchmark-only and cannot be activated for web inference.",
+            409,
+        )
 
     previous_active_id = region.active_model_version_id
     if previous_active_id and previous_active_id != model_version.id:

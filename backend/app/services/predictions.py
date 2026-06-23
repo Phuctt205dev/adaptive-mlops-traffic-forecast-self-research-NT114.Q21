@@ -363,19 +363,6 @@ def _predict_value(
     dataset: Dataset,
     feature_snapshot: dict,
 ) -> tuple[float, dict]:
-    config = training_run.configuration_json or {}
-    model_family = config.get("model_family")
-    target_time = pd.Timestamp(feature_snapshot["date_time"]).tz_localize(None)
-    if model_family == "tree_autoregressive":
-        return _predict_tree_lag(model_version, dataset, target_time)
-    if model_family == "neural_sequence":
-        return _predict_neural_sequence(
-            model_version,
-            training_run,
-            dataset,
-            target_time,
-        )
-
     model = _load_model(model_version)
     features = prepare_input(feature_snapshot, model)
     prediction_value = float(model.predict(features)[0])
@@ -411,29 +398,13 @@ def get_forecast_dashboard(
             404,
         )
 
-    if (training_run.configuration_json or {}).get("model_family") in {
-        "tree_autoregressive",
-        "neural_sequence",
-    }:
-        predicted_by_time = {}
-        for snapshot in snapshots:
-            prediction, _feature_meta = _predict_value(
-                model_version,
-                training_run,
-                dataset,
-                snapshot,
-            )
-            predicted_by_time[
-                pd.Timestamp(snapshot["date_time"]).to_pydatetime()
-            ] = prediction
-    else:
-        model = _load_model(model_version)
-        features = _prepare_batch_input(snapshots, model)
-        predictions = model.predict(features)
-        predicted_by_time = {
-            pd.Timestamp(snapshot["date_time"]).to_pydatetime(): float(prediction)
-            for snapshot, prediction in zip(snapshots, predictions)
-        }
+    model = _load_model(model_version)
+    features = _prepare_batch_input(snapshots, model)
+    predictions = model.predict(features)
+    predicted_by_time = {
+        pd.Timestamp(snapshot["date_time"]).to_pydatetime(): float(prediction)
+        for snapshot, prediction in zip(snapshots, predictions)
+    }
 
     hourly = [
         {"forecast_for": when, "prediction": value}

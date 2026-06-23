@@ -199,6 +199,8 @@ def _train_variant(
         train_end_date=config["train_end_date"],
         final_test_ratio=float(config.get("final_test_ratio", 0.15)),
         experiment_name=region_experiment_name(region_name, region_id),
+        mlflow_dataset_name=f"region_{region_id}_dataset_{dataset_id}",
+        mlflow_dataset_source=str(data_path),
     )
     return _candidate_from_report(
         report,

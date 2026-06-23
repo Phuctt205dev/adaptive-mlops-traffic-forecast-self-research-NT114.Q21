@@ -78,6 +78,20 @@ def _load_mlflow():
     return mlflow
 
 
+def _build_mlflow_dataset(mlflow, dataframe, dataset_name=None, dataset_source=None):
+    try:
+        import mlflow.data
+
+        return mlflow.data.from_pandas(
+            dataframe,
+            source=dataset_source or "traffic_training_dataframe",
+            name=dataset_name or "TrafficVolumeData",
+        )
+    except Exception as exc:
+        print(f"MLflow dataset logging skipped: {exc}")
+        return None
+
+
 def _metric_summary(fold_results):
     """Tính trung bình và độ lệch chuẩn để đo chất lượng lẫn độ ổn định."""
     metric_names = ("MAE", "RMSE", "MAPE", "WAPE", "R2")
@@ -785,6 +799,8 @@ def run_model_time_series_cross_validation(
     final_test_ratio=0.15,
     mlflow_tracking_uri=None,
     experiment_name=None,
+    mlflow_dataset_name=None,
+    mlflow_dataset_source=None,
 ):
     """Chạy CV và Final Test cho đúng một model."""
     if model_name not in SUPPORTED_MODELS:
@@ -952,6 +968,14 @@ def run_model_time_series_cross_validation(
         if experiment_name:
             mlflow.set_experiment(experiment_name)
         with mlflow.start_run(run_name=f"candidate_{model_name}") as run:
+            mlflow_dataset = _build_mlflow_dataset(
+                mlflow,
+                feature_df,
+                dataset_name=mlflow_dataset_name,
+                dataset_source=mlflow_dataset_source,
+            )
+            if mlflow_dataset is not None:
+                mlflow.log_input(mlflow_dataset, context="training")
             run_id = _get_run_id(run)
             if run_id:
                 report["mlflow_run_id"] = run_id
@@ -988,6 +1012,16 @@ def run_model_time_series_cross_validation(
                     "test_MAPE": float(report["final_test_metrics"]["MAPE"]),
                 }
             )
+            for fold in report["folds"]:
+                fold_number = int(fold["fold"])
+                fold_metrics = fold["validation_metrics"]
+                mlflow.log_metrics(
+                    {
+                        f"fold_{fold_number}_MAE": float(fold_metrics["MAE"]),
+                        f"fold_{fold_number}_RMSE": float(fold_metrics["RMSE"]),
+                        f"fold_{fold_number}_MAPE": float(fold_metrics["MAPE"]),
+                    }
+                )
             for artifact_path in (
                 report_path,
                 folds_path,

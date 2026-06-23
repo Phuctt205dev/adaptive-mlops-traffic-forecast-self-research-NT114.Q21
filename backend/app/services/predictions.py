@@ -330,7 +330,7 @@ def _predict_neural_sequence(
 
     model = _load_keras_model(model_version)
     preprocessors = joblib.load(preprocessor_path)
-    sequence_length = int(config.get("recurrent_sequence_length") or 168)
+    sequence_length = int(config.get("recurrent_sequence_length") or 72)
     hourly_df, audit_df = _hourly_context(dataset)
     source = prepare_sequence_source(hourly_df, audit_df).sort_values("date_time")
     source = source[source["date_time"] < target_time].reset_index(drop=True)

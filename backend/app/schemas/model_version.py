@@ -71,9 +71,9 @@ class TrainingRunCreate(BaseModel):
             "gru",
         ]
     )
-    recurrent_sequence_length: int = 168
-    recurrent_epochs: int = 5
-    recurrent_batch_size: int = 128
+    recurrent_sequence_length: int = 72
+    recurrent_epochs: int = 3
+    recurrent_batch_size: int = 32
     final_test_ratio: float = 0.15
 
     @field_validator("selected_models")

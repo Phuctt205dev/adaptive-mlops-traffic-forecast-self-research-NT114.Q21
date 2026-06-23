@@ -12,6 +12,36 @@ const pages = [
   ["users", "Users"],
 ];
 
+const trainingModelOptions = [
+  {
+    id: "random_forest_lag",
+    label: "Random Forest + lag",
+    group: "Tree models",
+  },
+  {
+    id: "xgboost_lag",
+    label: "XGBoost + lag",
+    group: "Tree models",
+  },
+  {
+    id: "lightgbm_lag",
+    label: "LightGBM + lag",
+    group: "Tree models",
+  },
+  {
+    id: "lstm",
+    label: "LSTM",
+    group: "Deep learning",
+  },
+  {
+    id: "gru",
+    label: "GRU",
+    group: "Deep learning",
+  },
+];
+
+const defaultTrainingModels = trainingModelOptions.map((option) => option.id);
+
 function formatDate(value) {
   return value ? new Date(value).toLocaleString() : "-";
 }
@@ -750,6 +780,7 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
   const [messageType, setMessageType] = useState("info");
   const [uploading, setUploading] = useState(false);
   const [activeTraining, setActiveTraining] = useState(null);
+  const [trainingDataset, setTrainingDataset] = useState(null);
   const [trainForm, setTrainForm] = useState({
     train_start_date: "",
     train_end_date: "",
@@ -757,6 +788,10 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
     model_role: "candidate",
     cv_splits: 3,
     random_state: 42,
+    recurrent_sequence_length: 168,
+    recurrent_epochs: 20,
+    recurrent_batch_size: 128,
+    final_test_ratio: 0.15,
   });
 
   useEffect(() => {
@@ -873,7 +908,7 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
     }
   }
 
-  async function train(dataset) {
+  async function train(dataset, selectedModels = defaultTrainingModels) {
     setMessage("");
     try {
       const window = trainingWindowForDataset(dataset);
@@ -888,6 +923,11 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
         ...trainingConfig,
         cv_splits: Number(trainingConfig.cv_splits),
         random_state: Number(trainingConfig.random_state),
+        recurrent_sequence_length: Number(trainingConfig.recurrent_sequence_length || 168),
+        recurrent_epochs: Number(trainingConfig.recurrent_epochs || 20),
+        recurrent_batch_size: Number(trainingConfig.recurrent_batch_size || 128),
+        final_test_ratio: Number(trainingConfig.final_test_ratio || 0.15),
+        selected_models: selectedModels,
       });
       setActiveTraining({
         ...result.training_run,
@@ -897,7 +937,12 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
     } catch (err) {
       setMessageType("error");
       setMessage(err.message);
+      throw err;
     }
+  }
+
+  function requestTraining(dataset) {
+    setTrainingDataset(dataset);
   }
 
   return (
@@ -990,10 +1035,114 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
             dataset.row_count || "-",
             `${formatDate(dataset.start_at)} - ${formatDate(dataset.end_at)}`,
             <StatusBadge value={dataset.status} />,
-            <TrainingAction dataset={dataset} activeTraining={activeTraining} onTrain={train} />,
+            <TrainingAction dataset={dataset} activeTraining={activeTraining} onTrain={requestTraining} />,
           ])}
         />
       </Card>
+      {trainingDataset && (
+        <TrainModelModal
+          dataset={trainingDataset}
+          trainForm={trainForm}
+          onClose={() => setTrainingDataset(null)}
+          onSubmit={async (dataset, selectedModels) => {
+            await train(dataset, selectedModels);
+            setTrainingDataset(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function TrainModelModal({ dataset, trainForm, onClose, onSubmit }) {
+  const [selectedModels, setSelectedModels] = useState(defaultTrainingModels);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  function toggleModel(modelId) {
+    setSelectedModels((current) => (
+      current.includes(modelId)
+        ? current.filter((item) => item !== modelId)
+        : [...current, modelId]
+    ));
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    setError("");
+    if (!selectedModels.length) {
+      setError("Select at least one model.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await onSubmit(dataset, selectedModels);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const treeCount = selectedModels.filter((model) => model.endsWith("_lag")).length;
+  const neuralCount = selectedModels.filter((model) => ["lstm", "gru"].includes(model)).length;
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <form className="modal-card train-modal-card" onSubmit={submit} onClick={(event) => event.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">Training</p>
+            <h2>Select models</h2>
+          </div>
+          <button className="secondary" type="button" onClick={onClose}>Close</button>
+        </div>
+
+        <div className="train-modal-dataset">
+          <strong>{dataset.original_filename}</strong>
+          <span>{formatDate(dataset.start_at)} - {formatDate(dataset.end_at)}</span>
+        </div>
+
+        <div className="model-picker">
+          {trainingModelOptions.map((option) => (
+            <label className="model-option" key={option.id}>
+              <input
+                type="checkbox"
+                checked={selectedModels.includes(option.id)}
+                onChange={() => toggleModel(option.id)}
+              />
+              <span>
+                <strong>{option.label}</strong>
+                <small>{option.group}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+
+        <div className="fairness-panel">
+          <div>
+            <span>CV folds</span>
+            <strong>{trainForm.cv_splits}</strong>
+          </div>
+          <div>
+            <span>Final test</span>
+            <strong>{Number(trainForm.final_test_ratio || 0.15) * 100}%</strong>
+          </div>
+          <div>
+            <span>Parallel branches</span>
+            <strong>{treeCount ? "tree" : "-"} | {neuralCount ? "neural" : "-"}</strong>
+          </div>
+        </div>
+
+        <p className="muted">
+          Selection uses the same train window, expanding-window CV folds, and CV mean MAE for every selected model. Final Test is reported only.
+        </p>
+
+        {error && <div className="alert alert-error">{error}</div>}
+        <button disabled={submitting || !selectedModels.length}>
+          {submitting ? "Triggering..." : `Train ${selectedModels.length} model${selectedModels.length > 1 ? "s" : ""}`}
+        </button>
+      </form>
     </div>
   );
 }

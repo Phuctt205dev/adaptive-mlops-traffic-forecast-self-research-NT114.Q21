@@ -1436,6 +1436,93 @@ td {
   letter-spacing: -0.02em;
 }
 
+.train-modal-card {
+  width: min(620px, 100%);
+}
+
+.train-modal-dataset {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+  padding: 10px 12px;
+}
+
+.train-modal-dataset strong {
+  color: #111827;
+  font-size: 14px;
+}
+
+.train-modal-dataset span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.model-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.model-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 64px;
+  border: 1px solid #dbe4ee;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.model-option input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
+.model-option span {
+  display: grid;
+  gap: 2px;
+}
+
+.model-option strong {
+  color: #111827;
+  font-size: 14px;
+}
+
+.model-option small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.fairness-panel {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.fairness-panel div {
+  display: grid;
+  gap: 2px;
+  border: 1px solid #dbe4ee;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+.fairness-panel span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.fairness-panel strong {
+  color: #111827;
+  font-size: 14px;
+}
+
 .profile-layout {
   width: min(1320px, calc(100% - 32px));
   margin: 16px auto;

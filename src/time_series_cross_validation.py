@@ -658,7 +658,11 @@ def _run_neural_cross_validation(
         errors="raise",
     )
     offline_end = pd.Timestamp(offline[TIME_COLUMN].max())
-    offline_start = pd.Timestamp(offline[TIME_COLUMN].min())
+    offline_start = (
+        pd.Timestamp(train_start_date)
+        if train_start_date is not None
+        else pd.Timestamp(offline[TIME_COLUMN].min())
+    )
     offline_hourly = hourly_df.loc[
         (hourly_times >= offline_start) & (hourly_times <= offline_end)
     ].copy()

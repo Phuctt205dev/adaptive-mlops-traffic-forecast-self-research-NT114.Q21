@@ -103,6 +103,16 @@ select {
     box-shadow 0.2s;
 }
 
+.readonly-field {
+  width: 100%;
+  border: 1px solid #d1d5db;
+  border-radius: 7px;
+  background: #f8fafc;
+  color: #111827;
+  padding: 7px 10px;
+  font-weight: 700;
+}
+
 select {
   appearance: none;
   background-image:

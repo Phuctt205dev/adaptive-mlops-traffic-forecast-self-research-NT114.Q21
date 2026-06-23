@@ -773,7 +773,7 @@ function RegionManager({ regions, selectedRegion, refresh }) {
   );
 }
 
-function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshModels }) {
+function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshModels, refreshRegions }) {
   const [file, setFile] = useState(null);
   const [dragActive, setDragActive] = useState(false);
   const [message, setMessage] = useState("");
@@ -819,7 +819,7 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
         }));
         if (trainingRun.status === "completed") {
           setMessage("");
-          await Promise.all([refreshDatasets(), refreshModels()]);
+          await Promise.all([refreshDatasets(), refreshModels(), refreshRegions()]);
         }
         if (trainingRun.status === "failed") {
           setMessageType("error");
@@ -1215,8 +1215,7 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions })
   );
 }
 
-function PredictionPage({ regions }) {
-  const [regionId, setRegionId] = useState(regions[0]?.id || "");
+function PredictionPage({ selectedRegion }) {
   const [forecastFor, setForecastFor] = useState("");
   const [predictionWindow, setPredictionWindow] = useState(null);
   const [result, setResult] = useState(null);
@@ -1224,17 +1223,13 @@ function PredictionPage({ regions }) {
   const [loadingWindow, setLoadingWindow] = useState(false);
 
   useEffect(() => {
-    if (!regionId && regions[0]) setRegionId(regions[0].id);
-  }, [regions, regionId]);
-
-  useEffect(() => {
-    if (!regionId) return;
+    if (!selectedRegion?.id) return;
     setError("");
     setResult(null);
     setPredictionWindow(null);
     setForecastFor("");
     setLoadingWindow(true);
-    api.predictionWindow(regionId)
+    api.predictionWindow(selectedRegion.id)
       .then((window) => {
         setPredictionWindow(window);
         const start = currentForecastStart(window);
@@ -1242,7 +1237,7 @@ function PredictionPage({ regions }) {
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoadingWindow(false));
-  }, [regionId]);
+  }, [selectedRegion?.id]);
 
   async function submit(event) {
     event.preventDefault();
@@ -1252,7 +1247,7 @@ function PredictionPage({ regions }) {
       const payload = {
         forecast_for: localDatetimeToIsoWithOffset(forecastFor),
       };
-      setResult(await api.predict(regionId, payload));
+      setResult(await api.predict(selectedRegion.id, payload));
     } catch (err) {
       setError(err.message);
     }
@@ -1281,9 +1276,7 @@ function PredictionPage({ regions }) {
     <div className="grid two">
       <Card title="Predict Traffic">
         <form className="form" onSubmit={submit}>
-          <select value={regionId} onChange={(e) => setRegionId(e.target.value)}>
-            {regions.map((region) => <option key={region.id} value={region.id}>{region.name}</option>)}
-          </select>
+          <div className="readonly-field">{selectedRegion?.name || "Select a region"}</div>
           {loadingWindow && <div className="alert alert-info">Loading production window...</div>}
           <label>
             Forecast time
@@ -1309,7 +1302,7 @@ function PredictionPage({ regions }) {
               Next month
             </button>
           </div>
-          <button disabled={!regionId || !forecastFor || !predictionWindow}>Predict</button>
+          <button disabled={!selectedRegion?.id || !forecastFor || !predictionWindow}>Predict</button>
         </form>
       </Card>
       <Card title="Prediction Result">
@@ -1705,9 +1698,11 @@ function App() {
       setModels([]);
       return;
     }
-    if (!selectedRegionId || !items.some((region) => region.id === selectedRegionId)) {
-      setSelectedRegionId(items[0].id);
-    }
+    setSelectedRegionId((currentId) => (
+      currentId && items.some((region) => region.id === currentId)
+        ? currentId
+        : items[0].id
+    ));
   }
 
   async function refreshDatasets() {
@@ -1772,7 +1767,7 @@ function App() {
           <div>
             <h1>{page === "profile" ? "Profile" : pages.find(([id]) => id === page)?.[1]}</h1>
           </div>
-          {!["predict", "profile"].includes(page) && (
+          {page !== "profile" && (
             <RegionDropdown
               regions={regions}
               selectedRegion={selectedRegion}
@@ -1784,7 +1779,7 @@ function App() {
           <Dashboard regions={regions} selectedRegion={selectedRegion} datasets={datasets} models={models} user={user} />
         </section>
         <section className="page-panel" hidden={page !== "predict"}>
-          <PredictionPage regions={regions} />
+          <PredictionPage selectedRegion={selectedRegion} />
         </section>
         {user.role === "admin" && (
           <>
@@ -1801,6 +1796,7 @@ function App() {
                 datasets={datasets}
                 refreshDatasets={refreshDatasets}
                 refreshModels={refreshModels}
+                refreshRegions={() => refreshRegions(user)}
               />
             </section>
             <section className="page-panel" hidden={page !== "models"}>

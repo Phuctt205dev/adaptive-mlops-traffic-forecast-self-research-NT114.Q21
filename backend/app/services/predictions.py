@@ -104,17 +104,45 @@ def _parse_s3_uri(uri: str) -> tuple[str, str]:
 
 
 def _download_dataset_frame(dataset: Dataset) -> pd.DataFrame:
-    bucket, key = _parse_s3_uri(dataset.storage_uri)
+    return _download_dataset_frame_cached(dataset.storage_uri, dataset.sha256).copy()
+
+
+@lru_cache(maxsize=8)
+def _download_dataset_frame_cached(storage_uri: str, sha256: str) -> pd.DataFrame:
+    bucket, key = _parse_s3_uri(storage_uri)
     response = get_s3_client().get_object(Bucket=bucket, Key=key)
     return pd.read_csv(BytesIO(response["Body"].read()))
 
 
 def _hourly_context(dataset: Dataset) -> tuple[pd.DataFrame, pd.DataFrame]:
-    raw_frame = _download_dataset_frame(dataset)
+    hourly_df, audit_df = _hourly_context_cached(dataset.storage_uri, dataset.sha256)
+    return hourly_df.copy(), audit_df.copy()
+
+
+@lru_cache(maxsize=8)
+def _hourly_context_cached(storage_uri: str, sha256: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    raw_frame = _download_dataset_frame_cached(storage_uri, sha256).copy()
     hourly_df, audit_df, _report = prepare_hourly_time_series(raw_frame)
     hourly_df["date_time"] = pd.to_datetime(hourly_df["date_time"], errors="raise")
     audit_df["date_time"] = pd.to_datetime(audit_df["date_time"], errors="raise")
     return hourly_df.sort_values("date_time"), audit_df.sort_values("date_time")
+
+
+@lru_cache(maxsize=8)
+def _neural_sequence_context(
+    storage_uri: str,
+    sha256: str,
+    preprocessor_path: str,
+) -> tuple[np.ndarray, np.ndarray, dict]:
+    hourly_df, audit_df = _hourly_context_cached(storage_uri, sha256)
+    preprocessors = _load_neural_preprocessors(preprocessor_path)
+    source = prepare_sequence_source(
+        hourly_df.copy(),
+        audit_df.copy(),
+    ).sort_values("date_time")
+    source_times = pd.to_datetime(source["date_time"], errors="raise").to_numpy()
+    transformed = transform_sequence_source(source, preprocessors)
+    return source_times, transformed, preprocessors
 
 
 def _active_training_context(
@@ -340,19 +368,20 @@ def _predict_neural_sequence(
     preprocessor_path = _resolve_model_path(preprocessor_file)
 
     model = _load_keras_model(model_version)
-    preprocessors = _load_neural_preprocessors(preprocessor_path)
     sequence_length = int(config.get("recurrent_sequence_length") or 72)
-    hourly_df, audit_df = _hourly_context(dataset)
-    source = prepare_sequence_source(hourly_df, audit_df).sort_values("date_time")
-    source = source[source["date_time"] < target_time].reset_index(drop=True)
-    if len(source) < sequence_length:
+    source_times, transformed, preprocessors = _neural_sequence_context(
+        dataset.storage_uri,
+        dataset.sha256,
+        preprocessor_path,
+    )
+    end_index = int(np.searchsorted(source_times, target_time.to_datetime64(), side="left"))
+    if end_index < sequence_length:
         raise ApplicationError(
             "prediction_history_insufficient",
             "Not enough history exists for the active sequence model.",
             409,
         )
-    transformed = transform_sequence_source(source, preprocessors)
-    sequence = transformed[-sequence_length:].reshape(
+    sequence = transformed[end_index - sequence_length:end_index].reshape(
         1,
         sequence_length,
         transformed.shape[1],
@@ -383,12 +412,13 @@ def _predict_neural_sequence_batch(
             500,
         )
     model = _load_keras_model(model_version)
-    preprocessors = _load_neural_preprocessors(_resolve_model_path(preprocessor_file))
+    preprocessor_path = _resolve_model_path(preprocessor_file)
     sequence_length = int(config.get("recurrent_sequence_length") or 72)
-    hourly_df, audit_df = _hourly_context(dataset)
-    source = prepare_sequence_source(hourly_df, audit_df).sort_values("date_time")
-    source_times = pd.to_datetime(source["date_time"], errors="raise").to_numpy()
-    transformed = transform_sequence_source(source, preprocessors)
+    source_times, transformed, preprocessors = _neural_sequence_context(
+        dataset.storage_uri,
+        dataset.sha256,
+        preprocessor_path,
+    )
 
     sequences = []
     output_times = []

@@ -115,6 +115,12 @@ def create_expanding_window_folds(
 
 def summarize_time_range(dataframe):
     """Tóm tắt một vùng dữ liệu để ghi vào báo cáo JSON."""
+    if dataframe.empty:
+        return {
+            "rows": 0,
+            "start": None,
+            "end": None,
+        }
     return {
         "rows": int(len(dataframe)),
         "start": pd.Timestamp(

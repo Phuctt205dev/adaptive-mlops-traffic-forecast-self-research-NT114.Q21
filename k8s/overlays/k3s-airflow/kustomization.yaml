@@ -17,7 +17,7 @@ generatorOptions:
 images:
   - name: apache/airflow
     newName: docker.io/tannampham23/traffic-airflow
-    newTag: v1
+    newTag: v2
 
 patches:
   - path: ../k3s/patches/airflow-storage.k3s.yaml

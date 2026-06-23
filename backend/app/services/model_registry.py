@@ -130,9 +130,17 @@ def register_training_result(
     }
     for optional_key in (
         "model_comparison",
-        "best_benchmark_model",
+        "selected_from_candidates",
         "selected_model_policy",
-        "neural_models_benchmark_only",
+        "model_family",
+        "tree_profile",
+        "benchmark_only",
+        "inference_supported",
+        "preprocessor_file",
+        "source_report",
+        "split_policy",
+        "final_test_used_for_selection",
+        "selection_metric",
     ):
         if optional_key in model_info:
             configuration_json[optional_key] = model_info[optional_key]

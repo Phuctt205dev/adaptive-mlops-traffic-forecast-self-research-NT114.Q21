@@ -24,6 +24,19 @@ def validate_conf(**context):
     missing = [key for key in required if not conf.get(key)]
     if missing:
         raise ValueError(f"Missing DAG conf keys: {', '.join(missing)}")
+    supported_models = {
+        "random_forest_lag",
+        "xgboost_lag",
+        "lightgbm_lag",
+        "lstm",
+        "gru",
+    }
+    selected_models = conf.get("selected_models") or []
+    if not selected_models:
+        raise ValueError("selected_models must contain at least one model.")
+    unsupported = sorted(set(selected_models) - supported_models)
+    if unsupported:
+        raise ValueError(f"Unsupported selected_models: {', '.join(unsupported)}")
 
 
 def _post_internal_training(path):

@@ -21,6 +21,8 @@ from src.models import (
 from src.time_series_preprocess import TARGET_COLUMN, TIME_COLUMN
 from src.time_series_splits import (
     DEFAULT_CV_SPLITS,
+    DEVELOPMENT_END,
+    FINAL_TEST_START,
     OFFLINE_END,
     PRODUCTION_START,
     create_expanding_window_folds,
@@ -110,8 +112,52 @@ def _save_predictions(timestamps, actual, predictions, path):
     os.replace(temporary_path, path)
 
 
-def _prepare_offline_features(feature_df):
+def _split_by_dynamic_window(
+    dataframe,
+    train_start_date,
+    train_end_date,
+    final_test_ratio=0.15,
+):
+    ordered = prepare_feature_data(dataframe)
+    train_start = pd.Timestamp(train_start_date)
+    train_end = pd.Timestamp(train_end_date)
+    if train_start >= train_end:
+        raise ValueError("train_start_date phai nho hon train_end_date.")
+
+    offline = ordered.loc[
+        (ordered[TIME_COLUMN] >= train_start)
+        & (ordered[TIME_COLUMN] < train_end)
+    ].copy()
+    production = ordered.loc[ordered[TIME_COLUMN] >= train_end].copy()
+    if offline.empty:
+        raise ValueError("Training window khong co du lieu offline.")
+    if not 0 < final_test_ratio < 0.5:
+        raise ValueError("final_test_ratio phai nam trong khoang (0, 0.5).")
+
+    final_test_rows = max(1, int(round(len(offline) * final_test_ratio)))
+    development_rows = len(offline) - final_test_rows
+    if development_rows <= 1:
+        raise ValueError("Training window qua ngan de tao Development va Final Test.")
+
+    development = offline.iloc[:development_rows].copy()
+    final_test = offline.iloc[development_rows:].copy()
+    return offline, production, development, final_test
+
+
+def _prepare_offline_features(
+    feature_df,
+    train_start_date=None,
+    train_end_date=None,
+    final_test_ratio=0.15,
+):
     prepared = prepare_feature_data(feature_df)
+    if train_start_date is not None and train_end_date is not None:
+        return _split_by_dynamic_window(
+            prepared,
+            train_start_date,
+            train_end_date,
+            final_test_ratio=final_test_ratio,
+        )
     offline, production = split_offline_and_production(prepared)
     development, final_test = split_development_and_final_test(
         prepared
@@ -248,6 +294,9 @@ def _run_tree_cross_validation(
     profile="autoregressive",
     hourly_df=None,
     audit_df=None,
+    train_start_date=None,
+    train_end_date=None,
+    final_test_ratio=0.15,
 ):
     if profile not in TREE_PROFILES:
         raise ValueError(
@@ -265,16 +314,23 @@ def _run_tree_cross_validation(
             audit_df,
             autoregressive_data[TIME_COLUMN],
         )
-        offline, production = split_offline_and_production(
-            training_data
-        )
-        development, final_test = (
-            split_development_and_final_test(training_data)
+        offline, production, development, final_test = (
+            _prepare_offline_features(
+                training_data,
+                train_start_date=train_start_date,
+                train_end_date=train_end_date,
+                final_test_ratio=final_test_ratio,
+            )
         )
         pipeline_builder = build_no_lag_training_pipeline
     else:
         offline, production, development, final_test = (
-            _prepare_offline_features(autoregressive_data)
+            _prepare_offline_features(
+                autoregressive_data,
+                train_start_date=train_start_date,
+                train_end_date=train_end_date,
+                final_test_ratio=final_test_ratio,
+            )
         )
         pipeline_builder = build_training_pipeline
 
@@ -574,9 +630,17 @@ def _run_neural_cross_validation(
     preprocessor_path,
     predictions_path,
     verbose,
+    train_start_date=None,
+    train_end_date=None,
+    final_test_ratio=0.15,
 ):
     offline, production, development, final_test = (
-        _prepare_offline_features(feature_df)
+        _prepare_offline_features(
+            feature_df,
+            train_start_date=train_start_date,
+            train_end_date=train_end_date,
+            final_test_ratio=final_test_ratio,
+        )
     )
     folds = create_expanding_window_folds(
         development,
@@ -593,11 +657,13 @@ def _run_neural_cross_validation(
         audit_df[TIME_COLUMN],
         errors="raise",
     )
+    offline_end = pd.Timestamp(offline[TIME_COLUMN].max())
+    offline_start = pd.Timestamp(offline[TIME_COLUMN].min())
     offline_hourly = hourly_df.loc[
-        hourly_times <= OFFLINE_END
+        (hourly_times >= offline_start) & (hourly_times <= offline_end)
     ].copy()
     offline_audit = audit_df.loc[
-        audit_times <= OFFLINE_END
+        (audit_times >= offline_start) & (audit_times <= offline_end)
     ].copy()
     source = prepare_sequence_source(
         offline_hourly,
@@ -698,6 +764,9 @@ def run_model_time_series_cross_validation(
     verbose=2,
     tree_profile="autoregressive",
     artifact_name=None,
+    train_start_date=None,
+    train_end_date=None,
+    final_test_ratio=0.15,
 ):
     """Chạy CV và Final Test cho đúng một model."""
     if model_name not in SUPPORTED_MODELS:
@@ -752,6 +821,9 @@ def run_model_time_series_cross_validation(
             preprocessor_path,
             predictions_path,
             verbose,
+            train_start_date=train_start_date,
+            train_end_date=train_end_date,
+            final_test_ratio=final_test_ratio,
         )
     else:
         result = _run_tree_cross_validation(
@@ -764,6 +836,40 @@ def run_model_time_series_cross_validation(
             profile=tree_profile,
             hourly_df=hourly_df,
             audit_df=audit_df,
+            train_start_date=train_start_date,
+            train_end_date=train_end_date,
+            final_test_ratio=final_test_ratio,
+        )
+
+    split_policy = {
+        "cv_method": "expanding_window",
+        "cv_splits": int(n_splits),
+        "shuffle": False,
+    }
+    if train_start_date is not None and train_end_date is not None:
+        split_policy.update(
+            {
+                "mode": "dynamic_training_window",
+                "train_start_date": pd.Timestamp(train_start_date).isoformat(),
+                "train_end_date": pd.Timestamp(train_end_date).isoformat(),
+                "development_start": result["development"]["start"],
+                "development_end": result["development"]["end"],
+                "final_test_start": result["final_test"]["start"],
+                "final_test_end": result["final_test"]["end"],
+                "production_start": result["production_reserved"]["start"],
+                "production_end": result["production_reserved"]["end"],
+                "final_test_ratio": float(final_test_ratio),
+            }
+        )
+    else:
+        split_policy.update(
+            {
+                "mode": "fixed_research_window",
+                "development_end": DEVELOPMENT_END.isoformat(),
+                "final_test_start": FINAL_TEST_START.isoformat(),
+                "offline_end": OFFLINE_END.isoformat(),
+                "production_start": PRODUCTION_START.isoformat(),
+            }
         )
 
     report = {
@@ -771,15 +877,7 @@ def run_model_time_series_cross_validation(
         "model": model_name,
         "variant": normalized_name,
         "selection_metric": "cross_validation_mean_MAE",
-        "split_policy": {
-            "development_end": "2015-09-30T23:00:00",
-            "final_test_start": "2015-10-01T00:00:00",
-            "offline_end": OFFLINE_END.isoformat(),
-            "production_start": PRODUCTION_START.isoformat(),
-            "cv_method": "expanding_window",
-            "cv_splits": int(n_splits),
-            "shuffle": False,
-        },
+        "split_policy": split_policy,
         "production_used_for_training": False,
         "random_state": int(random_state),
         "training_configuration": {

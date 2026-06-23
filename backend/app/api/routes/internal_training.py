@@ -14,8 +14,12 @@ from backend.app.services.model_registry import (
     register_training_result,
 )
 from scripts.training.run_region_pipeline import download_dataset
-from src.pipeline import run_pipeline
-from src.recurrent_region_pipeline import run_recurrent_benchmark
+from src.region_training_variants import (
+    normalize_selected_models,
+    select_best_candidate,
+    train_region_recurrent_candidate,
+    train_region_tree_lag_candidates,
+)
 
 
 router = APIRouter()
@@ -98,7 +102,9 @@ def _read_branch_result(training_run: TrainingRun, branch_name: str) -> dict:
 def _comparison_entry(model_info: dict) -> dict:
     return {
         "model_name": model_info.get("best_model_name"),
+        "model_family": model_info.get("model_family"),
         "validation_MAE": model_info.get("validation_MAE"),
+        "validation_MAE_std": model_info.get("validation_MAE_std"),
         "validation_RMSE": model_info.get("validation_RMSE"),
         "validation_MAPE": model_info.get("validation_MAPE"),
         "test_MAE": model_info.get("test_MAE"),
@@ -124,32 +130,24 @@ def execute_tree_training_branch(
 
     try:
         data_path = _ensure_dataset_downloaded(dataset, training_run)
-        model_dir = (
-            Path(config.get("artifact_root", "models/regions"))
-            / str(training_run.region_id)
-            / "models"
-        )
-        model_role = config.get("model_role", "candidate")
-        model_info = run_pipeline(
-            train_start_date=config["train_start_date"],
-            train_end_date=config["train_end_date"],
-            output_model_path=str(model_dir / f"{model_role}_model.pkl"),
-            output_info_path=str(model_dir / f"{model_role}_model_info.json"),
-            model_role=model_role,
-            random_state=int(config.get("random_state", 42)),
-            cv_splits=int(config.get("cv_splits", 3)),
+        branch_result = train_region_tree_lag_candidates(
+            selected_models=config.get("selected_models"),
             data_path=str(data_path),
+            artifact_root=config.get("artifact_root", "models/regions"),
             region_id=training_run.region_id,
             dataset_id=training_run.dataset_id,
-            artifact_root=config.get("artifact_root", "models/regions"),
+            training_run_id=training_run.id,
+            config=config,
         )
-        _write_branch_result(training_run, "tree", model_info)
+        _write_branch_result(training_run, "tree", branch_result)
         return {
             "training_run_id": str(training_run.id),
             "branch": "tree",
-            "best_model_name": model_info["best_model_name"],
-            "validation_MAE": model_info["validation_MAE"],
-            "test_MAE": model_info["test_MAE"],
+            "status": branch_result["status"],
+            "trained_models": [
+                item["best_model_name"]
+                for item in branch_result.get("candidates", [])
+            ],
         }
     except Exception as error:
         mark_training_run_failed(db, training_run.id, str(error))
@@ -177,31 +175,29 @@ def execute_recurrent_training_branch(
 
     try:
         data_path = _ensure_dataset_downloaded(dataset, training_run)
-        model_info = run_recurrent_benchmark(
+        branch_result = train_region_recurrent_candidate(
+            selected_models=config.get("selected_models"),
             model_name=normalized_model_name,
-            train_start_date=config["train_start_date"],
-            train_end_date=config["train_end_date"],
-            model_role=config.get("model_role", "candidate"),
-            random_state=int(config.get("random_state", 42)),
             data_path=str(data_path),
+            artifact_root=config.get("artifact_root", "models/regions"),
             region_id=training_run.region_id,
             dataset_id=training_run.dataset_id,
-            artifact_root=config.get("artifact_root", "models/regions"),
-            sequence_length=int(config.get("recurrent_sequence_length", 24)),
-            epochs=int(config.get("recurrent_epochs", 8)),
-            batch_size=int(config.get("recurrent_batch_size", 128)),
+            training_run_id=training_run.id,
+            config=config,
         )
         _write_branch_result(
             training_run,
             normalized_model_name.lower(),
-            model_info,
+            branch_result,
         )
         return {
             "training_run_id": str(training_run.id),
             "branch": normalized_model_name.lower(),
-            "best_model_name": model_info["best_model_name"],
-            "validation_MAE": model_info["validation_MAE"],
-            "test_MAE": model_info["test_MAE"],
+            "status": branch_result["status"],
+            "trained_models": [
+                item["best_model_name"]
+                for item in branch_result.get("candidates", [])
+            ],
         }
     except Exception as error:
         mark_training_run_failed(db, training_run.id, str(error))
@@ -217,6 +213,8 @@ def finalize_parallel_training_run(
     training_run, _dataset = _get_training_context(db, training_run_id)
 
     try:
+        config = training_run.configuration_json or {}
+        selected_models = normalize_selected_models(config.get("selected_models"))
         tree_info = _read_branch_result(training_run, "tree")
         branch_infos = [
             tree_info,
@@ -224,21 +222,35 @@ def finalize_parallel_training_run(
             _read_branch_result(training_run, "gru"),
         ]
 
-        model_comparison = [_comparison_entry(item) for item in branch_infos]
-        best_benchmark = min(
-            model_comparison,
-            key=lambda item: float(item["validation_MAE"]),
+        candidates = [
+            candidate
+            for branch in branch_infos
+            for candidate in branch.get("candidates", [])
+        ]
+        trained_model_names = {item["best_model_name"] for item in candidates}
+        missing = sorted(
+            set(selected_models) - trained_model_names
         )
-        tree_info["model_comparison"] = model_comparison
-        tree_info["best_benchmark_model"] = best_benchmark["model_name"]
-        tree_info["selected_model_policy"] = "best_inference_supported_model"
-        tree_info["neural_models_benchmark_only"] = True
+        if missing:
+            raise ApplicationError(
+                "training_selected_models_missing",
+                f"Selected models were not trained: {', '.join(missing)}.",
+                409,
+            )
+
+        best_info = select_best_candidate(candidates)
+        model_comparison = [_comparison_entry(item) for item in candidates]
+        best_info["model_comparison"] = model_comparison
+        best_info["selected_from_candidates"] = selected_models
+        best_info["selected_model_policy"] = (
+            "lowest_cross_validation_mean_MAE_then_CV_std"
+        )
 
         completed_run, model_version = register_training_result(
             db,
             training_run.region_id,
             training_run.dataset_id,
-            tree_info,
+            best_info,
             training_run_id=training_run.id,
         )
         return {
@@ -260,9 +272,17 @@ def execute_training_run(
 ):
     tree_response = execute_tree_training_branch(training_run_id, _token, db)
     # Backward-compatible endpoint for manual callers. It trains and registers
-    # the tree model only; Airflow uses the parallel branch endpoints above.
+    # the best selected tree model only; Airflow uses the parallel branch endpoints above.
     training_run, _dataset = _get_training_context(db, training_run_id)
-    tree_info = _read_branch_result(training_run, "tree")
+    tree_branch = _read_branch_result(training_run, "tree")
+    tree_info = select_best_candidate(tree_branch.get("candidates", []))
+    tree_info["model_comparison"] = [
+        _comparison_entry(item)
+        for item in tree_branch.get("candidates", [])
+    ]
+    tree_info["selected_model_policy"] = (
+        "lowest_cross_validation_mean_MAE_then_CV_std_tree_only"
+    )
     completed_run, model_version = register_training_result(
         db,
         training_run.region_id,

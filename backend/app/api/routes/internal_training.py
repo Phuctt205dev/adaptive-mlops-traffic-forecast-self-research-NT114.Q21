@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_settings
 from backend.app.core.errors import ApplicationError
-from backend.app.db.models import Dataset, TrainingRun, TrainingRunStatus
+from backend.app.db.models import Dataset, Region, TrainingRun, TrainingRunStatus
 from backend.app.db.session import get_db
 from backend.app.services.model_registry import (
     mark_training_run_failed,
@@ -16,6 +16,7 @@ from backend.app.services.model_registry import (
 )
 from scripts.training.run_region_pipeline import download_dataset
 from src.pipeline import run_pipeline
+from src.mlflow_regions import region_experiment_name
 from src.region_training_variants import (
     normalize_selected_models,
     select_best_candidate,
@@ -40,7 +41,10 @@ def _get_training_context(db: Session, training_run_id: uuid.UUID):
     dataset = db.get(Dataset, training_run.dataset_id)
     if dataset is None:
         raise ApplicationError("dataset_not_found", "Dataset was not found.", 404)
-    return training_run, dataset
+    region = db.get(Region, training_run.region_id)
+    if region is None:
+        raise ApplicationError("region_not_found", "Region was not found.", 404)
+    return training_run, dataset, region
 
 
 def _mark_training_started(db: Session, training_run: TrainingRun) -> None:
@@ -173,7 +177,7 @@ def execute_tree_training_branch(
     _token: None = Depends(require_internal_token),
     db: Session = Depends(get_db),
 ):
-    training_run, dataset = _get_training_context(db, training_run_id)
+    training_run, dataset, region = _get_training_context(db, training_run_id)
     _mark_training_started(db, training_run)
 
     config = training_run.configuration_json or {}
@@ -190,6 +194,7 @@ def execute_tree_training_branch(
             artifact_root=config.get("artifact_root", "models/regions"),
             region_id=training_run.region_id,
             dataset_id=training_run.dataset_id,
+            experiment_name=region_experiment_name(region.name, region.id),
         )
         model_info.update(
             {
@@ -227,7 +232,7 @@ def execute_recurrent_training_branch(
             400,
         )
 
-    training_run, dataset = _get_training_context(db, training_run_id)
+    training_run, dataset, region = _get_training_context(db, training_run_id)
     _mark_training_started(db, training_run)
     config = training_run.configuration_json or {}
 
@@ -260,6 +265,7 @@ def execute_recurrent_training_branch(
                 dataset_id=training_run.dataset_id,
                 training_run_id=training_run.id,
                 config=config,
+                region_name=region.name,
             )
         for candidate in branch_result.get("candidates", []):
             candidate["benchmark_only"] = False
@@ -281,7 +287,7 @@ def finalize_parallel_training_run(
     _token: None = Depends(require_internal_token),
     db: Session = Depends(get_db),
 ):
-    training_run, _dataset = _get_training_context(db, training_run_id)
+    training_run, _dataset, _region = _get_training_context(db, training_run_id)
 
     try:
         config = training_run.configuration_json or {}
@@ -372,7 +378,7 @@ def execute_training_run(
     tree_response = execute_tree_training_branch(training_run_id, _token, db)
     # Backward-compatible endpoint for manual callers. It trains and registers
     # the best selected tree model only; Airflow uses the parallel branch endpoints above.
-    training_run, _dataset = _get_training_context(db, training_run_id)
+    training_run, _dataset, _region = _get_training_context(db, training_run_id)
     tree_branch = _read_branch_result(training_run, "tree")
     tree_info = tree_branch.get("production_candidate")
     if tree_info is None:

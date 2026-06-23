@@ -7,6 +7,7 @@ import pandas as pd
 
 from src.time_series_cross_validation import run_model_time_series_cross_validation
 from src.time_series_features import create_time_series_features, save_time_series_features
+from src.mlflow_regions import region_experiment_name
 from src.time_series_preprocess import prepare_hourly_time_series, save_hourly_dataset
 
 
@@ -152,6 +153,8 @@ def _candidate_from_report(
         "saved_at": saved_at,
         "model_file": report["model_path"],
         "versioned_model_file": report["model_path"],
+        "mlflow_run_id": report.get("mlflow_run_id"),
+        "mlflow_model_uri": report.get("mlflow_model_uri"),
         "preprocessor_file": report.get("preprocessor_path"),
         "artifact_paths": report["artifact_paths"],
         "source_report": report["report_path"],
@@ -170,6 +173,7 @@ def _train_variant(
     training_run_id,
     config,
     data_path,
+    region_name=None,
 ):
     model_name = TREE_LAG_VARIANTS.get(variant) or RECURRENT_VARIANTS[variant]
     run_root = _run_root(artifact_root, region_id, training_run_id)
@@ -194,6 +198,7 @@ def _train_variant(
         train_start_date=config["train_start_date"],
         train_end_date=config["train_end_date"],
         final_test_ratio=float(config.get("final_test_ratio", 0.15)),
+        experiment_name=region_experiment_name(region_name, region_id),
     )
     return _candidate_from_report(
         report,
@@ -212,6 +217,7 @@ def train_region_tree_lag_candidates(
     dataset_id,
     training_run_id,
     config,
+    region_name=None,
 ):
     variants = selected_tree_variants(selected_models)
     if not variants:
@@ -233,6 +239,7 @@ def train_region_tree_lag_candidates(
             training_run_id,
             config,
             data_path,
+            region_name=region_name,
         )
         for variant in variants
     ]
@@ -257,6 +264,7 @@ def train_region_recurrent_candidate(
     dataset_id,
     training_run_id,
     config,
+    region_name=None,
 ):
     variant = selected_recurrent_variant(selected_models, model_name)
     if variant is None:
@@ -285,6 +293,7 @@ def train_region_recurrent_candidate(
                 training_run_id,
                 config,
                 data_path,
+                region_name=region_name,
             )
         ],
     }

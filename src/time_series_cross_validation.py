@@ -66,6 +66,18 @@ def _save_joblib(model, path):
     return os.path.getsize(path)
 
 
+def _get_run_id(run):
+    return getattr(getattr(run, "info", None), "run_id", None)
+
+
+def _load_mlflow():
+    try:
+        import mlflow
+    except ModuleNotFoundError:
+        return None
+    return mlflow
+
+
 def _metric_summary(fold_results):
     """Tính trung bình và độ lệch chuẩn để đo chất lượng lẫn độ ổn định."""
     metric_names = ("MAE", "RMSE", "MAPE", "WAPE", "R2")
@@ -771,6 +783,8 @@ def run_model_time_series_cross_validation(
     train_start_date=None,
     train_end_date=None,
     final_test_ratio=0.15,
+    mlflow_tracking_uri=None,
+    experiment_name=None,
 ):
     """Chạy CV và Final Test cho đúng một model."""
     if model_name not in SUPPORTED_MODELS:
@@ -930,4 +944,76 @@ def run_model_time_series_cross_validation(
     os.makedirs(result_directory, exist_ok=True)
     pd.DataFrame(fold_rows).to_csv(folds_path, index=False)
     _save_json(report, report_path)
+    mlflow = _load_mlflow()
+    if mlflow is not None:
+        tracking_uri = mlflow_tracking_uri or os.getenv("MLFLOW_TRACKING_URI")
+        if tracking_uri:
+            mlflow.set_tracking_uri(tracking_uri)
+        if experiment_name:
+            mlflow.set_experiment(experiment_name)
+        with mlflow.start_run(run_name=f"candidate_{model_name}") as run:
+            run_id = _get_run_id(run)
+            if run_id:
+                report["mlflow_run_id"] = run_id
+                report["mlflow_model_uri"] = f"runs:/{run_id}/{normalized_name}"
+            mlflow.set_tags(
+                {
+                    "model_name": model_name,
+                    "model_variant": normalized_name,
+                    "model_family": report["family"],
+                    "selection_metric": report["selection_metric"],
+                    "split_mode": report["split_policy"].get("mode", ""),
+                }
+            )
+            mlflow.log_params(
+                {
+                    "cv_splits": int(n_splits),
+                    "random_state": int(random_state),
+                    "sequence_length": int(sequence_length),
+                    "max_epochs": int(max_epochs) if model_name in RECURRENT_MODEL_NAMES else 0,
+                    "batch_size": int(batch_size) if model_name in RECURRENT_MODEL_NAMES else 0,
+                    "train_start_date": str(train_start_date or ""),
+                    "train_end_date": str(train_end_date or ""),
+                    "final_test_ratio": float(final_test_ratio),
+                }
+            )
+            mlflow.log_metrics(
+                {
+                    "cv_MAE": float(report["cv_metrics"]["MAE"]["mean"]),
+                    "cv_MAE_std": float(report["cv_metrics"]["MAE"]["std"]),
+                    "cv_RMSE": float(report["cv_metrics"]["RMSE"]["mean"]),
+                    "cv_MAPE": float(report["cv_metrics"]["MAPE"]["mean"]),
+                    "test_MAE": float(report["final_test_metrics"]["MAE"]),
+                    "test_RMSE": float(report["final_test_metrics"]["RMSE"]),
+                    "test_MAPE": float(report["final_test_metrics"]["MAPE"]),
+                }
+            )
+            for artifact_path in (
+                report_path,
+                folds_path,
+                predictions_path,
+            ):
+                if os.path.exists(artifact_path):
+                    mlflow.log_artifact(artifact_path)
+            if model_name in RECURRENT_MODEL_NAMES:
+                if os.path.exists(preprocessor_path):
+                    mlflow.log_artifact(preprocessor_path)
+                try:
+                    import mlflow.keras
+                    from tensorflow import keras
+
+                    model = keras.models.load_model(model_path)
+                    mlflow.keras.log_model(model, artifact_path=normalized_name)
+                except Exception as exc:
+                    print(f"MLflow keras model logging skipped: {exc}")
+            else:
+                try:
+                    import mlflow.sklearn
+
+                    model = joblib.load(model_path)
+                    mlflow.sklearn.log_model(model, artifact_path=normalized_name)
+                except Exception as exc:
+                    print(f"MLflow sklearn model logging skipped: {exc}")
+        if "mlflow_run_id" in report:
+            _save_json(report, report_path)
     return report

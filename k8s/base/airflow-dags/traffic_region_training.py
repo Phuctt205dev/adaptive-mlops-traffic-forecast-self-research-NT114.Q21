@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 
 import requests
+from airflow.exceptions import AirflowSkipException
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.utils.trigger_rule import TriggerRule
@@ -66,6 +67,10 @@ def execute_tree_training(**context):
 
 def execute_recurrent_training(model_name, **context):
     conf = context["dag_run"].conf or {}
+    selected_models = {str(model).strip().lower() for model in conf.get("selected_models") or []}
+    normalized_model = str(model_name).strip().lower()
+    if normalized_model not in selected_models:
+        raise AirflowSkipException(f"{model_name} was not selected for this training run.")
     return _post_internal_training(
         f"/training-runs/{conf['training_run_id']}/execute/recurrent/{model_name}"
     )
@@ -112,7 +117,7 @@ with DAG(
     finalize_region_training = PythonOperator(
         task_id="finalize_region_training",
         python_callable=finalize_training,
-        trigger_rule=TriggerRule.ALL_SUCCESS,
+        trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS,
     )
 
     validate_training_conf >> [train_tree_models, train_lstm, train_gru]

@@ -19,6 +19,7 @@ from src.pipeline import run_pipeline
 from src.region_training_variants import (
     normalize_selected_models,
     select_best_candidate,
+    selected_recurrent_variant,
     train_region_recurrent_candidate,
 )
 
@@ -97,6 +98,18 @@ def _read_branch_result(training_run: TrainingRun, branch_name: str) -> dict:
             f"Training branch result was not found: {branch_name}.",
             409,
         )
+    with open(path, encoding="utf-8") as file:
+        return json.load(file)
+
+
+def _read_optional_branch_result(training_run: TrainingRun, branch_name: str) -> dict:
+    path = _branch_results_dir(training_run) / f"{branch_name}.json"
+    if not path.exists():
+        return {
+            "branch": branch_name,
+            "status": "skipped",
+            "candidates": [],
+        }
     with open(path, encoding="utf-8") as file:
         return json.load(file)
 
@@ -192,6 +205,28 @@ def execute_recurrent_training_branch(
     config = training_run.configuration_json or {}
 
     try:
+        selected_variant = selected_recurrent_variant(
+            config.get("selected_models"),
+            normalized_model_name,
+        )
+        if selected_variant is None:
+            branch_result = {
+                "branch": normalized_model_name.lower(),
+                "status": "skipped",
+                "candidates": [],
+            }
+            _write_branch_result(
+                training_run,
+                normalized_model_name.lower(),
+                branch_result,
+            )
+            return {
+                "training_run_id": str(training_run.id),
+                "branch": normalized_model_name.lower(),
+                "status": "skipped",
+                "trained_models": [],
+            }
+
         data_path = _ensure_dataset_downloaded(dataset, training_run)
         with _RECURRENT_TRAINING_LOCK:
             branch_result = train_region_recurrent_candidate(
@@ -240,8 +275,8 @@ def finalize_parallel_training_run(
         tree_info = _read_branch_result(training_run, "tree")
         branch_infos = [
             tree_info,
-            _read_branch_result(training_run, "lstm"),
-            _read_branch_result(training_run, "gru"),
+            _read_optional_branch_result(training_run, "lstm"),
+            _read_optional_branch_result(training_run, "gru"),
         ]
 
         candidates = [

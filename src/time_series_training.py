@@ -58,6 +58,7 @@ def prepare_feature_data(dataframe):
         result[TIME_COLUMN],
         errors="raise",
     )
+    result = result.replace({pd.NA: np.nan})
     result = result.sort_values(TIME_COLUMN).reset_index(drop=True)
 
     if result[TIME_COLUMN].duplicated().any():

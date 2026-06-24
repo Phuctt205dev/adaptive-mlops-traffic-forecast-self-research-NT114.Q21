@@ -10,6 +10,7 @@ configMapGenerator:
     namespace: traffic-mlops
     files:
       - traffic_region_training.py=../../base/airflow-dags/traffic_region_training.py
+      - traffic_region_drift_monitoring.py=../../base/airflow-dags/traffic_region_drift_monitoring.py
 
 generatorOptions:
   disableNameSuffixHash: true

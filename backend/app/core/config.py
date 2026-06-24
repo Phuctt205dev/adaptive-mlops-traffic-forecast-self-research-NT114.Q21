@@ -32,6 +32,17 @@ class Settings(BaseSettings):
     airflow_admin_password: str = "admin"
     training_dag_id: str = "traffic_region_training"
     internal_training_token: str = "local-internal-training-token"
+    drift_window_days: int = 7
+    drift_reference_days: int = 30
+    drift_min_window_rows: int = 168
+    drift_psi_threshold: float = 0.2
+    drift_js_threshold: float = 0.15
+    drift_min_drifted_features: int = 2
+    drift_auto_retrain: bool = True
+    drift_auto_promote: bool = False
+    drift_retrain_window_months: int = 24
+    drift_retrain_cooldown_hours: int = 72
+    drift_max_regions_per_run: int = 1
     auth_secret_key: str = "change-me-in-production"
     access_token_expire_minutes: int = 60 * 24
     auth_rate_limit_per_minute: int = 20

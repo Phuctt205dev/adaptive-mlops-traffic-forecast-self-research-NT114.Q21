@@ -121,8 +121,7 @@ spec:
               value: http://traffic-api:8000
           volumeMounts:
             - name: dags
-              mountPath: /opt/airflow/dags/traffic_region_training.py
-              subPath: traffic_region_training.py
+              mountPath: /opt/airflow/dags
             - name: logs
               mountPath: /opt/airflow/logs
           readinessProbe:
@@ -190,8 +189,7 @@ spec:
               value: http://traffic-api:8000
           volumeMounts:
             - name: dags
-              mountPath: /opt/airflow/dags/traffic_region_training.py
-              subPath: traffic_region_training.py
+              mountPath: /opt/airflow/dags
             - name: logs
               mountPath: /opt/airflow/logs
       volumes:

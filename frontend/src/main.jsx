@@ -16,17 +16,17 @@ const pages = [
 const trainingModelOptions = [
   {
     id: "random_forest_lag",
-    label: "Random Forest + lag",
+    label: "Random Forest",
     group: "Tree models",
   },
   {
     id: "xgboost_lag",
-    label: "XGBoost + lag",
+    label: "XGBoost",
     group: "Tree models",
   },
   {
     id: "lightgbm_lag",
-    label: "LightGBM + lag",
+    label: "LightGBM",
     group: "Tree models",
   },
   {

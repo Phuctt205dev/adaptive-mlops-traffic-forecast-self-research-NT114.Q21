@@ -15,11 +15,12 @@ from backend.app.services.model_registry import (
     register_training_result,
 )
 from scripts.training.run_region_pipeline import download_dataset
+from src.pipeline import run_pipeline
+from src.mlflow_regions import region_experiment_name
 from src.region_training_variants import (
     normalize_selected_models,
     select_best_candidate,
     selected_recurrent_variant,
-    train_region_tree_lag_candidates,
     train_region_recurrent_candidate,
 )
 
@@ -183,20 +184,32 @@ def execute_tree_training_branch(
 
     try:
         data_path = _ensure_dataset_downloaded(dataset, training_run)
-        branch_result = train_region_tree_lag_candidates(
-            config.get("selected_models"),
+        model_info = run_pipeline(
+            train_start_date=config["train_start_date"],
+            train_end_date=config["train_end_date"],
+            model_role=config.get("model_role", "candidate"),
+            random_state=int(config.get("random_state", 42)),
+            cv_splits=int(config.get("cv_splits", 3)),
             data_path=str(data_path),
             artifact_root=config.get("artifact_root", "models/regions"),
             region_id=training_run.region_id,
             dataset_id=training_run.dataset_id,
-            training_run_id=training_run.id,
-            config=config,
-            region_name=region.name,
+            experiment_name=region_experiment_name(region.name, region.id),
         )
-        if branch_result.get("candidates"):
-            branch_result["production_candidate"] = select_best_candidate(
-                branch_result["candidates"]
-            )
+        model_info.update(
+            {
+                "model_family": "legacy_sklearn",
+                "benchmark_only": False,
+                "inference_supported": True,
+                "selection_metric": "cross_validation_mean_MAE",
+            }
+        )
+        branch_result = {
+            "branch": "tree",
+            "status": "completed",
+            "production_candidate": model_info,
+            "candidates": [model_info],
+        }
         _write_branch_result(training_run, "tree", branch_result)
         return _branch_xcom_response(training_run, branch_result)
     except Exception as error:

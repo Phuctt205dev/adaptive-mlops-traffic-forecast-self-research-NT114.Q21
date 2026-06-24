@@ -7,6 +7,7 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 
 revision: str = "20260624_01"
@@ -15,13 +16,22 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-drift_check_status = sa.Enum(
+drift_check_status = postgresql.ENUM(
     "stable",
     "drift_detected",
     "retrain_triggered",
     "skipped",
     "failed",
     name="drift_check_status",
+)
+drift_check_status_column = postgresql.ENUM(
+    "stable",
+    "drift_detected",
+    "retrain_triggered",
+    "skipped",
+    "failed",
+    name="drift_check_status",
+    create_type=False,
 )
 
 
@@ -37,7 +47,7 @@ def upgrade() -> None:
         sa.Column("reference_end_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("current_start_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("current_end_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("status", drift_check_status, nullable=False),
+        sa.Column("status", drift_check_status_column, nullable=False),
         sa.Column("drift_detected", sa.Boolean(), nullable=False),
         sa.Column("drifted_feature_count", sa.Integer(), nullable=False),
         sa.Column("feature_count", sa.Integer(), nullable=False),

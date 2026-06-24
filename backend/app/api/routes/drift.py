@@ -1,15 +1,13 @@
-import uuid
 from datetime import datetime
+import uuid
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from backend.app.api.dependencies import require_admin
-from backend.app.core.config import get_settings
 from backend.app.core.errors import ApplicationError
-from backend.app.db.models import Region
 from backend.app.db.session import get_db
-from backend.app.services import airflow_client, drift_monitoring
+from backend.app.services import drift_monitoring
 
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -39,28 +37,13 @@ def run_region_drift_check(
     current_end: datetime | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    if db.get(Region, region_id) is None:
-        raise ApplicationError("drift_region_invalid", "Region was not found.", 404)
-
-    settings = get_settings()
-    dag_run_id = f"manual-drift-{region_id}-{uuid.uuid4()}"
-    conf = {
-        "region_id": str(region_id),
-        "auto_retrain": auto_retrain,
-        "force_retrain": force_retrain,
-        "trigger_source": "admin_ui",
-    }
-    if current_end:
-        conf["current_end"] = current_end.isoformat()
-
-    airflow_response = airflow_client.trigger_dag(
-        settings.drift_dag_id,
-        conf,
-        dag_run_id=dag_run_id,
-    )
-    return {
-        "dag_id": settings.drift_dag_id,
-        "dag_run_id": dag_run_id,
-        "conf": conf,
-        "airflow_response": airflow_response,
-    }
+    try:
+        return drift_monitoring.check_drift_for_region(
+            db,
+            region_id,
+            auto_retrain=auto_retrain,
+            force_retrain=force_retrain,
+            current_end_at=current_end,
+        )
+    except ValueError as error:
+        raise ApplicationError("drift_region_invalid", str(error), 404) from error

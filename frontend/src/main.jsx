@@ -52,10 +52,6 @@ function isoToDatetimeLocalValue(value) {
   return value.slice(0, 16);
 }
 
-function datetimeMinuteKey(value) {
-  return value ? String(value).replace(" ", "T").slice(0, 16) : "";
-}
-
 function localDatetimeToIsoWithOffset(value) {
   const date = new Date(value);
   const offsetMinutes = -date.getTimezoneOffset();
@@ -83,12 +79,6 @@ function clampDate(date, minValue, maxValue) {
 function toDatetimeLocalFromDate(date) {
   const pad = (value) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function wait(ms) {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
 }
 
 function toDateOnly(value) {
@@ -1382,6 +1372,7 @@ function DriftMonitor({ selectedRegion }) {
   const [checking, setChecking] = useState(false);
   const [autoRetrain, setAutoRetrain] = useState(false);
   const [currentEnd, setCurrentEnd] = useState(() => toDatetimeLocalFromDate(new Date()));
+  const [productionWindow, setProductionWindow] = useState(null);
   const [pendingWindowChange, setPendingWindowChange] = useState(false);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("info");
@@ -1412,19 +1403,40 @@ function DriftMonitor({ selectedRegion }) {
     }
   }
 
+  async function loadProductionWindow() {
+    if (!selectedRegion?.id || !selectedRegion.active_model_version_id) {
+      setProductionWindow(null);
+      return null;
+    }
+    try {
+      const window = await api.predictionWindow(selectedRegion.id);
+      setProductionWindow(window);
+      if (window.production_end_at) {
+        setCurrentEnd(isoToDatetimeLocalValue(window.production_end_at));
+        setPendingWindowChange(true);
+      }
+      return window;
+    } catch (err) {
+      setProductionWindow(null);
+      setMessageType("error");
+      setMessage(err.message);
+      return null;
+    }
+  }
+
   useEffect(() => {
     refresh({ syncWindow: true });
-  }, [selectedRegion?.id]);
+    loadProductionWindow();
+  }, [selectedRegion?.id, selectedRegion?.active_model_version_id]);
 
   async function runCheck(forceRetrain = false) {
     if (!selectedRegion?.id) return;
     const requestedCurrentEnd = currentEnd;
-    const requestedCurrentEndKey = datetimeMinuteKey(requestedCurrentEnd);
     setChecking(true);
     setMessage("");
     setPendingWindowChange(true);
     try {
-      await api.runDriftCheck(
+      const result = await api.runDriftCheck(
         selectedRegion.id,
         {
           autoRetrain: forceRetrain ? true : autoRetrain,
@@ -1432,25 +1444,15 @@ function DriftMonitor({ selectedRegion }) {
           currentEnd: requestedCurrentEnd || undefined,
         },
       );
-      for (let attempt = 0; attempt < 8; attempt += 1) {
-        await wait(3000);
-        const data = await api.driftChecks(selectedRegion.id);
-        const items = data.items || [];
-        setChecks(items);
-        const matchingCheck = items.find(
-          (check) => datetimeMinuteKey(check.current_end_at) === requestedCurrentEndKey,
-        );
-        if (matchingCheck) {
-          setLatest(matchingCheck);
-          if (matchingCheck.current_end_at) {
-            setCurrentEnd(isoToDatetimeLocalValue(matchingCheck.current_end_at));
-          }
-          setPendingWindowChange(false);
-          return;
+      const nextLatest = result.checks?.[0] || null;
+      if (nextLatest) {
+        setLatest(nextLatest);
+        if (nextLatest.current_end_at) {
+          setCurrentEnd(isoToDatetimeLocalValue(nextLatest.current_end_at));
         }
+        setPendingWindowChange(false);
       }
-      setMessageType("info");
-      setMessage("Drift check is still running. Results will update after Airflow finishes.");
+      await refresh();
     } catch (err) {
       setMessageType("error");
       setMessage(err.message);
@@ -1520,6 +1522,8 @@ function DriftMonitor({ selectedRegion }) {
             <input
               className="drift-window-input"
               type="datetime-local"
+              min={isoToDatetimeLocalValue(productionWindow?.production_start_at)}
+              max={isoToDatetimeLocalValue(productionWindow?.production_end_at)}
               value={currentEnd}
               onChange={(event) => {
                 setCurrentEnd(event.target.value);

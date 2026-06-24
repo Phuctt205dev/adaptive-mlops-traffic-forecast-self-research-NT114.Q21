@@ -21,6 +21,7 @@ from backend.app.db.models import (
     TrainingRunStatus,
 )
 from backend.app.services import airflow_client, model_registry
+from backend.app.services.predictions import _production_frame
 from backend.app.services.storage import get_s3_client
 from src.feature_drift import calculate_feature_drift
 
@@ -227,7 +228,7 @@ def _check_region(
         train_end = pd.Timestamp(train_end_date)
         reference_end = train_end
         reference_start = reference_end - pd.Timedelta(days=settings.drift_reference_days)
-        production = frame[frame["date_time"] >= train_end].copy()
+        production = _production_frame(training_run, dataset)
         if production.empty:
             return _create_check(
                 db,
@@ -239,23 +240,31 @@ def _check_region(
             )
 
         current_end = _current_window_end(current_end_at)
-        if current_end < train_end:
+        production_start = production["date_time"].min()
+        production_end = production["date_time"].max()
+        if current_end < production_start or current_end > production_end:
+            current_start = current_end - pd.Timedelta(days=settings.drift_window_days)
             return _create_check(
                 db,
                 region_id=region.id,
                 dataset_id=dataset.id,
                 model_version_id=model_version.id,
+                current_start_at=current_start.to_pydatetime(),
+                current_end_at=current_end.to_pydatetime(),
                 status=DriftCheckStatus.SKIPPED,
-                error_message="Current time is before active model train_end_date.",
+                error_message=(
+                    "Current drift window end is outside production data "
+                    f"from {production_start.isoformat()} to {production_end.isoformat()}."
+                ),
             )
         current_start = current_end - pd.Timedelta(days=settings.drift_window_days)
         reference = frame[
             (frame["date_time"] >= reference_start)
             & (frame["date_time"] < reference_end)
         ].copy()
-        current = frame[
-            (frame["date_time"] > current_start)
-            & (frame["date_time"] <= current_end)
+        current = production[
+            (production["date_time"] > current_start)
+            & (production["date_time"] <= current_end)
         ].copy()
 
         if len(reference) < settings.drift_min_window_rows:

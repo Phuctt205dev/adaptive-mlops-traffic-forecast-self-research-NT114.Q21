@@ -230,7 +230,16 @@ def _check_region(
                 error_message="No production data exists after active model train_end_date.",
             )
 
-        current_end = production["date_time"].max()
+        current_end = pd.Timestamp.now().floor("h").tz_localize(None)
+        if current_end < train_end:
+            return _create_check(
+                db,
+                region_id=region.id,
+                dataset_id=dataset.id,
+                model_version_id=model_version.id,
+                status=DriftCheckStatus.SKIPPED,
+                error_message="Current time is before active model train_end_date.",
+            )
         current_start = current_end - pd.Timedelta(days=settings.drift_window_days)
         reference = frame[
             (frame["date_time"] >= reference_start)

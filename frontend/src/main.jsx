@@ -1477,7 +1477,7 @@ function DriftMonitor({ selectedRegion }) {
         )}
         {latest && (
           <div className="alert alert-info">
-            Current window uses the latest 7 days after the active model train_end_date in the uploaded production partition. Drift retrain uses the 24 months ending at current_end.
+            Current window uses the latest 7 days up to the system time when the check runs. Drift retrain uses the 24 months ending at current_end.
           </div>
         )}
         {latest?.drift_detected && !latest?.triggered_training_run_id && (

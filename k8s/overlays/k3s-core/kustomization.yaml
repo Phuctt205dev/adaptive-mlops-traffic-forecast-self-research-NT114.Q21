@@ -17,7 +17,7 @@ generatorOptions:
 images:
   - name: traffic-api
     newName: docker.io/tannampham23/traffic-api
-    newTag: v21
+    newTag: v22
   - name: traffic-mlflow
     newName: docker.io/tannampham23/traffic-mlflow
     newTag: v1

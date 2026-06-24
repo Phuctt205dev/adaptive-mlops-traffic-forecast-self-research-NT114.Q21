@@ -81,6 +81,12 @@ function toDatetimeLocalFromDate(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function wait(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 function toDateOnly(value) {
   if (!value) return "";
   const date = new Date(value);
@@ -1379,7 +1385,7 @@ function DriftMonitor({ selectedRegion }) {
     if (!selectedRegion?.id) {
       setChecks([]);
       setLatest(null);
-      return;
+      return null;
     }
     setLoading(true);
     setMessage("");
@@ -1387,9 +1393,11 @@ function DriftMonitor({ selectedRegion }) {
       const data = await api.driftChecks(selectedRegion.id);
       setChecks(data.items || []);
       setLatest(data.latest || null);
+      return data;
     } catch (err) {
       setMessageType("error");
       setMessage(err.message);
+      return null;
     } finally {
       setLoading(false);
     }
@@ -1402,10 +1410,11 @@ function DriftMonitor({ selectedRegion }) {
 
   async function runCheck(forceRetrain = false) {
     if (!selectedRegion?.id) return;
+    const previousLatestId = latest?.id;
     setChecking(true);
     setMessage("");
     try {
-      const result = await api.runDriftCheck(
+      await api.runDriftCheck(
         selectedRegion.id,
         {
           autoRetrain: forceRetrain ? true : autoRetrain,
@@ -1413,10 +1422,13 @@ function DriftMonitor({ selectedRegion }) {
           currentEnd: currentEnd || undefined,
         },
       );
-      setMessageType("info");
-      setMessage(`Triggered Airflow run ${result.dag_run_id}`);
-      window.setTimeout(() => refresh().catch(() => {}), 6000);
-      window.setTimeout(() => refresh().catch(() => {}), 16000);
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        await wait(3000);
+        const data = await refresh();
+        if (data?.latest?.id && data.latest.id !== previousLatestId) {
+          return;
+        }
+      }
     } catch (err) {
       setMessageType("error");
       setMessage(err.message);
@@ -1449,27 +1461,19 @@ function DriftMonitor({ selectedRegion }) {
               />
               Auto retrain
             </label>
-            <button disabled={!selectedRegion?.id || checking} onClick={() => runCheck(false)}>
-              {checking ? "Checking..." : "Check now"}
+            <button
+              className={checking ? "button-loading" : ""}
+              disabled={!selectedRegion?.id || checking}
+              onClick={() => runCheck(false)}
+            >
+              {checking && <span className="button-spinner" />}
+              {checking ? "Checking" : "Check now"}
             </button>
           </div>
         )}
       >
         {message && <div className={`alert alert-${messageType}`}>{message}</div>}
         {loading && <div className="alert alert-info">Loading drift checks...</div>}
-        <div className="drift-window-controls">
-          <label>
-            Current end
-            <input
-              type="datetime-local"
-              value={currentEnd}
-              onChange={(event) => setCurrentEnd(event.target.value)}
-            />
-          </label>
-          <div className="readonly-field">
-            Current start: {currentStartPreview}
-          </div>
-        </div>
         <div className="drift-summary">
           <div className={`drift-status-card drift-status-${latest?.status || "none"}`}>
             <span>Status</span>
@@ -1485,7 +1489,13 @@ function DriftMonitor({ selectedRegion }) {
           </div>
           <div>
             <span>Current window</span>
-            <strong>{latest ? `${formatDate(latest.current_start_at)} - ${formatDate(latest.current_end_at)}` : "-"}</strong>
+            <strong>{currentEnd ? `${currentStartPreview} - ${formatDate(currentEnd)}` : "-"}</strong>
+            <input
+              className="drift-window-input"
+              type="datetime-local"
+              value={currentEnd}
+              onChange={(event) => setCurrentEnd(event.target.value)}
+            />
           </div>
         </div>
         {latest?.error_message && <div className="alert alert-error">{latest.error_message}</div>}

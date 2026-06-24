@@ -1440,14 +1440,6 @@ td {
   margin-top: 12px;
 }
 
-.drift-window-controls {
-  display: grid;
-  grid-template-columns: minmax(220px, 320px) minmax(260px, 1fr);
-  gap: 10px;
-  align-items: end;
-  margin-top: 12px;
-}
-
 .drift-summary > div {
   display: grid;
   gap: 5px;
@@ -1468,6 +1460,12 @@ td {
   color: #111827;
   font-size: 15px;
   line-height: 1.3;
+}
+
+.drift-window-input {
+  min-height: 34px;
+  padding: 7px 9px;
+  font-size: 13px;
 }
 
 .drift-status-card strong {

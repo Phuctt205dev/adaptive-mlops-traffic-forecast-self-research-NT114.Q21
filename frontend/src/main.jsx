@@ -1371,6 +1371,7 @@ function DriftMonitor({ selectedRegion }) {
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
   const [autoRetrain, setAutoRetrain] = useState(false);
+  const [currentEnd, setCurrentEnd] = useState(() => toDatetimeLocalFromDate(new Date()));
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("info");
 
@@ -1396,6 +1397,7 @@ function DriftMonitor({ selectedRegion }) {
 
   useEffect(() => {
     refresh();
+    setCurrentEnd(toDatetimeLocalFromDate(new Date()));
   }, [selectedRegion?.id]);
 
   async function runCheck(forceRetrain = false) {
@@ -1405,14 +1407,16 @@ function DriftMonitor({ selectedRegion }) {
     try {
       const result = await api.runDriftCheck(
         selectedRegion.id,
-        forceRetrain ? true : autoRetrain,
-        forceRetrain,
+        {
+          autoRetrain: forceRetrain ? true : autoRetrain,
+          forceRetrain,
+          currentEnd: currentEnd || undefined,
+        },
       );
-      const nextLatest = result.checks?.[0] || null;
-      setLatest(nextLatest);
-      await refresh();
-      setMessageType(nextLatest?.drift_detected ? "error" : "success");
-      setMessage(nextLatest ? `Check finished: ${driftStatusText(nextLatest)}` : "Check finished.");
+      setMessageType("info");
+      setMessage(`Triggered Airflow run ${result.dag_run_id}`);
+      window.setTimeout(() => refresh().catch(() => {}), 6000);
+      window.setTimeout(() => refresh().catch(() => {}), 16000);
     } catch (err) {
       setMessageType("error");
       setMessage(err.message);
@@ -1423,6 +1427,13 @@ function DriftMonitor({ selectedRegion }) {
 
   const featureRows = driftFeatureRows(latest);
   const summary = latest?.feature_drift_json?.summary || {};
+  const currentStartPreview = useMemo(() => {
+    if (!currentEnd) return "-";
+    const date = new Date(currentEnd);
+    if (Number.isNaN(date.getTime())) return "-";
+    date.setDate(date.getDate() - 7);
+    return formatDate(date.toISOString());
+  }, [currentEnd]);
 
   return (
     <div className="grid drift-layout">
@@ -1446,6 +1457,19 @@ function DriftMonitor({ selectedRegion }) {
       >
         {message && <div className={`alert alert-${messageType}`}>{message}</div>}
         {loading && <div className="alert alert-info">Loading drift checks...</div>}
+        <div className="drift-window-controls">
+          <label>
+            Current end
+            <input
+              type="datetime-local"
+              value={currentEnd}
+              onChange={(event) => setCurrentEnd(event.target.value)}
+            />
+          </label>
+          <div className="readonly-field">
+            Current start: {currentStartPreview}
+          </div>
+        </div>
         <div className="drift-summary">
           <div className={`drift-status-card drift-status-${latest?.status || "none"}`}>
             <span>Status</span>
@@ -1473,11 +1497,6 @@ function DriftMonitor({ selectedRegion }) {
         {latest?.feature_drift_json?.retrain_skip_reason && (
           <div className="alert alert-info">
             Retrain skipped: {latest.feature_drift_json.retrain_skip_reason}
-          </div>
-        )}
-        {latest && (
-          <div className="alert alert-info">
-            Current window uses the latest 7 days up to the system time when the check runs. Drift retrain uses the 24 months ending at current_end.
           </div>
         )}
         {latest?.drift_detected && !latest?.triggered_training_run_id && (

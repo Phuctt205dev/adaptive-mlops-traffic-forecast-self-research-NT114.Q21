@@ -1440,6 +1440,14 @@ td {
   margin-top: 12px;
 }
 
+.drift-window-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(260px, 1fr);
+  gap: 10px;
+  align-items: end;
+  margin-top: 12px;
+}
+
 .drift-summary > div {
   display: grid;
   gap: 5px;

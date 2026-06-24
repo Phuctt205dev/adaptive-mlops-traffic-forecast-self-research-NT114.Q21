@@ -50,6 +50,13 @@ def _download_dataset_frame(dataset: Dataset) -> pd.DataFrame:
     return frame.sort_values("date_time")
 
 
+def _current_window_end(current_end_at=None) -> pd.Timestamp:
+    timestamp = pd.Timestamp(current_end_at) if current_end_at else pd.Timestamp.now()
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.tz_convert(None)
+    return timestamp.floor("h")
+
+
 def _active_context(db: Session, region: Region) -> tuple[ModelVersion, TrainingRun, Dataset]:
     if region.active_model_version_id is None:
         raise ValueError("Region does not have an active model.")
@@ -206,6 +213,7 @@ def _check_region(
     *,
     auto_retrain: bool,
     force_retrain: bool = False,
+    current_end_at=None,
 ) -> DriftCheck:
     settings = get_settings()
     try:
@@ -230,7 +238,7 @@ def _check_region(
                 error_message="No production data exists after active model train_end_date.",
             )
 
-        current_end = pd.Timestamp.now().floor("h").tz_localize(None)
+        current_end = _current_window_end(current_end_at)
         if current_end < train_end:
             return _create_check(
                 db,
@@ -413,6 +421,7 @@ def check_drift_for_region(
     *,
     auto_retrain: bool = True,
     force_retrain: bool = False,
+    current_end_at=None,
 ) -> dict:
     region = db.get(Region, region_id)
     if region is None:
@@ -422,6 +431,7 @@ def check_drift_for_region(
         region,
         auto_retrain=auto_retrain,
         force_retrain=force_retrain,
+        current_end_at=current_end_at,
     )
     return {
         "checked_regions": 1,
@@ -436,11 +446,20 @@ def check_drift_for_regions(
     *,
     auto_retrain: bool = True,
     max_regions: int | None = None,
+    current_end_at=None,
 ) -> dict:
     settings = get_settings()
     limit = max_regions or settings.drift_max_regions_per_run
     regions = _regions_for_drift_check(db, limit)
-    checks = [_check_region(db, region, auto_retrain=auto_retrain) for region in regions]
+    checks = [
+        _check_region(
+            db,
+            region,
+            auto_retrain=auto_retrain,
+            current_end_at=current_end_at,
+        )
+        for region in regions
+    ]
     return {
         "checked_regions": len(checks),
         "drift_detected": sum(1 for check in checks if check.drift_detected),

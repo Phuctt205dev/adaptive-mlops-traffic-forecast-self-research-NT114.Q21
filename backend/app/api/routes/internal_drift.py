@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, Query
 from sqlalchemy.orm import Session
@@ -21,6 +22,7 @@ def require_internal_token(x_internal_token: str | None = Header(default=None)) 
 def check_drift(
     auto_retrain: bool = Query(default=True),
     max_regions: int | None = Query(default=None, ge=1),
+    current_end: datetime | None = Query(default=None),
     _token: None = Depends(require_internal_token),
     db: Session = Depends(get_db),
 ):
@@ -28,6 +30,7 @@ def check_drift(
         db,
         auto_retrain=auto_retrain,
         max_regions=max_regions,
+        current_end_at=current_end,
     )
 
 
@@ -35,6 +38,8 @@ def check_drift(
 def check_region_drift(
     region_id: uuid.UUID,
     auto_retrain: bool = Query(default=True),
+    force_retrain: bool = Query(default=False),
+    current_end: datetime | None = Query(default=None),
     _token: None = Depends(require_internal_token),
     db: Session = Depends(get_db),
 ):
@@ -43,6 +48,8 @@ def check_region_drift(
             db,
             region_id,
             auto_retrain=auto_retrain,
+            force_retrain=force_retrain,
+            current_end_at=current_end,
         )
     except ValueError as error:
         raise ApplicationError("region_not_found", str(error), 404) from error

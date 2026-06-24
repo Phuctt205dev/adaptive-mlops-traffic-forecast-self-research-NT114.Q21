@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     airflow_admin_username: str = "admin"
     airflow_admin_password: str = "admin"
     training_dag_id: str = "traffic_region_training"
+    drift_dag_id: str = "traffic_region_drift_monitoring"
     internal_training_token: str = "local-internal-training-token"
     drift_window_days: int = 7
     drift_reference_days: int = 30

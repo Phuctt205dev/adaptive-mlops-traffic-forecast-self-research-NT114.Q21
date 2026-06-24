@@ -52,6 +52,10 @@ function isoToDatetimeLocalValue(value) {
   return value.slice(0, 16);
 }
 
+function datetimeMinuteKey(value) {
+  return value ? String(value).replace(" ", "T").slice(0, 16) : "";
+}
+
 function localDatetimeToIsoWithOffset(value) {
   const date = new Date(value);
   const offsetMinutes = -date.getTimezoneOffset();
@@ -1414,24 +1418,32 @@ function DriftMonitor({ selectedRegion }) {
 
   async function runCheck(forceRetrain = false) {
     if (!selectedRegion?.id) return;
-    const previousLatestId = latest?.id;
+    const requestedCurrentEnd = currentEnd;
+    const requestedCurrentEndKey = datetimeMinuteKey(requestedCurrentEnd);
     setChecking(true);
     setMessage("");
+    setPendingWindowChange(true);
     try {
       await api.runDriftCheck(
         selectedRegion.id,
         {
           autoRetrain: forceRetrain ? true : autoRetrain,
           forceRetrain,
-          currentEnd: currentEnd || undefined,
+          currentEnd: requestedCurrentEnd || undefined,
         },
       );
       for (let attempt = 0; attempt < 8; attempt += 1) {
         await wait(3000);
-        const data = await refresh();
-        if (data?.latest?.id && data.latest.id !== previousLatestId) {
-          if (data.latest.current_end_at) {
-            setCurrentEnd(isoToDatetimeLocalValue(data.latest.current_end_at));
+        const data = await api.driftChecks(selectedRegion.id);
+        const items = data.items || [];
+        setChecks(items);
+        const matchingCheck = items.find(
+          (check) => datetimeMinuteKey(check.current_end_at) === requestedCurrentEndKey,
+        );
+        if (matchingCheck) {
+          setLatest(matchingCheck);
+          if (matchingCheck.current_end_at) {
+            setCurrentEnd(isoToDatetimeLocalValue(matchingCheck.current_end_at));
           }
           setPendingWindowChange(false);
           return;

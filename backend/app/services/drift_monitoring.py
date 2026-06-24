@@ -292,6 +292,9 @@ def _check_region(
             categorical_threshold=settings.drift_js_threshold,
             min_drifted_features=settings.drift_min_drifted_features,
         )
+        drift_report["summary"]["reference_row_count"] = len(reference)
+        drift_report["summary"]["current_row_count"] = len(current)
+        drift_report["summary"]["requested_current_end"] = current_end.isoformat()
         drift_detected = bool(drift_report["summary"]["drift_detected"])
         status = (
             DriftCheckStatus.DRIFT_DETECTED

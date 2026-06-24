@@ -32,6 +32,7 @@ def list_region_drift_checks(
 def run_region_drift_check(
     region_id: uuid.UUID,
     auto_retrain: bool = Query(default=False),
+    force_retrain: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
     try:
@@ -39,6 +40,7 @@ def run_region_drift_check(
             db,
             region_id,
             auto_retrain=auto_retrain,
+            force_retrain=force_retrain,
         )
     except ValueError as error:
         raise ApplicationError("drift_region_invalid", str(error), 404) from error

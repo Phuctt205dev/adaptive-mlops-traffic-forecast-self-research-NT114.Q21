@@ -121,8 +121,8 @@ export const api = {
     apiRequest(`/admin/regions/${regionId}/model-versions?page_size=100`),
   driftChecks: (regionId) =>
     apiRequest(`/admin/regions/${regionId}/drift-checks?limit=20`),
-  runDriftCheck: (regionId, autoRetrain = false) =>
-    apiRequest(`/admin/regions/${regionId}/drift-checks/run?auto_retrain=${autoRetrain ? "true" : "false"}`, {
+  runDriftCheck: (regionId, autoRetrain = false, forceRetrain = false) =>
+    apiRequest(`/admin/regions/${regionId}/drift-checks/run?auto_retrain=${autoRetrain ? "true" : "false"}&force_retrain=${forceRetrain ? "true" : "false"}`, {
       method: "POST",
     }),
   activateModel: (modelVersionId) =>

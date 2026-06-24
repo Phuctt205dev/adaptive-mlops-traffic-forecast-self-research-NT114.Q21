@@ -1356,8 +1356,10 @@ function driftFeatureRows(check) {
     .map(([name, details]) => ({
       name,
       type: details.type || "-",
-      score: Number(details.psi ?? details.js_divergence ?? 0),
-      drifted: Boolean(details.drifted),
+      metric: details.metric || "-",
+      score: Number(details.value ?? 0),
+      threshold: Number(details.threshold ?? 0),
+      drifted: Boolean(details.drift),
     }))
     .sort((left, right) => Number(right.drifted) - Number(left.drifted) || right.score - left.score)
     .slice(0, 12);
@@ -1396,12 +1398,16 @@ function DriftMonitor({ selectedRegion }) {
     refresh();
   }, [selectedRegion?.id]);
 
-  async function runCheck() {
+  async function runCheck(forceRetrain = false) {
     if (!selectedRegion?.id) return;
     setChecking(true);
     setMessage("");
     try {
-      const result = await api.runDriftCheck(selectedRegion.id, autoRetrain);
+      const result = await api.runDriftCheck(
+        selectedRegion.id,
+        forceRetrain ? true : autoRetrain,
+        forceRetrain,
+      );
       const nextLatest = result.checks?.[0] || null;
       setLatest(nextLatest);
       await refresh();
@@ -1432,7 +1438,7 @@ function DriftMonitor({ selectedRegion }) {
               />
               Auto retrain
             </label>
-            <button disabled={!selectedRegion?.id || checking} onClick={runCheck}>
+            <button disabled={!selectedRegion?.id || checking} onClick={() => runCheck(false)}>
               {checking ? "Checking..." : "Check now"}
             </button>
           </div>
@@ -1469,16 +1475,31 @@ function DriftMonitor({ selectedRegion }) {
             Retrain skipped: {latest.feature_drift_json.retrain_skip_reason}
           </div>
         )}
+        {latest && (
+          <div className="alert alert-info">
+            Current window uses the latest 7 days after the active model train_end_date in the uploaded production partition. Drift retrain uses the 24 months ending at current_end.
+          </div>
+        )}
+        {latest?.drift_detected && !latest?.triggered_training_run_id && (
+          <div className="drift-retrain-action">
+            <span>Drift is detected for this region.</span>
+            <button disabled={checking} onClick={() => runCheck(true)}>
+              Retrain now
+            </button>
+          </div>
+        )}
       </Card>
 
       <Card title="Feature Scores">
         {featureRows.length ? (
           <Table
-            columns={["Feature", "Type", "Score", "Status"]}
+            columns={["Feature", "Type", "Metric", "Score", "Threshold", "Status"]}
             rows={featureRows.map((feature) => [
               feature.name,
               feature.type,
+              feature.metric,
               feature.score.toFixed(4),
+              feature.threshold.toFixed(4),
               <StatusBadge value={feature.drifted ? "drift_detected" : "stable"} />,
             ])}
           />
@@ -1489,7 +1510,7 @@ function DriftMonitor({ selectedRegion }) {
         )}
         {latest && (
           <p className="muted drift-threshold-note">
-            Numeric PSI threshold: {summary.numeric_threshold ?? "-"} | Categorical JS threshold: {summary.categorical_threshold ?? "-"}
+            Drift is detected when at least {summary.min_drifted_features ?? "-"} features exceed their thresholds.
           </p>
         )}
       </Card>

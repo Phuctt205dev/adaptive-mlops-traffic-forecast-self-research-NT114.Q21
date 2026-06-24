@@ -200,7 +200,13 @@ def _trigger_retraining(
     return queued_run
 
 
-def _check_region(db: Session, region: Region, *, auto_retrain: bool) -> DriftCheck:
+def _check_region(
+    db: Session,
+    region: Region,
+    *,
+    auto_retrain: bool,
+    force_retrain: bool = False,
+) -> DriftCheck:
     settings = get_settings()
     try:
         model_version, training_run, dataset = _active_context(db, region)
@@ -279,9 +285,13 @@ def _check_region(db: Session, region: Region, *, auto_retrain: bool) -> DriftCh
         if drift_detected and auto_retrain and settings.drift_auto_retrain:
             if _has_running_training(db, region.id):
                 drift_report["retrain_skip_reason"] = "training_already_running"
-            elif _has_recent_retrain(db, region.id, settings.drift_retrain_cooldown_hours):
+            elif (
+                not force_retrain
+                and _has_recent_retrain(db, region.id, settings.drift_retrain_cooldown_hours)
+            ):
                 drift_report["retrain_skip_reason"] = "cooldown_active"
             else:
+                drift_report["force_retrain"] = force_retrain
                 triggered_run = _trigger_retraining(
                     db,
                     dataset,
@@ -393,11 +403,17 @@ def check_drift_for_region(
     region_id: uuid.UUID,
     *,
     auto_retrain: bool = True,
+    force_retrain: bool = False,
 ) -> dict:
     region = db.get(Region, region_id)
     if region is None:
         raise ValueError("Region was not found.")
-    check = _check_region(db, region, auto_retrain=auto_retrain)
+    check = _check_region(
+        db,
+        region,
+        auto_retrain=auto_retrain,
+        force_retrain=force_retrain,
+    )
     return {
         "checked_regions": 1,
         "drift_detected": 1 if check.drift_detected else 0,

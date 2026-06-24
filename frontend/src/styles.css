@@ -1489,6 +1489,11 @@ td {
   background: #fffbeb !important;
 }
 
+.drift-status-pending {
+  border-color: #bfdbfe !important;
+  background: #eff6ff !important;
+}
+
 .drift-threshold-note {
   margin: 10px 0 0;
   font-size: 13px;

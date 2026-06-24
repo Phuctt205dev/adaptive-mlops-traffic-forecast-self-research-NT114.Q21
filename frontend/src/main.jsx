@@ -1378,10 +1378,11 @@ function DriftMonitor({ selectedRegion }) {
   const [checking, setChecking] = useState(false);
   const [autoRetrain, setAutoRetrain] = useState(false);
   const [currentEnd, setCurrentEnd] = useState(() => toDatetimeLocalFromDate(new Date()));
+  const [pendingWindowChange, setPendingWindowChange] = useState(false);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("info");
 
-  async function refresh() {
+  async function refresh(options = {}) {
     if (!selectedRegion?.id) {
       setChecks([]);
       setLatest(null);
@@ -1393,6 +1394,10 @@ function DriftMonitor({ selectedRegion }) {
       const data = await api.driftChecks(selectedRegion.id);
       setChecks(data.items || []);
       setLatest(data.latest || null);
+      if (options.syncWindow && data.latest?.current_end_at) {
+        setCurrentEnd(isoToDatetimeLocalValue(data.latest.current_end_at));
+        setPendingWindowChange(false);
+      }
       return data;
     } catch (err) {
       setMessageType("error");
@@ -1404,8 +1409,7 @@ function DriftMonitor({ selectedRegion }) {
   }
 
   useEffect(() => {
-    refresh();
-    setCurrentEnd(toDatetimeLocalFromDate(new Date()));
+    refresh({ syncWindow: true });
   }, [selectedRegion?.id]);
 
   async function runCheck(forceRetrain = false) {
@@ -1426,9 +1430,15 @@ function DriftMonitor({ selectedRegion }) {
         await wait(3000);
         const data = await refresh();
         if (data?.latest?.id && data.latest.id !== previousLatestId) {
+          if (data.latest.current_end_at) {
+            setCurrentEnd(isoToDatetimeLocalValue(data.latest.current_end_at));
+          }
+          setPendingWindowChange(false);
           return;
         }
       }
+      setMessageType("info");
+      setMessage("Drift check is still running. Results will update after Airflow finishes.");
     } catch (err) {
       setMessageType("error");
       setMessage(err.message);
@@ -1437,7 +1447,7 @@ function DriftMonitor({ selectedRegion }) {
     }
   }
 
-  const featureRows = driftFeatureRows(latest);
+  const featureRows = pendingWindowChange ? [] : driftFeatureRows(latest);
   const summary = latest?.feature_drift_json?.summary || {};
   const currentStartPreview = useMemo(() => {
     if (!currentEnd) return "-";
@@ -1474,18 +1484,23 @@ function DriftMonitor({ selectedRegion }) {
       >
         {message && <div className={`alert alert-${messageType}`}>{message}</div>}
         {loading && <div className="alert alert-info">Loading drift checks...</div>}
+        {pendingWindowChange && !checking && (
+          <div className="alert alert-info">
+            Selected current window has not been checked yet. Click Check now to calculate new feature scores.
+          </div>
+        )}
         <div className="drift-summary">
-          <div className={`drift-status-card drift-status-${latest?.status || "none"}`}>
+          <div className={`drift-status-card drift-status-${pendingWindowChange ? "pending" : latest?.status || "none"}`}>
             <span>Status</span>
-            <strong>{driftStatusText(latest)}</strong>
+            <strong>{pendingWindowChange ? "Not checked" : driftStatusText(latest)}</strong>
           </div>
           <div>
             <span>Drifted features</span>
-            <strong>{latest ? `${latest.drifted_feature_count}/${latest.feature_count}` : "-"}</strong>
+            <strong>{pendingWindowChange ? "-" : latest ? `${latest.drifted_feature_count}/${latest.feature_count}` : "-"}</strong>
           </div>
           <div>
             <span>Reference window</span>
-            <strong>{latest ? `${formatDate(latest.reference_start_at)} - ${formatDate(latest.reference_end_at)}` : "-"}</strong>
+            <strong>{pendingWindowChange ? "-" : latest ? `${formatDate(latest.reference_start_at)} - ${formatDate(latest.reference_end_at)}` : "-"}</strong>
           </div>
           <div>
             <span>Current window</span>
@@ -1494,7 +1509,10 @@ function DriftMonitor({ selectedRegion }) {
               className="drift-window-input"
               type="datetime-local"
               value={currentEnd}
-              onChange={(event) => setCurrentEnd(event.target.value)}
+              onChange={(event) => {
+                setCurrentEnd(event.target.value);
+                setPendingWindowChange(true);
+              }}
             />
           </div>
         </div>
@@ -1534,10 +1552,12 @@ function DriftMonitor({ selectedRegion }) {
           />
         ) : (
           <p className="muted">
-            No feature-level scores yet. Run a drift check for the selected region.
+            {pendingWindowChange
+              ? "Selected current window has not been checked yet."
+              : "No feature-level scores yet. Run a drift check for the selected region."}
           </p>
         )}
-        {latest && (
+        {latest && !pendingWindowChange && (
           <p className="muted drift-threshold-note">
             Drift is detected when at least {summary.min_drifted_features ?? "-"} features exceed their thresholds.
           </p>

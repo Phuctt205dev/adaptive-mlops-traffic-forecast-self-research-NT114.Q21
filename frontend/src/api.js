@@ -102,6 +102,7 @@ export const api = {
     }),
   datasets: (regionId) =>
     apiRequest(`/admin/regions/${regionId}/datasets?page_size=100`),
+  dataset: (datasetId) => apiRequest(`/admin/datasets/${datasetId}`),
   uploadDataset: (regionId, file) => {
     const body = new FormData();
     body.append("file", file);
@@ -117,8 +118,18 @@ export const api = {
     }),
   trainingRun: (trainingRunId) =>
     apiRequest(`/admin/training-runs/${trainingRunId}`),
+  modelVersion: (modelVersionId) =>
+    apiRequest(`/admin/model-versions/${modelVersionId}`),
   modelVersions: (regionId) =>
     apiRequest(`/admin/regions/${regionId}/model-versions?page_size=100`),
+  driftRetrainPlan: (regionId, payload = {}) => {
+    const params = new URLSearchParams();
+    if (payload.currentEnd) {
+      params.set("current_end", payload.currentEnd);
+    }
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return apiRequest(`/admin/regions/${regionId}/drift-retrain-plan${suffix}`);
+  },
   driftChecks: (regionId) =>
     apiRequest(`/admin/regions/${regionId}/drift-checks?limit=10`),
   deleteDriftCheck: (regionId, checkId) =>

@@ -1640,6 +1640,38 @@ td {
   padding: 10px;
 }
 
+.model-details-row td {
+  background: #f8fafc;
+}
+
+.model-comparison-panel {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.model-comparison-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.model-comparison-meta strong {
+  color: #111827;
+}
+
+.nested-table {
+  background: #ffffff;
+}
+
+.nested-table th,
+.nested-table td {
+  font-size: 13px;
+  padding: 10px 12px;
+}
+
 .fairness-panel span {
   color: #64748b;
   font-size: 12px;

@@ -909,13 +909,14 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
     }
   }
 
-  async function train(dataset, selectedModels = defaultTrainingModels) {
+  async function train(dataset, selectedModels = defaultTrainingModels, trainingConfigOverride = null) {
     setMessage("");
     try {
       const window = trainingWindowForDataset(dataset);
       const trainingConfig = {
         ...trainForm,
         ...(window || {}),
+        ...(trainingConfigOverride || {}),
       };
       if (!trainingConfig.train_start_date || !trainingConfig.train_end_date) {
         throw new Error("Dataset date range is unavailable. Upload a valid dataset before training.");
@@ -1045,8 +1046,8 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
           dataset={trainingDataset}
           trainForm={trainForm}
           onClose={() => setTrainingDataset(null)}
-          onSubmit={async (dataset, selectedModels) => {
-            await train(dataset, selectedModels);
+          onSubmit={async (dataset, selectedModels, modalTrainForm) => {
+            await train(dataset, selectedModels, modalTrainForm);
             setTrainingDataset(null);
           }}
         />
@@ -1055,8 +1056,17 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
   );
 }
 
-function TrainModelModal({ dataset, trainForm, onClose, onSubmit }) {
-  const [selectedModels, setSelectedModels] = useState(defaultTrainingModels);
+function TrainModelModal({
+  dataset,
+  trainForm,
+  initialSelectedModels = defaultTrainingModels,
+  title = "Select models",
+  eyebrow = "Training",
+  submitVerb = "Train",
+  onClose,
+  onSubmit,
+}) {
+  const [selectedModels, setSelectedModels] = useState(initialSelectedModels);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
@@ -1077,7 +1087,7 @@ function TrainModelModal({ dataset, trainForm, onClose, onSubmit }) {
     }
     setSubmitting(true);
     try {
-      await onSubmit(dataset, selectedModels);
+      await onSubmit(dataset, selectedModels, trainForm);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1093,15 +1103,15 @@ function TrainModelModal({ dataset, trainForm, onClose, onSubmit }) {
       <form className="modal-card train-modal-card" onSubmit={submit} onClick={(event) => event.stopPropagation()}>
         <div className="modal-header">
           <div>
-            <p className="eyebrow">Training</p>
-            <h2>Select models</h2>
+            <p className="eyebrow">{eyebrow}</p>
+            <h2>{title}</h2>
           </div>
           <button className="secondary" type="button" onClick={onClose}>Close</button>
         </div>
 
         <div className="train-modal-dataset">
           <strong>{dataset.original_filename}</strong>
-          <span>{formatDate(dataset.start_at)} - {formatDate(dataset.end_at)}</span>
+          <span>Training window: {trainForm.train_start_date || "-"} - {trainForm.train_end_date || "-"}</span>
         </div>
 
         <div className="model-picker">
@@ -1141,7 +1151,7 @@ function TrainModelModal({ dataset, trainForm, onClose, onSubmit }) {
 
         {error && <div className="alert alert-error">{error}</div>}
         <button disabled={submitting || !selectedModels.length}>
-          {submitting ? "Triggering..." : `Train ${selectedModels.length} model${selectedModels.length > 1 ? "s" : ""}`}
+          {submitting ? "Triggering..." : `${submitVerb} ${selectedModels.length} model${selectedModels.length > 1 ? "s" : ""}`}
         </button>
       </form>
     </div>
@@ -1179,7 +1189,27 @@ function TrainingAction({ dataset, activeTraining, onTrain }) {
   );
 }
 
+function modelComparisonRows(model) {
+  const rows = model.model_comparison || model.training_configuration?.model_comparison || [];
+  return rows.length
+    ? rows
+    : [{
+      model_name: model.variant,
+      validation_MAE: model.cv_mean_mae,
+      validation_MAE_std: model.cv_std_mae,
+      test_MAE: model.final_test_mae,
+      inference_supported: true,
+    }];
+}
+
+function metricText(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(2) : "-";
+}
+
 function ModelManager({ selectedRegion, models, refreshModels, refreshRegions }) {
+  const [expandedModelId, setExpandedModelId] = useState("");
+
   async function activate(id) {
     await api.activateModel(id);
     await Promise.all([refreshModels(), refreshRegions()]);
@@ -1195,23 +1225,91 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions })
 
   return (
     <Card title="Model Versions">
-      <Table
-        columns={["Version", "Variant", "CV MAE", "Test MAE", "Status", "Created", "Action"]}
-        rows={models.map((model) => [
-          model.version,
-          model.variant,
-          model.cv_mean_mae.toFixed(2),
-          model.final_test_mae.toFixed(2),
-          <StatusBadge value={model.status} />,
-          formatDate(model.created_at),
-          <div className="row-actions">
-            <button disabled={model.id === selectedRegion?.active_model_version_id} onClick={() => activate(model.id)}>
-              Activate
-            </button>
-            <button className="danger" onClick={() => deleteModel(model)}>Delete</button>
-          </div>,
-        ])}
-      />
+      {models.length ? (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Version</th>
+                <th>Variant</th>
+                <th>CV MAE</th>
+                <th>Test MAE</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {models.map((model) => {
+                const expanded = expandedModelId === model.id;
+                return (
+                  <React.Fragment key={model.id}>
+                    <tr>
+                      <td>{model.version}</td>
+                      <td>{model.variant}</td>
+                      <td>{metricText(model.cv_mean_mae)}</td>
+                      <td>{metricText(model.final_test_mae)}</td>
+                      <td><StatusBadge value={model.status} /></td>
+                      <td>{formatDate(model.created_at)}</td>
+                      <td>
+                        <div className="row-actions">
+                          <button
+                            className="secondary compact-button"
+                            type="button"
+                            onClick={() => setExpandedModelId(expanded ? "" : model.id)}
+                          >
+                            {expanded ? "Hide" : "Details"}
+                          </button>
+                          <button disabled={model.id === selectedRegion?.active_model_version_id} onClick={() => activate(model.id)}>
+                            Activate
+                          </button>
+                          <button className="danger" onClick={() => deleteModel(model)}>Delete</button>
+                        </div>
+                      </td>
+                    </tr>
+                    {expanded && (
+                      <tr className="model-details-row">
+                        <td colSpan={7}>
+                          <div className="model-comparison-panel">
+                            <div className="model-comparison-meta">
+                              <span>Training window: <strong>{model.training_configuration?.train_start_date || "-"} - {model.training_configuration?.train_end_date || "-"}</strong></span>
+                              <span>Selected: <strong>{(model.training_configuration?.selected_models || model.training_configuration?.selected_from_candidates || []).join(", ") || "-"}</strong></span>
+                            </div>
+                            <table className="nested-table">
+                              <thead>
+                                <tr>
+                                  <th>Model</th>
+                                  <th>CV MAE</th>
+                                  <th>CV Std</th>
+                                  <th>Test MAE</th>
+                                  <th>Production</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {modelComparisonRows(model).map((item, index) => (
+                                  <tr key={`${item.model_name || "model"}-${index}`}>
+                                    <td>{item.model_name || "-"}</td>
+                                    <td>{metricText(item.validation_MAE)}</td>
+                                    <td>{metricText(item.validation_MAE_std)}</td>
+                                    <td>{metricText(item.test_MAE)}</td>
+                                    <td>{item.inference_supported === false || item.benchmark_only ? "no" : "yes"}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="muted">No data yet.</p>
+      )}
     </Card>
   );
 }
@@ -1365,7 +1463,7 @@ function driftFeatureRows(check) {
     .slice(0, 12);
 }
 
-function DriftMonitor({ selectedRegion }) {
+function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshRegions = async () => {} }) {
   const [checks, setChecks] = useState([]);
   const [latest, setLatest] = useState(null);
   const [selectedCheck, setSelectedCheck] = useState(null);
@@ -1376,6 +1474,7 @@ function DriftMonitor({ selectedRegion }) {
   const [productionWindow, setProductionWindow] = useState(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [pendingWindowChange, setPendingWindowChange] = useState(false);
+  const [retrainPlan, setRetrainPlan] = useState(null);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("info");
 
@@ -1479,6 +1578,39 @@ function DriftMonitor({ selectedRegion }) {
     await refresh();
   }
 
+  async function openRetrainModal() {
+    if (!selectedRegion?.id) return;
+    setMessage("");
+    try {
+      const plan = await api.driftRetrainPlan(selectedRegion.id, {
+        currentEnd: displayCheck?.current_end_at || currentEnd || undefined,
+      });
+      setRetrainPlan(plan);
+    } catch (err) {
+      setMessageType("error");
+      setMessage(err.message);
+    }
+  }
+
+  async function submitRetrain(dataset, selectedModels, modalTrainForm) {
+    const payload = {
+      ...modalTrainForm,
+      cv_splits: Number(modalTrainForm.cv_splits),
+      random_state: Number(modalTrainForm.random_state),
+      recurrent_sequence_length: Number(modalTrainForm.recurrent_sequence_length || 72),
+      recurrent_epochs: Number(modalTrainForm.recurrent_epochs || 3),
+      recurrent_batch_size: Number(modalTrainForm.recurrent_batch_size || 32),
+      final_test_ratio: Number(modalTrainForm.final_test_ratio || 0.15),
+      selected_models: selectedModels,
+    };
+    const result = await api.trainDataset(dataset.id, payload);
+    setRetrainPlan(null);
+    setMessageType("success");
+    setMessage("Retrain has been queued. Track progress in Airflow or the Datasets tab.");
+    await Promise.all([refreshModels(), refreshRegions()]);
+    return result;
+  }
+
   function selectCheck(check) {
     setSelectedCheck(check);
     setPendingWindowChange(false);
@@ -1574,7 +1706,7 @@ function DriftMonitor({ selectedRegion }) {
         {displayCheck?.drift_detected && !displayCheck?.triggered_training_run_id && (
           <div className="drift-retrain-action">
             <span>Drift is detected for this region.</span>
-            <button disabled={checking} onClick={() => runCheck(true)}>
+            <button disabled={checking} onClick={openRetrainModal}>
               Retrain now
             </button>
           </div>
@@ -1666,6 +1798,18 @@ function DriftMonitor({ selectedRegion }) {
           <p className="muted">No drift checks yet.</p>
         )}
       </Card>
+      {retrainPlan && (
+        <TrainModelModal
+          dataset={retrainPlan.dataset}
+          trainForm={retrainPlan.configuration}
+          initialSelectedModels={retrainPlan.selected_models || defaultTrainingModels}
+          eyebrow="Retraining"
+          title="Select models"
+          submitVerb="Retrain"
+          onClose={() => setRetrainPlan(null)}
+          onSubmit={submitRetrain}
+        />
+      )}
     </div>
   );
 }
@@ -2152,7 +2296,11 @@ function App() {
               <ModelManager selectedRegion={selectedRegion} models={models} refreshModels={refreshModels} refreshRegions={() => refreshRegions(user)} />
             </section>
             <section className="page-panel" hidden={page !== "drift"}>
-              <DriftMonitor selectedRegion={selectedRegion} />
+              <DriftMonitor
+                selectedRegion={selectedRegion}
+                refreshModels={refreshModels}
+                refreshRegions={() => refreshRegions(user)}
+              />
             </section>
             <section className="page-panel" hidden={page !== "users"}>
               <UserManager />

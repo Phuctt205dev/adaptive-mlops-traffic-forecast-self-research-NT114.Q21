@@ -161,18 +161,38 @@ def _prune_region_checks(db: Session, region_id: uuid.UUID, keep: int = 10) -> N
         db.commit()
 
 
+def _selected_models_from_previous(previous: dict) -> list[str]:
+    selected = previous.get("selected_models") or previous.get("selected_from_candidates")
+    if selected:
+        return list(dict.fromkeys(str(item).strip().lower() for item in selected))
+
+    comparison = previous.get("model_comparison") or []
+    name_to_variant = {
+        "randomforest": "random_forest_lag",
+        "random forest": "random_forest_lag",
+        "xgboost": "xgboost_lag",
+        "lightgbm": "lightgbm_lag",
+        "lstm": "lstm",
+        "gru": "gru",
+    }
+    inferred = []
+    for item in comparison:
+        name = str(item.get("model_name") or "").strip().lower()
+        variant = name_to_variant.get(name)
+        if variant and variant not in inferred:
+            inferred.append(variant)
+    if inferred:
+        return inferred
+
+    return ["random_forest_lag", "xgboost_lag", "lightgbm_lag"]
+
+
 def _training_configuration(training_run: TrainingRun, current_end_at: pd.Timestamp) -> dict:
     settings = get_settings()
     previous = training_run.configuration_json or {}
     train_end = pd.Timestamp(current_end_at).normalize()
     train_start = train_end - pd.DateOffset(months=settings.drift_retrain_window_months)
-    selected_models = previous.get("selected_models") or [
-        "random_forest_lag",
-        "xgboost_lag",
-        "lightgbm_lag",
-        "lstm",
-        "gru",
-    ]
+    selected_models = _selected_models_from_previous(previous)
     return {
         "train_start_date": str(train_start.date()),
         "train_end_date": str(train_end.date()),
@@ -186,6 +206,46 @@ def _training_configuration(training_run: TrainingRun, current_end_at: pd.Timest
         "recurrent_batch_size": int(previous.get("recurrent_batch_size") or 32),
         "final_test_ratio": float(previous.get("final_test_ratio") or 0.15),
         "trigger_source": "feature_drift",
+    }
+
+
+def retrain_plan_for_region(
+    db: Session,
+    region_id: uuid.UUID,
+    *,
+    current_end_at=None,
+) -> dict:
+    region = db.get(Region, region_id)
+    if region is None:
+        raise ValueError("Region was not found.")
+    model_version, training_run, dataset = _active_context(db, region)
+    production = _production_frame(training_run, dataset)
+    if production.empty:
+        raise ValueError("No production data exists after active model train_end_date.")
+    current_end = _current_window_end(current_end_at)
+    production_start = production["date_time"].min()
+    production_end = production["date_time"].max()
+    if current_end < production_start or current_end > production_end:
+        raise ValueError(
+            "Current drift window end is outside production data "
+            f"from {production_start.isoformat()} to {production_end.isoformat()}."
+        )
+    configuration = _training_configuration(training_run, current_end)
+    return {
+        "region_id": str(region.id),
+        "active_model_version_id": str(model_version.id),
+        "source_training_run_id": str(training_run.id),
+        "dataset": {
+            "id": str(dataset.id),
+            "region_id": str(dataset.region_id),
+            "original_filename": dataset.original_filename,
+            "row_count": dataset.row_count,
+            "start_at": dataset.start_at,
+            "end_at": dataset.end_at,
+            "status": dataset.status.value,
+        },
+        "configuration": configuration,
+        "selected_models": configuration["selected_models"],
     }
 
 

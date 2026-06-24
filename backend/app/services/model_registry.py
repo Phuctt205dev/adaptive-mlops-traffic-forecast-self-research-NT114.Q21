@@ -30,7 +30,7 @@ def list_region_model_versions(
     region_id: uuid.UUID,
     page: int,
     page_size: int,
-) -> tuple[list[ModelVersion], int]:
+) -> tuple[list[dict], int]:
     ensure_region_exists(db, region_id)
     query = select(ModelVersion).where(ModelVersion.region_id == region_id)
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
@@ -41,7 +41,30 @@ def list_region_model_versions(
             .limit(page_size)
         )
     )
-    return items, total
+    return [_serialize_model_version(db, item) for item in items], total
+
+
+def _serialize_model_version(db: Session, model_version: ModelVersion) -> dict:
+    training_run = db.get(TrainingRun, model_version.training_run_id)
+    configuration = training_run.configuration_json if training_run else {}
+    return {
+        "id": model_version.id,
+        "region_id": model_version.region_id,
+        "training_run_id": model_version.training_run_id,
+        "variant": model_version.variant,
+        "version": model_version.version,
+        "mlflow_run_id": model_version.mlflow_run_id,
+        "mlflow_model_uri": model_version.mlflow_model_uri,
+        "artifact_uri": model_version.artifact_uri,
+        "cv_mean_mae": model_version.cv_mean_mae,
+        "cv_std_mae": model_version.cv_std_mae,
+        "final_test_mae": model_version.final_test_mae,
+        "status": model_version.status,
+        "created_at": model_version.created_at,
+        "updated_at": model_version.updated_at,
+        "training_configuration": configuration or {},
+        "model_comparison": (configuration or {}).get("model_comparison") or [],
+    }
 
 
 def get_model_version_or_404(db: Session, model_version_id: uuid.UUID) -> ModelVersion:
@@ -53,6 +76,10 @@ def get_model_version_or_404(db: Session, model_version_id: uuid.UUID) -> ModelV
             404,
         )
     return model_version
+
+
+def get_model_version_read(db: Session, model_version_id: uuid.UUID) -> dict:
+    return _serialize_model_version(db, get_model_version_or_404(db, model_version_id))
 
 
 def get_training_run_or_404(db: Session, training_run_id: uuid.UUID) -> TrainingRun:
@@ -76,6 +103,7 @@ def activate_model_version(db: Session, model_version_id: uuid.UUID) -> ModelVer
     if not inference_supported or model_family not in {
         None,
         "legacy_sklearn",
+        "tree_autoregressive",
         "neural_sequence",
     }:
         raise ApplicationError(

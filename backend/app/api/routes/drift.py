@@ -50,6 +50,22 @@ def run_region_drift_check(
         raise ApplicationError("drift_region_invalid", str(error), 404) from error
 
 
+@router.get("/regions/{region_id}/drift-retrain-plan")
+def get_region_drift_retrain_plan(
+    region_id: uuid.UUID,
+    current_end: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    try:
+        return drift_monitoring.retrain_plan_for_region(
+            db,
+            region_id,
+            current_end_at=current_end,
+        )
+    except ValueError as error:
+        raise ApplicationError("drift_retrain_plan_invalid", str(error), 409) from error
+
+
 @router.delete("/regions/{region_id}/drift-checks/{check_id}", status_code=204)
 def delete_region_drift_check(
     region_id: uuid.UUID,

@@ -42,6 +42,8 @@ class ModelVersionRead(BaseModel):
     status: ModelVersionStatus
     created_at: datetime
     updated_at: datetime
+    training_configuration: dict = Field(default_factory=dict)
+    model_comparison: list[dict] = Field(default_factory=list)
 
 
 class ModelVersionList(BaseModel):
@@ -75,6 +77,7 @@ class TrainingRunCreate(BaseModel):
     recurrent_epochs: int = 3
     recurrent_batch_size: int = 32
     final_test_ratio: float = 0.15
+    trigger_source: str | None = None
 
     @field_validator("selected_models")
     @classmethod

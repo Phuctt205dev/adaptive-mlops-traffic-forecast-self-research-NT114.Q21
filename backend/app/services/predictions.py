@@ -461,6 +461,9 @@ def _predict_value(
             dataset,
             target_time,
         )
+    if model_family == "tree_autoregressive":
+        target_time = pd.Timestamp(feature_snapshot["date_time"]).tz_localize(None)
+        return _predict_tree_lag(model_version, dataset, target_time)
 
     model = _load_model(model_version)
     features = prepare_input(feature_snapshot, model)
@@ -497,13 +500,24 @@ def get_forecast_dashboard(
             404,
         )
 
-    if (training_run.configuration_json or {}).get("model_family") == "neural_sequence":
+    model_family = (training_run.configuration_json or {}).get("model_family")
+    if model_family == "neural_sequence":
         predicted_by_time = _predict_neural_sequence_batch(
             model_version,
             training_run,
             dataset,
             snapshots,
         )
+    elif model_family == "tree_autoregressive":
+        predicted_by_time = {}
+        for snapshot in snapshots:
+            target_time = pd.Timestamp(snapshot["date_time"]).tz_localize(None)
+            prediction_value, _feature_meta = _predict_tree_lag(
+                model_version,
+                dataset,
+                target_time,
+            )
+            predicted_by_time[target_time.to_pydatetime()] = prediction_value
     else:
         model = _load_model(model_version)
         features = _prepare_batch_input(snapshots, model)

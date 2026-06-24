@@ -94,6 +94,9 @@ def activate_model_version(db: Session, model_version_id: uuid.UUID) -> ModelVer
     region.active_model_version_id = model_version.id
     db.commit()
     db.refresh(model_version)
+    from backend.app.services.predictions import warm_prediction_cache_for_model_best_effort
+
+    warm_prediction_cache_for_model_best_effort(db, model_version)
     return model_version
 
 

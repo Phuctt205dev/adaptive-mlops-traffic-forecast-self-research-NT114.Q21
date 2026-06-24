@@ -119,6 +119,12 @@ export const api = {
     apiRequest(`/admin/training-runs/${trainingRunId}`),
   modelVersions: (regionId) =>
     apiRequest(`/admin/regions/${regionId}/model-versions?page_size=100`),
+  driftChecks: (regionId) =>
+    apiRequest(`/admin/regions/${regionId}/drift-checks?limit=20`),
+  runDriftCheck: (regionId, autoRetrain = false) =>
+    apiRequest(`/admin/regions/${regionId}/drift-checks/run?auto_retrain=${autoRetrain ? "true" : "false"}`, {
+      method: "POST",
+    }),
   activateModel: (modelVersionId) =>
     apiRequest(`/admin/model-versions/${modelVersionId}/activate`, {
       method: "POST",

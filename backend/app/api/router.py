@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from backend.app.api.routes import (
     auth,
     datasets,
+    drift,
     health,
     internal_drift,
     internal_training,
@@ -35,3 +36,4 @@ api_router.include_router(users.router, prefix="/admin/users", tags=["users"])
 api_router.include_router(regions.router, prefix="/admin/regions", tags=["regions"])
 api_router.include_router(datasets.router, prefix="/admin", tags=["datasets"])
 api_router.include_router(model_versions.router, prefix="/admin", tags=["models"])
+api_router.include_router(drift.router, prefix="/admin", tags=["drift"])

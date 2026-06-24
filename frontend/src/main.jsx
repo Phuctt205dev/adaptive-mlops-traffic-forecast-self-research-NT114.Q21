@@ -9,6 +9,7 @@ const pages = [
   ["regions", "Regions"],
   ["datasets", "Datasets"],
   ["models", "Models"],
+  ["drift", "Drift"],
   ["users", "Users"],
 ];
 
@@ -1339,6 +1340,176 @@ function PredictionPage({ selectedRegion }) {
   );
 }
 
+function driftStatusText(check) {
+  if (!check) return "Not checked";
+  if (check.status === "retrain_triggered") return "Retrain triggered";
+  if (check.status === "drift_detected") return "Drift detected";
+  if (check.status === "stable") return "Stable";
+  if (check.status === "skipped") return "Skipped";
+  if (check.status === "failed") return "Failed";
+  return check.status || "Unknown";
+}
+
+function driftFeatureRows(check) {
+  const features = check?.feature_drift_json?.features || {};
+  return Object.entries(features)
+    .map(([name, details]) => ({
+      name,
+      type: details.type || "-",
+      score: Number(details.psi ?? details.js_divergence ?? 0),
+      drifted: Boolean(details.drifted),
+    }))
+    .sort((left, right) => Number(right.drifted) - Number(left.drifted) || right.score - left.score)
+    .slice(0, 12);
+}
+
+function DriftMonitor({ selectedRegion }) {
+  const [checks, setChecks] = useState([]);
+  const [latest, setLatest] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [autoRetrain, setAutoRetrain] = useState(false);
+  const [message, setMessage] = useState("");
+  const [messageType, setMessageType] = useState("info");
+
+  async function refresh() {
+    if (!selectedRegion?.id) {
+      setChecks([]);
+      setLatest(null);
+      return;
+    }
+    setLoading(true);
+    setMessage("");
+    try {
+      const data = await api.driftChecks(selectedRegion.id);
+      setChecks(data.items || []);
+      setLatest(data.latest || null);
+    } catch (err) {
+      setMessageType("error");
+      setMessage(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+  }, [selectedRegion?.id]);
+
+  async function runCheck() {
+    if (!selectedRegion?.id) return;
+    setChecking(true);
+    setMessage("");
+    try {
+      const result = await api.runDriftCheck(selectedRegion.id, autoRetrain);
+      const nextLatest = result.checks?.[0] || null;
+      setLatest(nextLatest);
+      await refresh();
+      setMessageType(nextLatest?.drift_detected ? "error" : "success");
+      setMessage(nextLatest ? `Check finished: ${driftStatusText(nextLatest)}` : "Check finished.");
+    } catch (err) {
+      setMessageType("error");
+      setMessage(err.message);
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  const featureRows = driftFeatureRows(latest);
+  const summary = latest?.feature_drift_json?.summary || {};
+
+  return (
+    <div className="grid drift-layout">
+      <Card
+        title="Feature Drift"
+        action={(
+          <div className="row-actions">
+            <label className="drift-toggle">
+              <input
+                type="checkbox"
+                checked={autoRetrain}
+                onChange={(event) => setAutoRetrain(event.target.checked)}
+              />
+              Auto retrain
+            </label>
+            <button disabled={!selectedRegion?.id || checking} onClick={runCheck}>
+              {checking ? "Checking..." : "Check now"}
+            </button>
+          </div>
+        )}
+      >
+        {message && <div className={`alert alert-${messageType}`}>{message}</div>}
+        {loading && <div className="alert alert-info">Loading drift checks...</div>}
+        <div className="drift-summary">
+          <div className={`drift-status-card drift-status-${latest?.status || "none"}`}>
+            <span>Status</span>
+            <strong>{driftStatusText(latest)}</strong>
+          </div>
+          <div>
+            <span>Drifted features</span>
+            <strong>{latest ? `${latest.drifted_feature_count}/${latest.feature_count}` : "-"}</strong>
+          </div>
+          <div>
+            <span>Reference window</span>
+            <strong>{latest ? `${formatDate(latest.reference_start_at)} - ${formatDate(latest.reference_end_at)}` : "-"}</strong>
+          </div>
+          <div>
+            <span>Current window</span>
+            <strong>{latest ? `${formatDate(latest.current_start_at)} - ${formatDate(latest.current_end_at)}` : "-"}</strong>
+          </div>
+        </div>
+        {latest?.error_message && <div className="alert alert-error">{latest.error_message}</div>}
+        {latest?.triggered_training_run_id && (
+          <div className="alert alert-success">
+            Retrain triggered: {latest.triggered_training_run_id}
+          </div>
+        )}
+        {latest?.feature_drift_json?.retrain_skip_reason && (
+          <div className="alert alert-info">
+            Retrain skipped: {latest.feature_drift_json.retrain_skip_reason}
+          </div>
+        )}
+      </Card>
+
+      <Card title="Feature Scores">
+        {featureRows.length ? (
+          <Table
+            columns={["Feature", "Type", "Score", "Status"]}
+            rows={featureRows.map((feature) => [
+              feature.name,
+              feature.type,
+              feature.score.toFixed(4),
+              <StatusBadge value={feature.drifted ? "drift_detected" : "stable"} />,
+            ])}
+          />
+        ) : (
+          <p className="muted">
+            No feature-level scores yet. Run a drift check for the selected region.
+          </p>
+        )}
+        {latest && (
+          <p className="muted drift-threshold-note">
+            Numeric PSI threshold: {summary.numeric_threshold ?? "-"} | Categorical JS threshold: {summary.categorical_threshold ?? "-"}
+          </p>
+        )}
+      </Card>
+
+      <Card title="Drift History">
+        <Table
+          columns={["Created", "Status", "Drifted", "Retrain", "Error"]}
+          rows={checks.map((check) => [
+            formatDate(check.created_at),
+            <StatusBadge value={check.status} />,
+            `${check.drifted_feature_count}/${check.feature_count}`,
+            check.triggered_training_run_id ? "yes" : "-",
+            check.error_message || "-",
+          ])}
+        />
+      </Card>
+    </div>
+  );
+}
+
 function UserManager() {
   const [users, setUsers] = useState([]);
   const [message, setMessage] = useState("");
@@ -1442,6 +1613,15 @@ function Icon({ name }) {
         <path d="M5 16h14" />
         <circle cx="5" cy="8" r="2" />
         <circle cx="19" cy="16" r="2" />
+      </>
+    ),
+    drift: (
+      <>
+        <path d="M4 19V5" />
+        <path d="M4 19h16" />
+        <path d="M7 15c2.5-6 4.5-6 7 0s4.5 6 7 0" />
+        <path d="M8 8h.01" />
+        <path d="M16 8h.01" />
       </>
     ),
     users: (
@@ -1801,6 +1981,9 @@ function App() {
             </section>
             <section className="page-panel" hidden={page !== "models"}>
               <ModelManager selectedRegion={selectedRegion} models={models} refreshModels={refreshModels} refreshRegions={() => refreshRegions(user)} />
+            </section>
+            <section className="page-panel" hidden={page !== "drift"}>
+              <DriftMonitor selectedRegion={selectedRegion} />
             </section>
             <section className="page-panel" hidden={page !== "users"}>
               <UserManager />

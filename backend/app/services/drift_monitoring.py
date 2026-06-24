@@ -341,6 +341,32 @@ def _serialize_check(check: DriftCheck) -> dict:
     }
 
 
+def list_region_drift_checks(
+    db: Session,
+    region_id: uuid.UUID,
+    *,
+    limit: int = 20,
+) -> dict:
+    region = db.get(Region, region_id)
+    if region is None:
+        raise ValueError("Region was not found.")
+    checks = list(
+        db.scalars(
+            select(DriftCheck)
+            .where(DriftCheck.region_id == region_id)
+            .order_by(DriftCheck.created_at.desc())
+            .limit(limit)
+        )
+    )
+    latest = checks[0] if checks else None
+    return {
+        "region_id": str(region_id),
+        "latest": _serialize_check(latest) if latest else None,
+        "items": [_serialize_check(check) for check in checks],
+        "total": len(checks),
+    }
+
+
 def _regions_for_drift_check(db: Session, limit: int) -> list[Region]:
     regions = list(
         db.scalars(

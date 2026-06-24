@@ -117,8 +117,11 @@ def _create_check(
     drift_report: dict | None = None,
     triggered_training_run_id: uuid.UUID | None = None,
     error_message: str | None = None,
+    check_method: str = "auto",
 ) -> DriftCheck:
-    summary = (drift_report or {}).get("summary", {})
+    report = drift_report or {}
+    summary = report.setdefault("summary", {})
+    summary.setdefault("check_method", check_method)
     drift_check = DriftCheck(
         region_id=region_id,
         dataset_id=dataset_id,
@@ -131,14 +134,31 @@ def _create_check(
         drift_detected=bool(summary.get("drift_detected", False)),
         drifted_feature_count=int(summary.get("drifted_feature_count", 0)),
         feature_count=int(summary.get("feature_count", 0)),
-        feature_drift_json=drift_report or {},
+        feature_drift_json=report,
         triggered_training_run_id=triggered_training_run_id,
         error_message=error_message,
     )
     db.add(drift_check)
     db.commit()
     db.refresh(drift_check)
+    _prune_region_checks(db, region_id)
     return drift_check
+
+
+def _prune_region_checks(db: Session, region_id: uuid.UUID, keep: int = 10) -> None:
+    stale_ids = list(
+        db.scalars(
+            select(DriftCheck.id)
+            .where(DriftCheck.region_id == region_id)
+            .order_by(DriftCheck.created_at.desc(), DriftCheck.id.desc())
+            .offset(keep)
+        )
+    )
+    if stale_ids:
+        db.query(DriftCheck).filter(DriftCheck.id.in_(stale_ids)).delete(
+            synchronize_session=False
+        )
+        db.commit()
 
 
 def _training_configuration(training_run: TrainingRun, current_end_at: pd.Timestamp) -> dict:
@@ -215,6 +235,7 @@ def _check_region(
     auto_retrain: bool,
     force_retrain: bool = False,
     current_end_at=None,
+    check_method: str = "auto",
 ) -> DriftCheck:
     settings = get_settings()
     try:
@@ -236,6 +257,7 @@ def _check_region(
                 dataset_id=dataset.id,
                 model_version_id=model_version.id,
                 status=DriftCheckStatus.SKIPPED,
+                check_method=check_method,
                 error_message="No production data exists after active model train_end_date.",
             )
 
@@ -252,6 +274,7 @@ def _check_region(
                 current_start_at=current_start.to_pydatetime(),
                 current_end_at=current_end.to_pydatetime(),
                 status=DriftCheckStatus.SKIPPED,
+                check_method=check_method,
                 error_message=(
                     "Current drift window end is outside production data "
                     f"from {production_start.isoformat()} to {production_end.isoformat()}."
@@ -278,6 +301,7 @@ def _check_region(
                 current_start_at=current_start.to_pydatetime(),
                 current_end_at=current_end.to_pydatetime(),
                 status=DriftCheckStatus.SKIPPED,
+                check_method=check_method,
                 error_message="Reference window does not have enough rows.",
             )
         if len(current) < settings.drift_min_window_rows:
@@ -291,6 +315,7 @@ def _check_region(
                 current_start_at=current_start.to_pydatetime(),
                 current_end_at=current_end.to_pydatetime(),
                 status=DriftCheckStatus.SKIPPED,
+                check_method=check_method,
                 error_message="Current drift window does not have enough rows.",
             )
 
@@ -304,6 +329,7 @@ def _check_region(
         drift_report["summary"]["reference_row_count"] = len(reference)
         drift_report["summary"]["current_row_count"] = len(current)
         drift_report["summary"]["requested_current_end"] = current_end.isoformat()
+        drift_report["summary"]["check_method"] = check_method
         drift_detected = bool(drift_report["summary"]["drift_detected"])
         status = (
             DriftCheckStatus.DRIFT_DETECTED
@@ -341,12 +367,14 @@ def _check_region(
             status=status,
             drift_report=drift_report,
             triggered_training_run_id=triggered_run.id if triggered_run else None,
+            check_method=check_method,
         )
     except Exception as error:
         return _create_check(
             db,
             region_id=region.id,
             status=DriftCheckStatus.FAILED,
+            check_method=check_method,
             error_message=str(error),
         )
 
@@ -377,6 +405,11 @@ def _serialize_check(check: DriftCheck) -> dict:
         ),
         "error_message": check.error_message,
         "created_at": check.created_at,
+        "method": (
+            (check.feature_drift_json or {})
+            .get("summary", {})
+            .get("check_method", "auto")
+        ),
     }
 
 
@@ -389,11 +422,12 @@ def list_region_drift_checks(
     region = db.get(Region, region_id)
     if region is None:
         raise ValueError("Region was not found.")
+    _prune_region_checks(db, region_id)
     checks = list(
         db.scalars(
             select(DriftCheck)
             .where(DriftCheck.region_id == region_id)
-            .order_by(DriftCheck.created_at.desc())
+            .order_by(DriftCheck.created_at.desc(), DriftCheck.id.desc())
             .limit(limit)
         )
     )
@@ -404,6 +438,18 @@ def list_region_drift_checks(
         "items": [_serialize_check(check) for check in checks],
         "total": len(checks),
     }
+
+
+def delete_region_drift_check(
+    db: Session,
+    region_id: uuid.UUID,
+    check_id: uuid.UUID,
+) -> None:
+    check = db.get(DriftCheck, check_id)
+    if check is None or check.region_id != region_id:
+        raise ValueError("Drift check was not found.")
+    db.delete(check)
+    db.commit()
 
 
 def _regions_for_drift_check(db: Session, limit: int) -> list[Region]:
@@ -434,6 +480,7 @@ def check_drift_for_region(
     auto_retrain: bool = True,
     force_retrain: bool = False,
     current_end_at=None,
+    check_method: str = "auto",
 ) -> dict:
     region = db.get(Region, region_id)
     if region is None:
@@ -444,6 +491,7 @@ def check_drift_for_region(
         auto_retrain=auto_retrain,
         force_retrain=force_retrain,
         current_end_at=current_end_at,
+        check_method=check_method,
     )
     return {
         "checked_regions": 1,
@@ -459,6 +507,7 @@ def check_drift_for_regions(
     auto_retrain: bool = True,
     max_regions: int | None = None,
     current_end_at=None,
+    check_method: str = "auto",
 ) -> dict:
     settings = get_settings()
     limit = max_regions or settings.drift_max_regions_per_run
@@ -469,6 +518,7 @@ def check_drift_for_regions(
             region,
             auto_retrain=auto_retrain,
             current_end_at=current_end_at,
+            check_method=check_method,
         )
         for region in regions
     ]

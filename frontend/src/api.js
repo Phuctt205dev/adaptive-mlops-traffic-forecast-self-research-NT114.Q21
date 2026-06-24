@@ -120,7 +120,11 @@ export const api = {
   modelVersions: (regionId) =>
     apiRequest(`/admin/regions/${regionId}/model-versions?page_size=100`),
   driftChecks: (regionId) =>
-    apiRequest(`/admin/regions/${regionId}/drift-checks?limit=20`),
+    apiRequest(`/admin/regions/${regionId}/drift-checks?limit=10`),
+  deleteDriftCheck: (regionId, checkId) =>
+    apiRequest(`/admin/regions/${regionId}/drift-checks/${checkId}`, {
+      method: "DELETE",
+    }),
   runDriftCheck: (regionId, payload = {}) => {
     const params = new URLSearchParams({
       auto_retrain: payload.autoRetrain ? "true" : "false",

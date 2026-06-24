@@ -1322,6 +1322,18 @@ tbody tr:last-child td {
   border-bottom: 0;
 }
 
+.selectable-row {
+  cursor: pointer;
+}
+
+.selectable-row.active {
+  background: #eff6ff;
+}
+
+.selectable-row.active:hover {
+  background: #dbeafe;
+}
+
 th {
   color: #6b7280;
   font-size: 12px;

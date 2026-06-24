@@ -1368,11 +1368,13 @@ function driftFeatureRows(check) {
 function DriftMonitor({ selectedRegion }) {
   const [checks, setChecks] = useState([]);
   const [latest, setLatest] = useState(null);
+  const [selectedCheck, setSelectedCheck] = useState(null);
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
   const [autoRetrain, setAutoRetrain] = useState(false);
   const [currentEnd, setCurrentEnd] = useState(() => toDatetimeLocalFromDate(new Date()));
   const [productionWindow, setProductionWindow] = useState(null);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
   const [pendingWindowChange, setPendingWindowChange] = useState(false);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("info");
@@ -1381,14 +1383,23 @@ function DriftMonitor({ selectedRegion }) {
     if (!selectedRegion?.id) {
       setChecks([]);
       setLatest(null);
+      setSelectedCheck(null);
       return null;
     }
     setLoading(true);
     setMessage("");
     try {
       const data = await api.driftChecks(selectedRegion.id);
-      setChecks(data.items || []);
-      setLatest(data.latest || null);
+      const items = data.items || [];
+      const nextLatest = data.latest || null;
+      setChecks(items);
+      setLatest(nextLatest);
+      setSelectedCheck((current) => {
+        if (current && items.some((check) => check.id === current.id)) {
+          return items.find((check) => check.id === current.id);
+        }
+        return nextLatest;
+      });
       if (options.syncWindow && data.latest?.current_end_at) {
         setCurrentEnd(isoToDatetimeLocalValue(data.latest.current_end_at));
         setPendingWindowChange(false);
@@ -1447,6 +1458,7 @@ function DriftMonitor({ selectedRegion }) {
       const nextLatest = result.checks?.[0] || null;
       if (nextLatest) {
         setLatest(nextLatest);
+        setSelectedCheck(nextLatest);
         if (nextLatest.current_end_at) {
           setCurrentEnd(isoToDatetimeLocalValue(nextLatest.current_end_at));
         }
@@ -1461,8 +1473,24 @@ function DriftMonitor({ selectedRegion }) {
     }
   }
 
-  const featureRows = pendingWindowChange ? [] : driftFeatureRows(latest);
-  const summary = latest?.feature_drift_json?.summary || {};
+  async function deleteCheck(checkId) {
+    if (!selectedRegion?.id) return;
+    await api.deleteDriftCheck(selectedRegion.id, checkId);
+    await refresh();
+  }
+
+  function selectCheck(check) {
+    setSelectedCheck(check);
+    setPendingWindowChange(false);
+    if (check.current_end_at) {
+      setCurrentEnd(isoToDatetimeLocalValue(check.current_end_at));
+    }
+  }
+
+  const displayCheck = pendingWindowChange ? null : selectedCheck;
+  const featureRows = pendingWindowChange ? [] : driftFeatureRows(displayCheck);
+  const summary = displayCheck?.feature_drift_json?.summary || {};
+  const visibleChecks = historyExpanded ? checks : checks.slice(0, 5);
   const currentStartPreview = useMemo(() => {
     if (!currentEnd) return "-";
     const date = new Date(currentEnd);
@@ -1504,21 +1532,21 @@ function DriftMonitor({ selectedRegion }) {
           </div>
         )}
         <div className="drift-summary">
-          <div className={`drift-status-card drift-status-${pendingWindowChange ? "pending" : latest?.status || "none"}`}>
+          <div className={`drift-status-card drift-status-${pendingWindowChange ? "pending" : displayCheck?.status || "none"}`}>
             <span>Status</span>
-            <strong>{pendingWindowChange ? "Not checked" : driftStatusText(latest)}</strong>
+            <strong>{pendingWindowChange ? "Not checked" : driftStatusText(displayCheck)}</strong>
           </div>
           <div>
             <span>Drifted features</span>
-            <strong>{pendingWindowChange ? "-" : latest ? `${latest.drifted_feature_count}/${latest.feature_count}` : "-"}</strong>
+            <strong>{displayCheck ? `${displayCheck.drifted_feature_count}/${displayCheck.feature_count}` : "-"}</strong>
           </div>
           <div>
             <span>Reference window</span>
-            <strong>{pendingWindowChange ? "-" : latest ? `${formatDate(latest.reference_start_at)} - ${formatDate(latest.reference_end_at)}` : "-"}</strong>
+            <strong>{displayCheck ? `${formatDate(displayCheck.reference_start_at)} - ${formatDate(displayCheck.reference_end_at)}` : "-"}</strong>
           </div>
           <div>
             <span>Current window</span>
-            <strong>{currentEnd ? `${currentStartPreview} - ${formatDate(currentEnd)}` : "-"}</strong>
+            <strong>{currentEnd ? `${currentStartPreview} -` : "-"}</strong>
             <input
               className="drift-window-input"
               type="datetime-local"
@@ -1532,18 +1560,18 @@ function DriftMonitor({ selectedRegion }) {
             />
           </div>
         </div>
-        {latest?.error_message && <div className="alert alert-error">{latest.error_message}</div>}
-        {latest?.triggered_training_run_id && (
+        {displayCheck?.error_message && <div className="alert alert-error">{displayCheck.error_message}</div>}
+        {displayCheck?.triggered_training_run_id && (
           <div className="alert alert-success">
-            Retrain triggered: {latest.triggered_training_run_id}
+            Retrain triggered: {displayCheck.triggered_training_run_id}
           </div>
         )}
-        {latest?.feature_drift_json?.retrain_skip_reason && (
+        {displayCheck?.feature_drift_json?.retrain_skip_reason && (
           <div className="alert alert-info">
-            Retrain skipped: {latest.feature_drift_json.retrain_skip_reason}
+            Retrain skipped: {displayCheck.feature_drift_json.retrain_skip_reason}
           </div>
         )}
-        {latest?.drift_detected && !latest?.triggered_training_run_id && (
+        {displayCheck?.drift_detected && !displayCheck?.triggered_training_run_id && (
           <div className="drift-retrain-action">
             <span>Drift is detected for this region.</span>
             <button disabled={checking} onClick={() => runCheck(true)}>
@@ -1573,24 +1601,70 @@ function DriftMonitor({ selectedRegion }) {
               : "No feature-level scores yet. Run a drift check for the selected region."}
           </p>
         )}
-        {latest && !pendingWindowChange && (
+        {displayCheck && !pendingWindowChange && (
           <p className="muted drift-threshold-note">
             Drift is detected when at least {summary.min_drifted_features ?? "-"} features exceed their thresholds.
           </p>
         )}
       </Card>
 
-      <Card title="Drift History">
-        <Table
-          columns={["Created", "Status", "Drifted", "Retrain", "Error"]}
-          rows={checks.map((check) => [
-            formatDate(check.created_at),
-            <StatusBadge value={check.status} />,
-            `${check.drifted_feature_count}/${check.feature_count}`,
-            check.triggered_training_run_id ? "yes" : "-",
-            check.error_message || "-",
-          ])}
-        />
+      <Card
+        title="Drift History"
+        action={checks.length > 5 && (
+          <button className="secondary compact-button" type="button" onClick={() => setHistoryExpanded((value) => !value)}>
+            {historyExpanded ? "Show less" : "Show all"}
+          </button>
+        )}
+      >
+        {visibleChecks.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Created</th>
+                  <th>Status</th>
+                  <th>Drifted</th>
+                  <th>Retrain</th>
+                  <th>Method</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleChecks.map((check) => (
+                  <tr
+                    className={selectedCheck?.id === check.id ? "selectable-row active" : "selectable-row"}
+                    key={check.id}
+                    onClick={() => selectCheck(check)}
+                  >
+                    <td>{formatDate(check.created_at)}</td>
+                    <td><StatusBadge value={check.status} /></td>
+                    <td>{`${check.drifted_feature_count}/${check.feature_count}`}</td>
+                    <td>{check.triggered_training_run_id ? "yes" : "-"}</td>
+                    <td>{check.method || "auto"}</td>
+                    <td>
+                      <button
+                        className="icon-button danger-icon"
+                        title="Delete drift check"
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          deleteCheck(check.id).catch((err) => {
+                            setMessageType("error");
+                            setMessage(err.message);
+                          });
+                        }}
+                      >
+                        <Icon name="trash" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="muted">No drift checks yet.</p>
+        )}
       </Card>
     </div>
   );
@@ -1732,6 +1806,15 @@ function Icon({ name }) {
       </>
     ),
     chevron: <path d="m15 18-6-6 6-6" />,
+    trash: (
+      <>
+        <path d="M3 6h18" />
+        <path d="M8 6V4h8v2" />
+        <path d="M19 6l-1 14H6L5 6" />
+        <path d="M10 11v6" />
+        <path d="M14 11v6" />
+      </>
+    ),
     lock: (
       <>
         <rect x="4" y="11" width="16" height="10" rx="2" />

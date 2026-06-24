@@ -31,6 +31,7 @@ def check_drift(
         auto_retrain=auto_retrain,
         max_regions=max_regions,
         current_end_at=current_end,
+        check_method="auto",
     )
 
 
@@ -50,6 +51,7 @@ def check_region_drift(
             auto_retrain=auto_retrain,
             force_retrain=force_retrain,
             current_end_at=current_end,
+            check_method="auto",
         )
     except ValueError as error:
         raise ApplicationError("region_not_found", str(error), 404) from error

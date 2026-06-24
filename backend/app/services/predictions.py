@@ -1,5 +1,4 @@
 import os
-import logging
 import uuid
 from io import BytesIO
 from datetime import datetime, timedelta
@@ -49,8 +48,6 @@ CATEGORICAL_FEATURE_DEFAULTS = {
     "is_holiday": None,
 }
 
-logger = logging.getLogger(__name__)
-
 
 def _resolve_model_path(artifact_uri: str) -> str:
     if artifact_uri.startswith("file://"):
@@ -58,8 +55,8 @@ def _resolve_model_path(artifact_uri: str) -> str:
     return artifact_uri if os.path.isabs(artifact_uri) else os.path.abspath(artifact_uri)
 
 
-@lru_cache(maxsize=16)
-def _load_joblib_model_from_path(model_path: str):
+def _load_model(model_version: ModelVersion):
+    model_path = _resolve_model_path(model_version.artifact_uri)
     if not os.path.exists(model_path):
         raise ApplicationError(
             "model_artifact_not_found",
@@ -67,11 +64,6 @@ def _load_joblib_model_from_path(model_path: str):
             500,
         )
     return joblib.load(model_path)
-
-
-def _load_model(model_version: ModelVersion):
-    model_path = _resolve_model_path(model_version.artifact_uri)
-    return _load_joblib_model_from_path(model_path)
 
 
 @lru_cache(maxsize=4)
@@ -452,65 +444,6 @@ def _predict_neural_sequence_batch(
         when: float(prediction)
         for when, prediction in zip(output_times, predictions)
     }
-
-
-def _warm_neural_prediction_cache(
-    model_version: ModelVersion,
-    training_run: TrainingRun,
-    dataset: Dataset,
-) -> None:
-    config = training_run.configuration_json or {}
-    preprocessor_file = config.get("preprocessor_file")
-    if not preprocessor_file:
-        raise ApplicationError(
-            "neural_preprocessor_not_found",
-            "Active neural model preprocessor path is missing.",
-            500,
-        )
-
-    preprocessor_path = _resolve_model_path(preprocessor_file)
-    model = _load_keras_model(model_version)
-    sequence_length = int(config.get("recurrent_sequence_length") or 72)
-    _source_times, transformed, _preprocessors = _neural_sequence_context(
-        dataset.storage_uri,
-        dataset.sha256,
-        preprocessor_path,
-    )
-    if len(transformed) >= sequence_length:
-        warm_sequence = transformed[:sequence_length].reshape(
-            1,
-            sequence_length,
-            transformed.shape[1],
-        )
-        model.predict(warm_sequence, verbose=0)
-
-
-def warm_prediction_cache_for_model(
-    db: Session,
-    model_version: ModelVersion,
-) -> None:
-    training_run, dataset = _active_training_context(db, model_version)
-    model_family = (training_run.configuration_json or {}).get("model_family")
-    if model_family == "neural_sequence":
-        _warm_neural_prediction_cache(model_version, training_run, dataset)
-        return
-
-    _load_model(model_version)
-    _hourly_context(dataset)
-
-
-def warm_prediction_cache_for_model_best_effort(
-    db: Session,
-    model_version: ModelVersion,
-) -> None:
-    try:
-        warm_prediction_cache_for_model(db, model_version)
-    except Exception:
-        logger.warning(
-            "Could not warm prediction cache for model version %s",
-            model_version.id,
-            exc_info=True,
-        )
 
 
 def _predict_value(

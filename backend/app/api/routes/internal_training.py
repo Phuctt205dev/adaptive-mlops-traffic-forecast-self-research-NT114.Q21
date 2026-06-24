@@ -120,7 +120,7 @@ def _read_optional_branch_result(training_run: TrainingRun, branch_name: str) ->
 
 def _comparison_entry(model_info: dict) -> dict:
     return {
-        "model_name": model_info.get("best_model_name"),
+        "model_name": model_info.get("model_name") or model_info.get("best_model_name"),
         "model_family": model_info.get("model_family"),
         "validation_MAE": model_info.get("validation_MAE"),
         "validation_MAE_std": model_info.get("validation_MAE_std"),
@@ -133,7 +133,24 @@ def _comparison_entry(model_info: dict) -> dict:
         "inference_supported": bool(model_info.get("inference_supported", True)),
         "mlflow_run_id": model_info.get("mlflow_run_id"),
         "artifact_uri": model_info.get("versioned_model_file") or model_info.get("model_file"),
+        "selected": bool(model_info.get("selected", False)),
     }
+
+
+def _comparison_entries(model_info: dict) -> list[dict]:
+    nested = model_info.get("model_comparison") or []
+    if not nested:
+        return [_comparison_entry(model_info)]
+    entries = []
+    for item in nested:
+        entry = _comparison_entry(
+            {
+                **item,
+                "model_family": item.get("model_family") or model_info.get("model_family"),
+            }
+        )
+        entries.append(entry)
+    return entries
 
 
 def _metric_entry(model_info: dict) -> dict:
@@ -335,7 +352,16 @@ def finalize_parallel_training_run(
                 "Training did not produce a production-compatible model.",
                 409,
             )
-        model_comparison = [_comparison_entry(item) for item in candidates]
+        model_comparison = [
+            entry
+            for candidate in candidates
+            for entry in _comparison_entries(candidate)
+        ]
+        for entry in model_comparison:
+            entry["selected"] = bool(entry.get("selected")) or (
+                entry.get("model_name") == best_info.get("best_model_name")
+                and entry.get("model_family") == best_info.get("model_family")
+            )
         best_info["model_comparison"] = model_comparison
         best_info["selected_from_candidates"] = selected_models
         best_info["selected_model_policy"] = (
@@ -391,8 +417,9 @@ def execute_training_run(
             409,
         )
     tree_info["model_comparison"] = [
-        _comparison_entry(item)
+        entry
         for item in tree_branch.get("candidates", [])
+        for entry in _comparison_entries(item)
     ]
     tree_info["selected_model_policy"] = (
         "best_legacy_tree_model_for_web_inference"

@@ -1207,6 +1207,38 @@ function metricText(value) {
   return Number.isFinite(number) ? number.toFixed(2) : "-";
 }
 
+function modelDisplayName(value) {
+  const normalized = String(value || "").toLowerCase();
+  const labels = {
+    random_forest_lag: "Random Forest",
+    random_forest: "Random Forest",
+    randomforest: "Random Forest",
+    xgboost_lag: "XGBoost",
+    xgboost: "XGBoost",
+    lightgbm_lag: "LightGBM",
+    lightgbm: "LightGBM",
+    lstm: "LSTM",
+    gru: "GRU",
+  };
+  if (labels[normalized]) return labels[normalized];
+  return String(value || "-").replace(/_lag$/i, "").replace(/_/g, " ");
+}
+
+function selectedModelSummary(configuration) {
+  const selected = configuration?.selected_models || configuration?.selected_from_candidates || [];
+  return selected.length ? selected.map(modelDisplayName).join(", ") : "-";
+}
+
+function comparisonRole(item, parentModel) {
+  if (item.selected || item.model_name === parentModel.variant) return "Selected";
+  if (item.inference_supported === false || item.benchmark_only) return "Benchmark";
+  return "Candidate";
+}
+
+function isDriftRetrainedModel(model) {
+  return model.training_configuration?.trigger_source === "feature_drift";
+}
+
 function ModelManager({ selectedRegion, models, refreshModels, refreshRegions }) {
   const [expandedModelId, setExpandedModelId] = useState("");
 
@@ -1249,7 +1281,19 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions })
                       <td>{model.variant}</td>
                       <td>{metricText(model.cv_mean_mae)}</td>
                       <td>{metricText(model.final_test_mae)}</td>
-                      <td><StatusBadge value={model.status} /></td>
+                      <td>
+                        <span className="status-cell">
+                          <StatusBadge value={model.status} />
+                          {isDriftRetrainedModel(model) && (
+                            <span
+                              className="drift-retrain-indicator"
+                              title="Retrained after feature drift"
+                            >
+                              <Icon name="drift-retrain" />
+                            </span>
+                          )}
+                        </span>
+                      </td>
                       <td>{formatDate(model.created_at)}</td>
                       <td>
                         <div className="row-actions">
@@ -1273,26 +1317,24 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions })
                           <div className="model-comparison-panel">
                             <div className="model-comparison-meta">
                               <span>Training window: <strong>{model.training_configuration?.train_start_date || "-"} - {model.training_configuration?.train_end_date || "-"}</strong></span>
-                              <span>Selected: <strong>{(model.training_configuration?.selected_models || model.training_configuration?.selected_from_candidates || []).join(", ") || "-"}</strong></span>
+                              <span>Selected: <strong>{selectedModelSummary(model.training_configuration)}</strong></span>
                             </div>
                             <table className="nested-table">
                               <thead>
                                 <tr>
                                   <th>Model</th>
                                   <th>CV MAE</th>
-                                  <th>CV Std</th>
                                   <th>Test MAE</th>
-                                  <th>Production</th>
+                                  <th>Role</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {modelComparisonRows(model).map((item, index) => (
                                   <tr key={`${item.model_name || "model"}-${index}`}>
-                                    <td>{item.model_name || "-"}</td>
+                                    <td>{modelDisplayName(item.model_name)}</td>
                                     <td>{metricText(item.validation_MAE)}</td>
-                                    <td>{metricText(item.validation_MAE_std)}</td>
                                     <td>{metricText(item.test_MAE)}</td>
-                                    <td>{item.inference_supported === false || item.benchmark_only ? "no" : "yes"}</td>
+                                    <td>{comparisonRole(item, model)}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -1926,6 +1968,13 @@ function Icon({ name }) {
         <path d="M7 15c2.5-6 4.5-6 7 0s4.5 6 7 0" />
         <path d="M8 8h.01" />
         <path d="M16 8h.01" />
+      </>
+    ),
+    "drift-retrain": (
+      <>
+        <path d="M20 7v5h-5" />
+        <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+        <path d="M12 8v4l3 2" />
       </>
     ),
     users: (

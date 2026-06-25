@@ -266,7 +266,7 @@ def _trigger_retraining(
         dag_run_id,
     )
     conf = {
-        **(queued_run.configuration_json or configuration),
+        **configuration,
         "region_id": str(dataset.region_id),
         "dataset_id": str(dataset.id),
         "training_run_id": str(queued_run.id),

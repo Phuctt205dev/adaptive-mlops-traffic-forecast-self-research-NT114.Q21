@@ -801,7 +801,6 @@ def run_model_time_series_cross_validation(
     experiment_name=None,
     mlflow_dataset_name=None,
     mlflow_dataset_source=None,
-    mlflow_lineage=None,
 ):
     """Chạy CV và Final Test cho đúng một model."""
     if model_name not in SUPPORTED_MODELS:
@@ -912,7 +911,6 @@ def run_model_time_series_cross_validation(
         "model": model_name,
         "variant": normalized_name,
         "selection_metric": "cross_validation_mean_MAE",
-        "data_lineage": mlflow_lineage or {},
         "split_policy": split_policy,
         "production_used_for_training": False,
         "random_state": int(random_state),
@@ -964,7 +962,6 @@ def run_model_time_series_cross_validation(
     _save_json(report, report_path)
     mlflow = _load_mlflow()
     if mlflow is not None:
-        lineage = mlflow_lineage or {}
         tracking_uri = mlflow_tracking_uri or os.getenv("MLFLOW_TRACKING_URI")
         if tracking_uri:
             mlflow.set_tracking_uri(tracking_uri)
@@ -990,10 +987,6 @@ def run_model_time_series_cross_validation(
                     "model_family": report["family"],
                     "selection_metric": report["selection_metric"],
                     "split_mode": report["split_policy"].get("mode", ""),
-                    "region_id": str(lineage.get("region_id") or ""),
-                    "dataset_id": str(lineage.get("dataset_id") or ""),
-                    "training_run_id": str(lineage.get("training_run_id") or ""),
-                    "dataset_dvc_rev": str(lineage.get("dataset_dvc_rev") or ""),
                 }
             )
             mlflow.log_params(
@@ -1006,9 +999,6 @@ def run_model_time_series_cross_validation(
                     "train_start_date": str(train_start_date or ""),
                     "train_end_date": str(train_end_date or ""),
                     "final_test_ratio": float(final_test_ratio),
-                    "dataset_sha256": str(lineage.get("dataset_sha256") or ""),
-                    "dataset_storage_uri": str(lineage.get("dataset_storage_uri") or ""),
-                    "dataset_dvc_rev": str(lineage.get("dataset_dvc_rev") or ""),
                 }
             )
             mlflow.log_metrics(

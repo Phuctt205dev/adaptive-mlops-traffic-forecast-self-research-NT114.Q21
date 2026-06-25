@@ -212,9 +212,6 @@ def execute_tree_training_branch(
             region_id=training_run.region_id,
             dataset_id=training_run.dataset_id,
             experiment_name=region_experiment_name(region.name, region.id),
-            dataset_sha256=config.get("dataset_sha256") or dataset.sha256,
-            dataset_dvc_rev=config.get("dataset_dvc_rev") or dataset.dvc_rev,
-            dataset_storage_uri=config.get("dataset_storage_uri") or dataset.storage_uri,
         )
         model_info.update(
             {

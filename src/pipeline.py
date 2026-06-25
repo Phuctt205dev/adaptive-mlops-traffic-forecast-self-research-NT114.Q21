@@ -246,9 +246,6 @@ def run_pipeline(
     artifact_root=".",
     mlflow_tracking_uri=None,
     experiment_name=None,
-    dataset_sha256=None,
-    dataset_dvc_rev=None,
-    dataset_storage_uri=None,
 ):
     """
     Train all supported models and save the best validation-MAE model.
@@ -263,11 +260,6 @@ def run_pipeline(
         print(f"Region ID: {region_id}")
     if dataset_id is not None:
         print(f"Dataset ID: {dataset_id}")
-    dataset_lineage = {
-        "dataset_sha256": dataset_sha256,
-        "dataset_dvc_rev": dataset_dvc_rev,
-        "dataset_storage_uri": dataset_storage_uri,
-    }
 
     models_dir = os.path.dirname(
         output_model_path
@@ -414,7 +406,6 @@ def run_pipeline(
                     "data_version": data_version,
                     "region_id": str(region_id) if region_id is not None else "",
                     "dataset_id": str(dataset_id) if dataset_id is not None else "",
-                    "dataset_dvc_rev": str(dataset_dvc_rev or ""),
                 }
             )
             mlflow.log_params(
@@ -424,9 +415,6 @@ def run_pipeline(
                     "random_state": random_state,
                     "cv_splits": cv_splits,
                     "data_path": data_path,
-                    "dataset_sha256": str(dataset_sha256 or ""),
-                    "dataset_storage_uri": str(dataset_storage_uri or ""),
-                    "dataset_dvc_rev": str(dataset_dvc_rev or ""),
                 }
             )
             mlflow.log_metrics(
@@ -488,8 +476,6 @@ def run_pipeline(
         "model_role": model_role,
         "region_id": str(region_id) if region_id is not None else None,
         "dataset_id": str(dataset_id) if dataset_id is not None else None,
-        **dataset_lineage,
-        "data_lineage": dataset_lineage,
         "data_path": data_path,
         "data_version": data_version,
         "train_start_date": train_start_date,
@@ -571,14 +557,6 @@ def run_pipeline(
                 "model_version": model_version,
                 "region_id": str(region_id) if region_id is not None else "",
                 "dataset_id": str(dataset_id) if dataset_id is not None else "",
-                "dataset_dvc_rev": str(dataset_dvc_rev or ""),
-            }
-        )
-        mlflow.log_params(
-            {
-                "dataset_sha256": str(dataset_sha256 or ""),
-                "dataset_storage_uri": str(dataset_storage_uri or ""),
-                "dataset_dvc_rev": str(dataset_dvc_rev or ""),
             }
         )
         mlflow.log_metrics(

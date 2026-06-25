@@ -27,14 +27,6 @@ class Settings(BaseSettings):
     dataset_contract_version: str = "traffic-training-csv/v1"
     dataset_max_upload_bytes: int = 100 * 1024 * 1024
     dataset_min_rows: int = 4380
-    dvc_enabled: bool = True
-    dvc_required: bool = False
-    dvc_remote_name: str = "minio"
-    dvc_remote_url: str = "s3://dvc-storage"
-    dvc_remote_endpoint: str = "http://minio:9000"
-    dvc_repo_root: str = "."
-    dvc_workspace_dir: str = "data/dvc_data"
-    dvc_keep_local_snapshot: bool = False
     airflow_api_url: str = "http://localhost:8080/api/v1"
     airflow_admin_username: str = "admin"
     airflow_admin_password: str = "admin"

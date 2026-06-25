@@ -25,6 +25,15 @@ SPLIT_POLICY = "time_series_cv_70_15_15"
 MODEL_VERSION_PATTERN = re.compile(r"^model_v(?P<number>\d+)$")
 
 
+def _dataset_lineage(dataset: Dataset) -> dict:
+    return {
+        "dataset_id": str(dataset.id),
+        "dataset_storage_uri": dataset.storage_uri,
+        "dataset_sha256": dataset.sha256,
+        "dataset_dvc_rev": dataset.dvc_rev,
+    }
+
+
 def list_region_model_versions(
     db: Session,
     region_id: uuid.UUID,
@@ -215,6 +224,7 @@ def register_training_result(
         "cv_splits": model_info.get("cv_splits"),
         "random_state": model_info.get("random_state"),
         "data_version": model_info.get("data_version"),
+        **_dataset_lineage(dataset),
     }
     for optional_key in (
         "model_comparison",
@@ -229,6 +239,7 @@ def register_training_result(
         "split_policy",
         "final_test_used_for_selection",
         "selection_metric",
+        "data_lineage",
     ):
         if optional_key in model_info:
             configuration_json[optional_key] = model_info[optional_key]
@@ -332,6 +343,10 @@ def create_queued_training_run(
             400,
         )
     ensure_region_exists(db, dataset.region_id)
+    configuration = {
+        **configuration,
+        **_dataset_lineage(dataset),
+    }
     training_run = TrainingRun(
         region_id=dataset.region_id,
         dataset_id=dataset.id,

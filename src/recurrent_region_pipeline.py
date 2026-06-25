@@ -88,6 +88,9 @@ def run_recurrent_benchmark(
     sequence_length=DEFAULT_SEQUENCE_LENGTH,
     epochs=DEFAULT_EPOCHS,
     batch_size=DEFAULT_BATCH_SIZE,
+    dataset_sha256=None,
+    dataset_dvc_rev=None,
+    dataset_storage_uri=None,
 ):
     normalized_model_name = model_name.upper()
     sequence_length = int(sequence_length)
@@ -230,6 +233,9 @@ def run_recurrent_benchmark(
         "inference_supported": False,
         "region_id": str(region_id) if region_id is not None else None,
         "dataset_id": str(dataset_id) if dataset_id is not None else None,
+        "dataset_sha256": dataset_sha256,
+        "dataset_dvc_rev": dataset_dvc_rev,
+        "dataset_storage_uri": dataset_storage_uri,
         "data_path": data_path,
         "train_start_date": train_start_date,
         "train_end_date": train_end_date,
@@ -293,6 +299,7 @@ def run_recurrent_benchmark(
                     "benchmark_only": "true",
                     "region_id": str(region_id) if region_id is not None else "",
                     "dataset_id": str(dataset_id) if dataset_id is not None else "",
+                    "dataset_dvc_rev": str(dataset_dvc_rev or ""),
                 }
             )
             mlflow.log_params(
@@ -304,6 +311,9 @@ def run_recurrent_benchmark(
                     "epochs": epochs,
                     "batch_size": batch_size,
                     "data_path": data_path,
+                    "dataset_sha256": str(dataset_sha256 or ""),
+                    "dataset_storage_uri": str(dataset_storage_uri or ""),
+                    "dataset_dvc_rev": str(dataset_dvc_rev or ""),
                 }
             )
             mlflow.log_metrics(

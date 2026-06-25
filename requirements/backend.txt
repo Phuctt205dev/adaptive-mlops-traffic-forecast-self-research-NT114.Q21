@@ -20,3 +20,4 @@ requests
 httpx
 boto3
 mlflow
+dvc-s3

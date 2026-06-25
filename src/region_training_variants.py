@@ -122,7 +122,9 @@ def _candidate_from_report(
     dataset_id,
     data_path,
     model_role,
+    config=None,
 ):
+    config = config or {}
     saved_at = datetime.now().isoformat()
     variant = report["variant"]
     display_name = report.get("model", variant)
@@ -136,6 +138,14 @@ def _candidate_from_report(
         "inference_supported": True,
         "region_id": str(region_id),
         "dataset_id": str(dataset_id),
+        "dataset_sha256": config.get("dataset_sha256"),
+        "dataset_dvc_rev": config.get("dataset_dvc_rev"),
+        "dataset_storage_uri": config.get("dataset_storage_uri"),
+        "data_lineage": report.get("data_lineage") or {
+            "dataset_sha256": config.get("dataset_sha256"),
+            "dataset_dvc_rev": config.get("dataset_dvc_rev"),
+            "dataset_storage_uri": config.get("dataset_storage_uri"),
+        },
         "data_path": data_path,
         "train_start_date": report["split_policy"].get("train_start_date"),
         "train_end_date": report["split_policy"].get("train_end_date"),
@@ -201,6 +211,14 @@ def _train_variant(
         experiment_name=region_experiment_name(region_name, region_id),
         mlflow_dataset_name=f"region_{region_id}_dataset_{dataset_id}",
         mlflow_dataset_source=str(data_path),
+        mlflow_lineage={
+            "region_id": region_id,
+            "dataset_id": dataset_id,
+            "training_run_id": training_run_id,
+            "dataset_sha256": config.get("dataset_sha256"),
+            "dataset_dvc_rev": config.get("dataset_dvc_rev"),
+            "dataset_storage_uri": config.get("dataset_storage_uri"),
+        },
     )
     return _candidate_from_report(
         report,
@@ -208,6 +226,7 @@ def _train_variant(
         dataset_id=dataset_id,
         data_path=data_path,
         model_role=config.get("model_role", "candidate"),
+        config=config,
     )
 
 

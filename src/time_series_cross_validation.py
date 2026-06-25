@@ -7,6 +7,8 @@ import joblib
 import numpy as np
 import pandas as pd
 
+from src.mlflow_regions import set_mlflow_experiment
+
 from src.lstm_sequences import (
     DEFAULT_SEQUENCE_LENGTH,
     build_sequences,
@@ -966,7 +968,7 @@ def run_model_time_series_cross_validation(
         if tracking_uri:
             mlflow.set_tracking_uri(tracking_uri)
         if experiment_name:
-            mlflow.set_experiment(experiment_name)
+            set_mlflow_experiment(mlflow, experiment_name)
         with mlflow.start_run(run_name=f"candidate_{model_name}") as run:
             mlflow_dataset = _build_mlflow_dataset(
                 mlflow,

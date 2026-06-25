@@ -4,6 +4,8 @@ from datetime import datetime
 import joblib
 import numpy as np
 import pandas as pd
+
+from src.mlflow_regions import set_mlflow_experiment
 from sklearn.preprocessing import StandardScaler
 
 from src.pipeline import DEFAULT_MLFLOW_TRACKING_URI, evaluate, save_model_info
@@ -272,7 +274,8 @@ def run_recurrent_benchmark(
             or os.getenv("MLFLOW_TRACKING_URI")
             or DEFAULT_MLFLOW_TRACKING_URI
         )
-        mlflow.set_experiment(
+        set_mlflow_experiment(
+            mlflow,
             experiment_name
             or (
                 f"Traffic Forecast - Region {region_id}"

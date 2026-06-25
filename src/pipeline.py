@@ -18,6 +18,7 @@ from src.preprocess import (
     preprocess,
     split_data,
 )
+from src.mlflow_regions import set_mlflow_experiment
 
 class _NullMLflowData:
     @staticmethod
@@ -276,7 +277,8 @@ def run_pipeline(
         or os.getenv("MLFLOW_TRACKING_URI")
         or DEFAULT_MLFLOW_TRACKING_URI
     )
-    mlflow.set_experiment(
+    set_mlflow_experiment(
+        mlflow,
         experiment_name
         or (
             f"Traffic Forecast - Region {region_id}"

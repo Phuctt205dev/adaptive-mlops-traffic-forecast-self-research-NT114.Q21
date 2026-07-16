@@ -14,19 +14,11 @@ This platform is built to support traffic forecasting by region and by time hori
 
 ## System Architecture
 
-> Place your system architecture diagram here.
-
 ![System Architecture](docs/assets/system-architecture.png)
-
-Keep the image at `docs/assets/system-architecture.png` so it renders directly in the README.
 
 ## Training Flow
 
-> Place your training pipeline diagram here.
-
 ![Training Flow](docs/assets/training-flow.png)
-
-Use `docs/assets/training-flow.png` for a clear visual of ingest, preprocess, train, evaluate, register, and promote.
 
 ## Key Features
 
@@ -137,16 +129,3 @@ Relevant entry points include:
 - `src/train.py`
 - `src/time_series_training.py`
 - `airflow/dags/`
-
-## Testing
-
-Run the available test suite with your preferred test runner. The repository includes coverage for inference preparation, model lifecycle, dataset validation, and selection logic.
-
-## Interview Presentation Tips
-
-To make the README look polished in an interview, keep both diagrams visible and concise:
-
-- one architecture diagram showing API, UI, Airflow, MLflow, storage, and database
-- one training pipeline diagram showing ingest, preprocess, train, evaluate, register, and monitor
-
-That gives you a clean one-minute explanation of the system.

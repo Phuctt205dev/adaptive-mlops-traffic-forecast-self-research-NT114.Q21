@@ -29,3 +29,13 @@ frontend/dist/
 
 # MLflow
 mlruns/
+
+# Terraform local state and generated files
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+
+# Generated Kubernetes manifests
+k8s/rendered/

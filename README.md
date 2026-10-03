@@ -12,6 +12,8 @@ This platform is built to support traffic forecasting by region and by time hori
 - API-based inference for the web application
 - drift monitoring and retraining triggers
 
+For a compact, AI-friendly map of the repository, see [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md).
+
 ## System Architecture
 
 ![System Architecture](docs/assets/system-architecture.png)

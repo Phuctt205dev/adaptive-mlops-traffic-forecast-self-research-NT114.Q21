@@ -1,0 +1,4 @@
+date_time,is_holiday,air_pollution_index,humidity,wind_speed,wind_direction,visibility_in_miles,dew_point,temperature,rain_p_h,snow_p_h,clouds_all,weather_type,weather_description,traffic_volume
+2025-01-01 00:00:00,New Year's Day,42,85,3,180,10,12,18.5,0.0,0.0,20,Clear,clear sky,820
+2025-01-01 01:00:00,New Year's Day,41,86,3,185,10,12,18.2,0.0,0.0,25,Clouds,few clouds,760
+2025-01-01 02:00:00,New Year's Day,40,87,2,190,9,12,18.0,0.0,0.0,30,Clouds,scattered clouds,710

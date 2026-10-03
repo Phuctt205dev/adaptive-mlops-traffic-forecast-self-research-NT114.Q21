@@ -9,6 +9,15 @@ on:
       - "frontend/**"
       - ".github/workflows/deploy-frontend-pages.yml"
   workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: "Frontend API base URL, for example https://api.example.com/api/v1"
+        required: false
+        type: string
+      base_path:
+        description: "GitHub Pages base path, for example /adaptive-mlops-traffic-forecast-self-research-NT114.Q21/"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -37,8 +46,8 @@ jobs:
       - name: Configure frontend environment
         shell: bash
         run: |
-          api_base_url="${{ vars.VITE_API_BASE_URL }}"
-          base_path="${{ vars.VITE_BASE_PATH }}"
+          api_base_url="${{ inputs.api_base_url || vars.VITE_API_BASE_URL }}"
+          base_path="${{ inputs.base_path || vars.VITE_BASE_PATH }}"
 
           if [ -z "$api_base_url" ]; then
             api_base_url="https://api.example.com/api/v1"

@@ -1,0 +1,59 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: traffic-mlops
+
+resources:
+  - ../../base
+  - ingress-api.yaml
+
+images:
+  - name: traffic-api
+    newName: 000000000000.dkr.ecr.ap-southeast-1.amazonaws.com/traffic-mlops/traffic-api
+    newTag: v1
+  - name: apache/airflow
+    newName: 000000000000.dkr.ecr.ap-southeast-1.amazonaws.com/traffic-mlops/traffic-airflow
+    newTag: v1
+  - name: traffic-web
+    newName: 000000000000.dkr.ecr.ap-southeast-1.amazonaws.com/traffic-mlops/traffic-web
+    newTag: v1
+  - name: traffic-mlflow
+    newName: 000000000000.dkr.ecr.ap-southeast-1.amazonaws.com/traffic-mlops/traffic-mlflow
+    newTag: v1
+
+patches:
+  - path: secret.eks.example.yaml
+  - path: patches/configmap.eks.yaml
+  - path: patches/storageclass.yaml
+  - path: patches/services-clusterip.yaml
+  - path: patches/traffic-api.eks.yaml
+  - path: patches/traffic-web.eks.yaml
+  - path: patches/airflow.eks.yaml
+  - path: patches/mlflow.eks.yaml
+  - path: patches/postgres.eks.yaml
+  - path: patches/minio.eks.yaml
+  - target:
+      version: v1
+      kind: Service
+      name: traffic-web
+      namespace: traffic-mlops
+    patch: |-
+      - op: replace
+        path: /spec/ports
+        value:
+          - name: http
+            port: 80
+            targetPort: 80
+      - op: replace
+        path: /spec/type
+        value: ClusterIP
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: traffic-web
+      namespace: traffic-mlops
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/ports
+        value:
+          - containerPort: 80

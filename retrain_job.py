@@ -18,6 +18,9 @@ DATA_AUDIT_PATH = os.getenv(
     "DATA_AUDIT_PATH",
     "data/processed/TrafficVolumeData_hourly_audit.csv",
 )
+REGION_ID = os.getenv("REGION_ID")
+DATASET_ID = os.getenv("DATASET_ID")
+ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", ".")
 MODEL_PATH = os.getenv("MODEL_PATH", "models/best_model.pkl")
 MODEL_INFO_PATH = os.getenv(
     "MODEL_INFO_PATH",
@@ -368,6 +371,11 @@ def train_initial_model_if_missing():
         output_model_path=MODEL_PATH,
         output_info_path=MODEL_INFO_PATH,
         model_role="champion",
+        data_path=DATA_PATH,
+        data_audit_path=DATA_AUDIT_PATH,
+        region_id=REGION_ID,
+        dataset_id=DATASET_ID,
+        artifact_root=ARTIFACT_ROOT,
     )
 
     state = load_state()
@@ -391,6 +399,11 @@ def train_candidate(train_start, train_end):
         output_model_path=CANDIDATE_MODEL_PATH,
         output_info_path=CANDIDATE_INFO_PATH,
         model_role="candidate",
+        data_path=DATA_PATH,
+        data_audit_path=DATA_AUDIT_PATH,
+        region_id=REGION_ID,
+        dataset_id=DATASET_ID,
+        artifact_root=ARTIFACT_ROOT,
     )
 
 

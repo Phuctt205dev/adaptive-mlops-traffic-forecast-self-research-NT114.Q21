@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: traffic-config
+  namespace: traffic-mlops
+data:
+  AWS_DEFAULT_REGION: ap-southeast-1
+  VITE_API_BASE_URL: https://api.example.com/api/v1
+  CORS_ORIGINS: '["https://phuctt205dev.github.io"]'

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api, getStoredToken, setStoredToken } from "./api";
+import ModelQualityPanel from "./ModelQualityPanel";
 import "./styles.css";
 
 const pages = [
@@ -1239,7 +1240,7 @@ function isDriftRetrainedModel(model) {
   return model.training_configuration?.trigger_source === "feature_drift";
 }
 
-function ModelManager({ selectedRegion, models, refreshModels, refreshRegions }) {
+function ModelManager({ selectedRegion, models, refreshModels, refreshRegions, enabled }) {
   const [expandedModelId, setExpandedModelId] = useState("");
 
   async function activate(id) {
@@ -1256,6 +1257,8 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions })
   }
 
   return (
+    <div className="grid model-management">
+    <ModelQualityPanel region={selectedRegion} enabled={enabled} />
     <Card title="Model Versions">
       {models.length ? (
         <div className="table-wrap">
@@ -1353,6 +1356,7 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions })
         <p className="muted">No data yet.</p>
       )}
     </Card>
+    </div>
   );
 }
 
@@ -2342,7 +2346,7 @@ function App() {
               />
             </section>
             <section className="page-panel" hidden={page !== "models"}>
-              <ModelManager selectedRegion={selectedRegion} models={models} refreshModels={refreshModels} refreshRegions={() => refreshRegions(user)} />
+              <ModelManager selectedRegion={selectedRegion} models={models} refreshModels={refreshModels} refreshRegions={() => refreshRegions(user)} enabled={page === "models"} />
             </section>
             <section className="page-panel" hidden={page !== "drift"}>
               <DriftMonitor

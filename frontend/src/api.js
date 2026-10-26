@@ -134,6 +134,12 @@ export const api = {
     apiRequest(`/admin/model-versions/${modelVersionId}`),
   modelVersions: (regionId) =>
     apiRequest(`/admin/regions/${regionId}/model-versions?page_size=100`),
+  modelQuality: (regionId, { mode = "reference", hours = 24, startAt, modelVersionId } = {}, options = {}) => {
+    const params = new URLSearchParams({ mode, hours: String(hours) });
+    if (startAt) params.set("start_at", startAt);
+    if (modelVersionId) params.set("model_version_id", modelVersionId);
+    return apiRequest(`/admin/regions/${regionId}/model-quality?${params.toString()}`, options);
+  },
   driftRetrainPlan: (regionId, payload = {}) => {
     const params = new URLSearchParams();
     if (payload.currentEnd) {

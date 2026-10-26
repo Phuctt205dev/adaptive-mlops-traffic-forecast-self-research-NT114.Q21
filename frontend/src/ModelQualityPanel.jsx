@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 
 
@@ -14,14 +14,24 @@ function timeText(value, timezone, short = false) {
 
 
 export function QualityChart({ report }) {
-  const [selected, setSelected] = useState(0);
+  const [selected, setSelected] = useState(() => Math.max(0, report.points.length - 1));
+  const chartContainer = useRef(null);
+  const [width, setWidth] = useState(960);
+  useEffect(() => {
+    if (!chartContainer.current) return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry.contentRect.width > 0) setWidth(Math.round(entry.contentRect.width));
+    });
+    observer.observe(chartContainer.current);
+    return () => observer.disconnect();
+  }, []);
   const points = report.points;
-  const width = 960;
-  const height = 320;
-  const left = 72;
+  const compact = width < 600;
+  const height = compact ? 280 : 360;
+  const left = compact ? 60 : 84;
   const right = 24;
   const top = 24;
-  const bottom = 48;
+  const bottom = 52;
   const values = points.flatMap((point) => [point.reference, point.prediction]).filter((value) => value != null);
   const low = Math.min(0, ...values);
   const high = Math.max(1, ...values) * 1.08;
@@ -29,7 +39,7 @@ export function QualityChart({ report }) {
   const y = (value) => height - bottom - ((value - low) / (high - low)) * (height - top - bottom);
   const currentIndex = Math.min(selected, Math.max(0, points.length - 1));
   const current = points[currentIndex];
-  const referenceLabel = "Dataset traffic volume";
+  const referenceLabel = "Actual traffic";
 
   function pathFor(key) {
     let previousExists = false;
@@ -52,20 +62,21 @@ export function QualityChart({ report }) {
   }
 
   if (!points.length) return <p className="muted">No chart values are available in this window.</p>;
-  const ticks = [...new Set(Array.from({ length: Math.min(6, points.length) }, (_, index) => (
-    Math.round(index * (points.length - 1) / Math.max(1, Math.min(6, points.length) - 1))
+  const tickCount = Math.min(compact ? 3 : 6, points.length);
+  const ticks = [...new Set(Array.from({ length: tickCount }, (_, index) => (
+    Math.round(index * (points.length - 1) / Math.max(1, tickCount - 1))
   )))];
 
   return (
-    <div className="quality-chart">
+    <div className={`quality-chart${compact ? " quality-chart-compact" : ""}`}>
       <div className="quality-legend">
         <span><i className="quality-reference-key" />{referenceLabel}</span>
-        <span><i className="quality-prediction-key" />Model prediction</span>
-        <small>vehicles/hour · {report.timezone}</small>
+        <span><i className="quality-prediction-key" />Predicted traffic</span>
+        <span className="quality-chart-unit">Vehicles/hour</span>
       </div>
-      <div className="quality-chart-scroll">
+      <div className="quality-chart-scroll" ref={chartContainer}>
         <svg viewBox={`0 0 ${width} ${height}`} role="img" tabIndex={0}
-          aria-label={`${referenceLabel} and model prediction over time. Use left and right arrow keys to inspect hours.`}
+          aria-label="Actual and predicted traffic over the last 24 hours. Use left and right arrow keys to inspect hours."
           onMouseMove={selectAt}
           onKeyDown={(event) => {
             if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
@@ -95,13 +106,11 @@ export function QualityChart({ report }) {
         </svg>
       </div>
       {current && <div className="quality-point-detail" aria-live="polite">
-        <strong>{timeText(current.forecast_for, report.timezone)}</strong>
-        <span>{referenceLabel}: <b>{numberText(current.reference)}</b></span>
-        <span>Prediction: <b>{numberText(current.prediction)}</b></span>
-        <span>Difference (prediction − dataset): <b>{numberText(current.reference != null && current.prediction != null ? current.prediction - current.reference : null)}</b></span>
-        <span>Absolute error: <b>{numberText(current.absolute_error)}</b></span>
+        <div className="quality-selected-hour"><span>Hour</span><strong>{timeText(current.forecast_for, report.timezone)}</strong></div>
+        <div><span>Actual</span><strong>{numberText(current.reference)}</strong></div>
+        <div><span>Predicted</span><strong>{numberText(current.prediction)}</strong></div>
+        <div><span>Difference</span><strong>{numberText(current.absolute_error)}</strong></div>
       </div>}
-      <p className="muted quality-chart-hint">Hover over the chart or focus it and use ← / →. Missing values remain gaps.</p>
     </div>
   );
 }
@@ -165,48 +174,44 @@ export default function ModelQualityPanel({ region, enabled }) {
 
   return (
     <section className="card quality-panel">
-      <div className="card-header">
-        <h2>Model Quality</h2>
-        <span className="quality-replay-badge">Last 24 completed hours</span>
-      </div>
-      <div className="quality-status">
-        <p className="muted">Compare model predictions with traffic_volume in your dataset, hour by hour. Updates every minute.</p>
+      <div className="quality-heading">
+        <div>
+          <h2>Last 24 hours</h2>
+          {visibleReport && <p className="quality-period">
+            {timeText(visibleReport.start_at, visibleReport.timezone)} — {timeText(visibleReport.end_at, visibleReport.timezone)}
+          </p>}
+        </div>
         <button type="button" disabled={!enabled || loading || !region?.active_model_version_id} onClick={() => setRefresh((value) => value + 1)}>
           {loading ? "Updating…" : "Refresh"}
         </button>
       </div>
       {!region?.active_model_version_id && <div className="alert alert-info">This region has no active model.</div>}
       {error && <div className="alert alert-error" role="alert">{error}</div>}
-      {loading && !visibleReport && <p role="status">Loading the last 24 completed hours…</p>}
+      {loading && !visibleReport && <p role="status">Loading traffic data…</p>}
       {visibleReport && <>
-        <div className="quality-report-meta">
-          <strong>{visibleReport.model_version} · {visibleReport.model_variant}</strong>
-          <span>{visibleReport.dataset_filename}</span>
-          <span>{timeText(visibleReport.start_at, visibleReport.timezone)} — before {timeText(visibleReport.window_end_at, visibleReport.timezone)}</span>
-          <span>{visibleReport.timezone}</span>
-        </div>
         <div className="quality-metrics">
-          <div><span>Average error (MAE)</span><strong>{numberText(visibleReport.metrics.mae)}</strong><small>vehicles/hour · lower is better</small></div>
-          <div><span>RMSE</span><strong>{numberText(visibleReport.metrics.rmse)}</strong><small>vehicles/hour · gives more weight to large errors</small></div>
-          <div><span>Hours compared</span><strong>{visibleReport.coverage.paired_points} / {visibleReport.coverage.requested_points}</strong><small>hours with both dataset values and predictions</small></div>
+          <div><span>Average difference</span><strong>{numberText(visibleReport.metrics.mae)}<span className="quality-metric-unit">vehicles/hour</span></strong></div>
+          <div><span>Hours compared</span><strong>{visibleReport.coverage.paired_points} / {visibleReport.coverage.requested_points}</strong></div>
         </div>
         {visibleReport.coverage.dataset_points === 0
-          ? <div className="alert alert-info">No eligible dataset rows in the last 24 hours. The chart keeps the current time window; it does not use older or future data.</div>
-          : visibleReport.coverage.paired_points === 0 && <div className="alert alert-info">No matching dataset values and predictions are available to calculate errors.</div>}
+          ? <div className="alert alert-info">No traffic data available for the last 24 hours.</div>
+          : visibleReport.coverage.paired_points === 0 && <div className="alert alert-info">Not enough data to compare actual and predicted traffic.</div>}
         <QualityChart key={`${visibleReport.generated_at}-${visibleReport.mode}`} report={visibleReport} />
-        <p className="muted quality-chart-hint">The closer the two lines are, the smaller the prediction error.</p>
-        <details className="quality-details"><summary>View hourly values and evaluation notes</summary>
-          <ul>{visibleReport.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+        <details className="quality-details"><summary>View details</summary>
+          <dl className="quality-report-meta">
+            <div><dt>Model</dt><dd>{visibleReport.model_version} · {visibleReport.model_variant}</dd></div>
+            <div><dt>Dataset</dt><dd>{visibleReport.dataset_filename}</dd></div>
+            <div><dt>Time zone</dt><dd>{visibleReport.timezone}</dd></div>
+            <div><dt>RMSE</dt><dd>{numberText(visibleReport.metrics.rmse)} vehicles/hour</dd></div>
+          </dl>
           <div className="table-wrap quality-hour-table"><table>
-            <thead><tr><th>Hour · {visibleReport.timezone}</th><th>Dataset traffic volume</th><th>Prediction</th><th>Difference</th><th>Absolute error</th></tr></thead>
+            <thead><tr><th>Hour</th><th>Actual</th><th>Predicted</th><th>Difference</th></tr></thead>
             <tbody>{visibleReport.points.map((point) => <tr key={point.forecast_for}>
               <td>{timeText(point.forecast_for, visibleReport.timezone)}</td><td>{numberText(point.reference)}</td>
               <td>{numberText(point.prediction)}</td>
-              <td>{numberText(point.reference != null && point.prediction != null ? point.prediction - point.reference : null)}</td>
               <td>{numberText(point.absolute_error)}</td>
             </tr>)}</tbody>
           </table></div>
-          <p className="muted">Report generated: {timeText(visibleReport.generated_at, visibleReport.timezone)}.</p>
         </details>
       </>}
     </section>

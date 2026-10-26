@@ -39,3 +39,9 @@ mlruns/
 
 # Generated Kubernetes manifests
 k8s/rendered/
+
+# My notes
+Deployment_test_on_rke2/
+My-worklog/
+Progress_Report/
+Proposal/

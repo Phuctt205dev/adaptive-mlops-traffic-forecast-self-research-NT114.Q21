@@ -7,6 +7,17 @@ function defaultApiBaseUrl() {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || defaultApiBaseUrl();
 
+function isNgrokUrl(url) {
+  try {
+    const hostname = new URL(url, window.location.href).hostname;
+    return hostname.endsWith(".ngrok-free.app") || hostname.endsWith(".ngrok-free.dev");
+  } catch {
+    return false;
+  }
+}
+
+const IS_NGROK_API = isNgrokUrl(API_BASE_URL);
+
 export class ApiError extends Error {
   constructor(message, status, payload) {
     super(message);
@@ -44,6 +55,7 @@ export async function apiRequest(path, options = {}) {
     ...(options.body instanceof FormData
       ? {}
       : { "Content-Type": "application/json" }),
+    ...(IS_NGROK_API ? { "ngrok-skip-browser-warning": "true" } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(options.headers || {}),
   };

@@ -57,7 +57,8 @@ class QualityReportTests(unittest.TestCase):
         self.assertAlmostEqual(report["metrics"]["rmse"], math.sqrt(85000))
         self.assertEqual(report["coverage"]["unknown_labels"], 4)
         self.assertEqual(report["coverage"]["observed_labels"], 0)
-        self.assertIn("do not establish real-world accuracy", " ".join(report["warnings"]))
+        self.assertEqual(report["reference_source"], "dataset_traffic_volume")
+        self.assertIn("traffic_volume", " ".join(report["warnings"]))
         ModelQualityReport.model_validate(report)
 
     def test_unknown_labels_have_no_observed_metrics_but_keep_predictions(self):
@@ -220,11 +221,10 @@ class QualityReportTests(unittest.TestCase):
         self.assertFalse(quality._evaluation_lock.locked())
 
     def recent_report(self, frame=None):
-        self.frame["target_observed"] = True
         with patch.object(quality, "_predict_points", return_value=fake_predictions(self.frame)) as predict:
             report = quality._build_report(
                 self.region, self.model, self.training, self.dataset,
-                self.frame if frame is None else frame, "observed", None, 24,
+                self.frame if frame is None else frame, "reference", None, 24,
                 window="recent", now=datetime(2026, 6, 1, 5, 35, tzinfo=UTC),
             )
         return report, predict
@@ -284,8 +284,8 @@ class QualityReportTests(unittest.TestCase):
              patch.object(quality.predictions, "_download_dataset_frame", return_value=self.frame) as download, \
              patch.object(quality, "_predict_points", return_value=fake_predictions(self.frame)):
             first = quality.get_model_quality(db, self.region.id)
-            self.assertEqual(first["mode"], "observed")
-            self.assertIsNone(first["metrics"]["mae"])  # Unknown source is not actual traffic.
+            self.assertEqual(first["mode"], "reference")
+            self.assertEqual(first["metrics"]["mae"], 250)  # No provenance flags are needed to compare dataset targets.
             quality.get_model_quality(db, self.region.id)
             self.assertEqual(download.call_count, 1)
             clock.now.return_value = datetime(2026, 6, 1, 6, 1, tzinfo=UTC)
@@ -294,11 +294,26 @@ class QualityReportTests(unittest.TestCase):
             self.assertNotEqual(first["start_at"], second["start_at"])
         db.commit.assert_not_called()
 
-    def test_recent_window_rejects_manual_range_or_synthetic_reference(self):
-        for kwargs in [{"mode": "reference"}, {"hours": 168}, {"start_at": "2026-06-01"}]:
+    def test_recent_window_rejects_manual_range_or_observed_only_policy(self):
+        for kwargs in [{"mode": "observed"}, {"hours": 168}, {"start_at": "2026-06-01"}]:
             with self.subTest(kwargs=kwargs), self.assertRaises(ApplicationError) as error:
                 quality.get_model_quality(Mock(), self.region.id, **kwargs)
             self.assertEqual(error.exception.code, "quality_request_invalid")
+
+    def test_recent_uses_existing_csv_targets_without_provenance_flags(self):
+        report, _ = self.recent_report()
+        self.assertEqual(report["coverage"]["unknown_labels"], 4)
+        self.assertEqual(report["coverage"]["paired_points"], 4)
+        self.assertEqual([point["reference"] for point in report["points"][-4:]], [1000, 2000, 4000, 3000])
+        self.assertEqual(report["metrics"]["mae"], 250)
+
+    def test_recent_dataset_comparison_does_not_filter_filled_targets(self):
+        self.frame["target_observed"] = False
+        self.frame["target_is_imputed"] = True
+        report, _ = self.recent_report()
+        self.assertEqual(report["coverage"]["synthetic_labels"], 4)
+        self.assertEqual(report["coverage"]["paired_points"], 4)
+        self.assertEqual(report["metrics"]["mae"], 250)
 
 
 class QualityRouteTests(unittest.TestCase):
@@ -328,7 +343,7 @@ class QualityRouteTests(unittest.TestCase):
             response = self.client.get(self.url)
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["metrics"]["mae"], 250)
-            self.assertEqual(service.call_args.kwargs["mode"], "observed")
+            self.assertEqual(service.call_args.kwargs["mode"], "reference")
             self.assertEqual(service.call_args.kwargs["window"], "recent")
             self.assertEqual(self.client.get(self.url + "?hours=169").status_code, 422)
             self.assertEqual(self.client.get(self.url + "?mode=accuracy").status_code, 422)

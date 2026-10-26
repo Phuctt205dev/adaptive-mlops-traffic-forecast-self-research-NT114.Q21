@@ -18,7 +18,7 @@ router = APIRouter(dependencies=[Depends(require_admin)])
 def read_model_quality(
     region_id: uuid.UUID,
     request: Request,
-    mode: Literal["reference", "observed"] = "observed",
+    mode: Literal["reference", "observed"] = "reference",
     window: Literal["recent", "replay"] = "recent",
     start_at: datetime | None = None,
     hours: int = Query(default=24, ge=1, le=168),

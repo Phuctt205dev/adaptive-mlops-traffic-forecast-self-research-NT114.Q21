@@ -38,6 +38,7 @@ class ModelQualityReport(BaseModel):
     timezone: str
     mode: Literal["reference", "observed"]
     window: Literal["recent", "replay"]
+    reference_source: Literal["dataset_traffic_volume", "declared_observations"]
     evaluation_policy: str
     generated_at: datetime
     start_at: datetime

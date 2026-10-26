@@ -29,7 +29,7 @@ export function QualityChart({ report }) {
   const y = (value) => height - bottom - ((value - low) / (high - low)) * (height - top - bottom);
   const currentIndex = Math.min(selected, Math.max(0, points.length - 1));
   const current = points[currentIndex];
-  const referenceLabel = "Actual traffic (dataset)";
+  const referenceLabel = "Dataset traffic volume";
 
   function pathFor(key) {
     let previousExists = false;
@@ -72,7 +72,7 @@ export function QualityChart({ report }) {
             event.preventDefault();
             setSelected(Math.max(0, Math.min(points.length - 1, currentIndex + (event.key === "ArrowRight" ? 1 : -1))));
           }}>
-          <desc>Gaps represent unavailable values. Errors use only observed traffic and prediction pairs in the last 24 completed hours.</desc>
+          <desc>Dataset traffic_volume compared with model predictions at the same hour. Vertical connectors show each difference.</desc>
           {[0, 1, 2, 3, 4].map((index) => {
             const value = low + index / 4 * (high - low);
             return <g key={index}>
@@ -98,9 +98,8 @@ export function QualityChart({ report }) {
         <strong>{timeText(current.forecast_for, report.timezone)}</strong>
         <span>{referenceLabel}: <b>{numberText(current.reference)}</b></span>
         <span>Prediction: <b>{numberText(current.prediction)}</b></span>
-        <span>Difference (prediction − actual): <b>{numberText(current.reference != null && current.prediction != null ? current.prediction - current.reference : null)}</b></span>
+        <span>Difference (prediction − dataset): <b>{numberText(current.reference != null && current.prediction != null ? current.prediction - current.reference : null)}</b></span>
         <span>Absolute error: <b>{numberText(current.absolute_error)}</b></span>
-        <span>Label source: <b>{current.label_source}</b></span>
       </div>}
       <p className="muted quality-chart-hint">Hover over the chart or focus it and use ← / →. Missing values remain gaps.</p>
     </div>
@@ -135,8 +134,8 @@ export default function ModelQualityPanel({ region, enabled }) {
           modelVersionId: region.active_model_version_id,
         }, { signal: controller.signal });
         if (!active || request !== requestNumber) return;
-        if (result.window !== "recent" || result.mode !== "observed") {
-          throw new Error("Update the backend to support automatic quality monitoring for the last 24 hours.");
+        if (result.window !== "recent" || result.mode !== "reference" || result.reference_source !== "dataset_traffic_volume") {
+          throw new Error("Update the backend to compare predictions with dataset traffic_volume.");
         }
         setReport(result);
       } catch (err) {
@@ -171,7 +170,7 @@ export default function ModelQualityPanel({ region, enabled }) {
         <span className="quality-replay-badge">Last 24 completed hours</span>
       </div>
       <div className="quality-status">
-        <p className="muted">The active model is compared with actual traffic recorded in the dataset. Updates automatically every minute while this tab is visible.</p>
+        <p className="muted">Compare model predictions with traffic_volume in your dataset, hour by hour. Updates every minute.</p>
         <button type="button" disabled={!enabled || loading || !region?.active_model_version_id} onClick={() => setRefresh((value) => value + 1)}>
           {loading ? "Updating…" : "Refresh"}
         </button>
@@ -187,29 +186,24 @@ export default function ModelQualityPanel({ region, enabled }) {
           <span>{visibleReport.timezone}</span>
         </div>
         <div className="quality-metrics">
-          <div><span>MAE</span><strong>{numberText(visibleReport.metrics.mae)}</strong><small>vehicles/hour · average absolute error</small></div>
-          <div><span>RMSE</span><strong>{numberText(visibleReport.metrics.rmse)}</strong><small>vehicles/hour · sensitive to large errors</small></div>
-          <div><span>Evaluated pairs</span><strong>{visibleReport.coverage.paired_points} / {visibleReport.coverage.requested_points}</strong><small>eligible reference + prediction</small></div>
+          <div><span>Average error (MAE)</span><strong>{numberText(visibleReport.metrics.mae)}</strong><small>vehicles/hour · lower is better</small></div>
+          <div><span>RMSE</span><strong>{numberText(visibleReport.metrics.rmse)}</strong><small>vehicles/hour · gives more weight to large errors</small></div>
+          <div><span>Hours compared</span><strong>{visibleReport.coverage.paired_points} / {visibleReport.coverage.requested_points}</strong><small>hours with both dataset values and predictions</small></div>
         </div>
-        <p className="muted quality-coverage">
-          Labels: {visibleReport.coverage.observed_labels} observed · {visibleReport.coverage.synthetic_labels} synthetic · {visibleReport.coverage.unknown_labels} unknown.
-          {" "}{visibleReport.coverage.requested_points - visibleReport.coverage.dataset_points} missing dataset hours.
-        </p>
         {visibleReport.coverage.dataset_points === 0
           ? <div className="alert alert-info">No eligible dataset rows in the last 24 hours. The chart keeps the current time window; it does not use older or future data.</div>
-          : visibleReport.coverage.observed_labels === 0
-            ? <div className="alert alert-info">No actual traffic is identified in this window. Synthetic and unverified dataset values are excluded, so accuracy cannot be calculated.</div>
-            : visibleReport.coverage.paired_points === 0 && <div className="alert alert-info">No valid actual traffic and prediction pairs are available. Accuracy cannot be calculated yet.</div>}
-        <p className="muted quality-chart-hint">Only dataset rows identified as observed traffic are compared. Generated and interpolated values are excluded.</p>
-        <p className="muted quality-chart-hint">Predictions are recalculated with the current model and historical inputs; they are not a record of forecasts issued yesterday.</p>
+          : visibleReport.coverage.paired_points === 0 && <div className="alert alert-info">No matching dataset values and predictions are available to calculate errors.</div>}
         <QualityChart key={`${visibleReport.generated_at}-${visibleReport.mode}`} report={visibleReport} />
+        <p className="muted quality-chart-hint">The closer the two lines are, the smaller the prediction error.</p>
         <details className="quality-details"><summary>View hourly values and evaluation notes</summary>
           <ul>{visibleReport.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
           <div className="table-wrap quality-hour-table"><table>
-            <thead><tr><th>Hour · {visibleReport.timezone}</th><th>Actual traffic</th><th>Prediction</th><th>Absolute error</th><th>Label source</th></tr></thead>
+            <thead><tr><th>Hour · {visibleReport.timezone}</th><th>Dataset traffic volume</th><th>Prediction</th><th>Difference</th><th>Absolute error</th></tr></thead>
             <tbody>{visibleReport.points.map((point) => <tr key={point.forecast_for}>
               <td>{timeText(point.forecast_for, visibleReport.timezone)}</td><td>{numberText(point.reference)}</td>
-              <td>{numberText(point.prediction)}</td><td>{numberText(point.absolute_error)}</td><td>{point.label_source}</td>
+              <td>{numberText(point.prediction)}</td>
+              <td>{numberText(point.reference != null && point.prediction != null ? point.prediction - point.reference : null)}</td>
+              <td>{numberText(point.absolute_error)}</td>
             </tr>)}</tbody>
           </table></div>
           <p className="muted">Report generated: {timeText(visibleReport.generated_at, visibleReport.timezone)}.</p>

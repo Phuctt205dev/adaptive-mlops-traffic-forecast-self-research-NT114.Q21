@@ -180,13 +180,10 @@ def _build_report(region, model, training, dataset, frame, mode, start_at, hours
                        "prediction": value, "absolute_error": error, "label_source": source})
 
     errors = [point["absolute_error"] for point in points if point["absolute_error"] is not None]
-    warnings = [
-        "Historical replay using dataset inputs; this is not live traffic monitoring or a multi-day-ahead forecast.",
-        "Observed labels are declared by target_observed in this dataset, not verified against a live camera.",
-    ]
+    warnings = ["Predictions are recalculated with the active model and historical dataset inputs."]
     if mode == "reference":
-        warnings.append("Reference MAE/RMSE measure agreement with the dataset, including simulated or unverified values; they do not establish real-world accuracy.")
-    if counts["unknown"]:
+        warnings.append("MAE/RMSE compare predictions with traffic_volume in the dataset at the same hour.")
+    if mode == "observed" and counts["unknown"]:
         warnings.append("Some rows have no label provenance. They are excluded from observed-label metrics.")
     if window == "recent":
         warnings.append("This window covers the last 24 completed hours in region time; missing data never shifts it to another date.")
@@ -211,6 +208,7 @@ def _build_report(region, model, training, dataset, frame, mode, start_at, hours
         "model_version": model.version, "model_variant": model.variant,
         "dataset_id": dataset.id, "dataset_filename": dataset.original_filename,
         "timezone": region.timezone, "mode": mode, "window": window,
+        "reference_source": "dataset_traffic_volume" if mode == "reference" else "declared_observations",
         "evaluation_policy": "post_training_one_step_replay_with_dataset_inputs",
         "generated_at": pd.Timestamp(now).isoformat(),
         "start_at": as_iso(start), "end_at": as_iso(timeline[-1]),
@@ -228,12 +226,12 @@ def _build_report(region, model, training, dataset, frame, mode, start_at, hours
     }
 
 
-def get_model_quality(db, region_id, *, mode="observed", start_at=None, hours=24,
+def get_model_quality(db, region_id, *, mode="reference", start_at=None, hours=24,
                       window="recent", expected_model_id=None, serving_runtime=None):
     if window not in {"recent", "replay"} or mode not in {"reference", "observed"} or not 1 <= hours <= MAX_HOURS:
         raise ApplicationError("quality_request_invalid", "Select a valid mode and between 1 and 168 hours.", 422)
-    if window == "recent" and (mode != "observed" or start_at is not None or hours != 24):
-        raise ApplicationError("quality_request_invalid", "Recent quality uses observed labels and the last 24 completed hours automatically.", 422)
+    if window == "recent" and (mode != "reference" or start_at is not None or hours != 24):
+        raise ApplicationError("quality_request_invalid", "Recent quality compares dataset traffic_volume over the last 24 completed hours automatically.", 422)
     region = db.get(Region, region_id)
     if region is None or not region.is_active:
         raise ApplicationError("region_not_found", "Region was not found.", 404)

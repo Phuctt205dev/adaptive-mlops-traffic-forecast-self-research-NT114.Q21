@@ -1,7 +1,7 @@
 import math
 import unittest
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -186,14 +186,15 @@ class QualityReportTests(unittest.TestCase):
         with patch.object(quality.predictions, "_active_training_context", return_value=(self.training, self.dataset)), \
              patch.object(quality.predictions, "_download_dataset_frame", return_value=self.frame) as download, \
              patch.object(quality, "_predict_points", return_value=fake_predictions(self.frame)):
-            report = quality.get_model_quality(db, self.region.id)
+            kwargs = {"window": "replay", "mode": "reference"}
+            report = quality.get_model_quality(db, self.region.id, **kwargs)
             report["points"][0]["reference"] = 999999
-            self.assertEqual(quality.get_model_quality(db, self.region.id)["points"][0]["reference"], 1000)
+            self.assertEqual(quality.get_model_quality(db, self.region.id, **kwargs)["points"][0]["reference"], 1000)
             self.assertEqual(download.call_count, 1)
             self.dataset.sha256 = "b" * 64
-            quality.get_model_quality(db, self.region.id)
+            quality.get_model_quality(db, self.region.id, **kwargs)
             self.model.id = uuid.uuid4()
-            quality.get_model_quality(db, self.region.id)
+            quality.get_model_quality(db, self.region.id, **kwargs)
             self.assertEqual(download.call_count, 3)
         db.commit.assert_not_called()
 
@@ -217,6 +218,87 @@ class QualityReportTests(unittest.TestCase):
         self.assertEqual(error.exception.code, "quality_busy")
         runtime.lock.release.assert_not_called()
         self.assertFalse(quality._evaluation_lock.locked())
+
+    def recent_report(self, frame=None):
+        self.frame["target_observed"] = True
+        with patch.object(quality, "_predict_points", return_value=fake_predictions(self.frame)) as predict:
+            report = quality._build_report(
+                self.region, self.model, self.training, self.dataset,
+                self.frame if frame is None else frame, "observed", None, 24,
+                window="recent", now=datetime(2026, 6, 1, 5, 35, tzinfo=UTC),
+            )
+        return report, predict
+
+    def test_recent_window_uses_clock_in_region_time_not_dataset_start(self):
+        report, predict = self.recent_report()
+        self.assertEqual(report["start_at"], "2026-05-31T12:00:00+07:00")
+        self.assertEqual(report["end_at"], "2026-06-01T11:00:00+07:00")
+        self.assertEqual(report["window_end_at"], "2026-06-01T12:00:00+07:00")
+        self.assertEqual(report["coverage"]["requested_points"], 24)
+        self.assertEqual(report["coverage"]["paired_points"], 4)
+        self.assertEqual(report["metrics"]["mae"], 250)
+        self.assertEqual(len(predict.call_args.args[-1]), 4)
+        ModelQualityReport.model_validate(report)
+
+    def test_recent_window_excludes_current_hour_and_future_dataset_rows(self):
+        future = self.frame.iloc[[0]].copy()
+        future["date_time"] = "2026-06-01 12:00:00"
+        report, predict = self.recent_report(pd.concat([self.frame, future], ignore_index=True))
+        self.assertEqual(report["coverage"]["dataset_points"], 4)
+        self.assertLess(predict.call_args.args[-1].date_time.max(), pd.Timestamp("2026-06-01 12:00"))
+        self.assertTrue(all(point["forecast_for"] < report["window_end_at"] for point in report["points"]))
+
+    def test_stale_or_future_only_dataset_keeps_recent_window_empty(self):
+        for offset in [-48, 48]:
+            frame = self.frame.copy()
+            frame["date_time"] = pd.to_datetime(frame.date_time) + pd.Timedelta(hours=offset)
+            report, _ = self.recent_report(frame)
+            self.assertEqual(len(report["points"]), 24)
+            self.assertEqual(report["start_at"], "2026-05-31T12:00:00+07:00")
+            self.assertEqual(report["coverage"]["dataset_points"], 0)
+            self.assertTrue(all(p["reference"] is None and p["prediction"] is None for p in report["points"]))
+            self.assertIsNone(report["metrics"]["mae"])
+
+    def test_recent_window_never_scores_rows_used_for_training(self):
+        self.training.configuration_json["train_end_date"] = "2026-06-01 11:00:00"
+        report, _ = self.recent_report()
+        self.assertEqual(report["coverage"]["paired_points"], 1)
+        self.assertEqual(report["metrics"]["mae"], 200)
+        self.assertTrue(all(p["prediction"] is None for p in report["points"][:-1]))
+
+    def test_recent_report_without_holdout_has_empty_bounds_not_an_old_window(self):
+        self.training.configuration_json["train_end_date"] = "2026-06-02"
+        report, _ = self.recent_report()
+        self.assertIsNone(report["available_start_at"])
+        self.assertIsNone(report["available_end_at"])
+        self.assertEqual(report["coverage"]["paired_points"], 0)
+        ModelQualityReport.model_validate(report)
+
+    def test_recent_cache_rolls_window_at_the_next_region_hour(self):
+        db = Mock()
+        db.get.side_effect = lambda cls, identity: self.region if cls is Region else self.model
+        clock = Mock(wraps=datetime)
+        clock.now.return_value = datetime(2026, 6, 1, 5, 59, tzinfo=UTC)
+        with patch.object(quality, "datetime", clock), \
+             patch.object(quality.predictions, "_active_training_context", return_value=(self.training, self.dataset)), \
+             patch.object(quality.predictions, "_download_dataset_frame", return_value=self.frame) as download, \
+             patch.object(quality, "_predict_points", return_value=fake_predictions(self.frame)):
+            first = quality.get_model_quality(db, self.region.id)
+            self.assertEqual(first["mode"], "observed")
+            self.assertIsNone(first["metrics"]["mae"])  # Unknown source is not actual traffic.
+            quality.get_model_quality(db, self.region.id)
+            self.assertEqual(download.call_count, 1)
+            clock.now.return_value = datetime(2026, 6, 1, 6, 1, tzinfo=UTC)
+            second = quality.get_model_quality(db, self.region.id)
+            self.assertEqual(download.call_count, 2)
+            self.assertNotEqual(first["start_at"], second["start_at"])
+        db.commit.assert_not_called()
+
+    def test_recent_window_rejects_manual_range_or_synthetic_reference(self):
+        for kwargs in [{"mode": "reference"}, {"hours": 168}, {"start_at": "2026-06-01"}]:
+            with self.subTest(kwargs=kwargs), self.assertRaises(ApplicationError) as error:
+                quality.get_model_quality(Mock(), self.region.id, **kwargs)
+            self.assertEqual(error.exception.code, "quality_request_invalid")
 
 
 class QualityRouteTests(unittest.TestCase):
@@ -242,10 +324,12 @@ class QualityRouteTests(unittest.TestCase):
         region, model, training, dataset, frame = fixture()
         with patch.object(quality, "_predict_points", return_value=fake_predictions(frame)):
             report = quality._build_report(region, model, training, dataset, frame, "reference", None, 4)
-        with patch("backend.app.api.routes.model_quality.get_model_quality", return_value=report):
+        with patch("backend.app.api.routes.model_quality.get_model_quality", return_value=report) as service:
             response = self.client.get(self.url)
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["metrics"]["mae"], 250)
+            self.assertEqual(service.call_args.kwargs["mode"], "observed")
+            self.assertEqual(service.call_args.kwargs["window"], "recent")
             self.assertEqual(self.client.get(self.url + "?hours=169").status_code, 422)
             self.assertEqual(self.client.get(self.url + "?mode=accuracy").status_code, 422)
 

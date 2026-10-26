@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { api } from "./api";
 
 
@@ -29,7 +29,7 @@ export function QualityChart({ report }) {
   const y = (value) => height - bottom - ((value - low) / (high - low)) * (height - top - bottom);
   const currentIndex = Math.min(selected, Math.max(0, points.length - 1));
   const current = points[currentIndex];
-  const referenceLabel = report.mode === "observed" ? "Declared observations" : "Dataset reference";
+  const referenceLabel = "Actual traffic (dataset)";
 
   function pathFor(key) {
     let previousExists = false;
@@ -51,7 +51,7 @@ export function QualityChart({ report }) {
     setSelected(Math.max(0, Math.min(points.length - 1, Math.round(ratio * (points.length - 1)))));
   }
 
-  if (!points.length || !values.length) return <p className="muted">No chart values are available in this window.</p>;
+  if (!points.length) return <p className="muted">No chart values are available in this window.</p>;
   const ticks = [...new Set(Array.from({ length: Math.min(6, points.length) }, (_, index) => (
     Math.round(index * (points.length - 1) / Math.max(1, Math.min(6, points.length) - 1))
   )))];
@@ -72,7 +72,7 @@ export function QualityChart({ report }) {
             event.preventDefault();
             setSelected(Math.max(0, Math.min(points.length - 1, currentIndex + (event.key === "ArrowRight" ? 1 : -1))));
           }}>
-          <desc>Gaps represent unavailable values. Errors use only eligible pairs in the selected window.</desc>
+          <desc>Gaps represent unavailable values. Errors use only observed traffic and prediction pairs in the last 24 completed hours.</desc>
           {[0, 1, 2, 3, 4].map((index) => {
             const value = low + index / 4 * (high - low);
             return <g key={index}>
@@ -83,6 +83,8 @@ export function QualityChart({ report }) {
           {ticks.map((index) => <text key={index} x={x(index)} y={height - 18} textAnchor="middle">
             {timeText(points[index].forecast_for, report.timezone, true)}
           </text>)}
+          {points.map((point, index) => point.absolute_error != null && <line key={`error-${point.forecast_for}`}
+            x1={x(index)} x2={x(index)} y1={y(point.reference)} y2={y(point.prediction)} className="quality-error-line" />)}
           <path d={pathFor("reference")} className="quality-reference-line" />
           <path d={pathFor("prediction")} className="quality-prediction-line" />
           {points.map((point, index) => <g key={point.forecast_for}>
@@ -96,6 +98,7 @@ export function QualityChart({ report }) {
         <strong>{timeText(current.forecast_for, report.timezone)}</strong>
         <span>{referenceLabel}: <b>{numberText(current.reference)}</b></span>
         <span>Prediction: <b>{numberText(current.prediction)}</b></span>
+        <span>Difference (prediction − actual): <b>{numberText(current.reference != null && current.prediction != null ? current.prediction - current.reference : null)}</b></span>
         <span>Absolute error: <b>{numberText(current.absolute_error)}</b></span>
         <span>Label source: <b>{current.label_source}</b></span>
       </div>}
@@ -106,133 +109,104 @@ export function QualityChart({ report }) {
 
 
 export default function ModelQualityPanel({ region, enabled }) {
-  const [mode, setMode] = useState("reference");
-  const [hours, setHours] = useState("24");
-  const [startAt, setStartAt] = useState("");
   const [report, setReport] = useState(null);
-  const [bounds, setBounds] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const requestNumber = useRef(0);
-  const controller = useRef(null);
+  const [refresh, setRefresh] = useState(0);
 
   useEffect(() => {
-    requestNumber.current += 1;
-    controller.current?.abort();
     setReport(null);
-    setBounds(null);
     setError("");
     setLoading(false);
-    setStartAt("");
-    setMode("reference");
-    setHours("24");
-    return () => { requestNumber.current += 1; controller.current?.abort(); };
-  }, [region?.id, region?.active_model_version_id]);
-
-  useEffect(() => {
-    if (!enabled) {
-      requestNumber.current += 1;
-      controller.current?.abort();
-      setLoading(false);
-    }
-  }, [enabled]);
-
-  async function evaluate(event) {
-    event.preventDefault();
     if (!enabled || !region?.active_model_version_id) return;
-    controller.current?.abort();
-    const request = ++requestNumber.current;
-    controller.current = new AbortController();
-    setLoading(true);
-    setError("");
-    setReport(null);
-    try {
-      const result = await api.modelQuality(region.id, {
-        mode, hours, startAt, modelVersionId: region.active_model_version_id,
-      }, { signal: controller.current.signal });
-      if (request !== requestNumber.current) return;
-      setReport(result);
-      setBounds({ start: result.available_start_at.slice(0, 16), end: result.available_end_at.slice(0, 16) });
-      setStartAt(result.start_at.slice(0, 16));
-    } catch (err) {
-      if (request === requestNumber.current && err.name !== "AbortError") {
-        setError(err.status === 404
-          ? "Model Quality is unavailable on this backend. Deploy the matching backend version before using this chart."
-          : err.message);
-      }
-    } finally {
-      if (request === requestNumber.current) setLoading(false);
-    }
-  }
 
-  function change(setter, value) {
-    setter(value);
-    setReport(null);
-    setError("");
-  }
+    let active = true;
+    let controller;
+    let requestNumber = 0;
+    async function load() {
+      if (document.visibilityState === "hidden") return;
+      controller?.abort();
+      controller = new AbortController();
+      const request = ++requestNumber;
+      setLoading(true);
+      setError("");
+      try {
+        const result = await api.modelQuality(region.id, {
+          modelVersionId: region.active_model_version_id,
+        }, { signal: controller.signal });
+        if (!active || request !== requestNumber) return;
+        if (result.window !== "recent" || result.mode !== "observed") {
+          throw new Error("Update the backend to support automatic quality monitoring for the last 24 hours.");
+        }
+        setReport(result);
+      } catch (err) {
+        if (active && request === requestNumber && err.name !== "AbortError") {
+          setError(err.status === 404
+            ? "Model Quality is unavailable on this backend. Update the backend before using this chart."
+            : err.message);
+        }
+      } finally {
+        if (active && request === requestNumber) setLoading(false);
+      }
+    }
+    load();
+    const timer = setInterval(load, 60_000);
+    const onVisible = () => { if (document.visibilityState === "visible") load(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      active = false;
+      controller?.abort();
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [enabled, region?.id, region?.active_model_version_id, refresh]);
 
   const visibleReport = report?.region_id === region?.id
     && report?.active_model_version_id === region?.active_model_version_id ? report : null;
-  const metricsLabel = visibleReport?.mode === "observed" ? "Observed-label" : "Reference";
 
   return (
     <section className="card quality-panel">
       <div className="card-header">
         <h2>Model Quality</h2>
-        <span className="quality-replay-badge">Historical replay</span>
+        <span className="quality-replay-badge">Last 24 completed hours</span>
       </div>
-      <p className="muted">Compare the active model with post-training dataset values, hour by hour.</p>
-      <form className="quality-controls" onSubmit={evaluate}>
-        <label>Reference source
-          <select value={mode} disabled={loading} onChange={(event) => change(setMode, event.target.value)}>
-            <option value="reference">Dataset reference (simulation / unverified)</option>
-            <option value="observed">Historical observations (labelled rows only)</option>
-          </select>
-        </label>
-        <label>Start hour · {region?.timezone || "region time"}
-          <input type="datetime-local" step="3600" value={startAt} min={bounds?.start} max={bounds?.end}
-            disabled={loading} onChange={(event) => change(setStartAt, event.target.value)} />
-        </label>
-        <label>Window
-          <select value={hours} disabled={loading} onChange={(event) => change(setHours, event.target.value)}>
-            <option value="24">24 hours</option>
-            <option value="168">7 days · hourly replay</option>
-          </select>
-        </label>
-        <button disabled={loading || !region?.active_model_version_id}>
-          {loading ? "Evaluating…" : "Evaluate model"}
+      <div className="quality-status">
+        <p className="muted">The active model is compared with actual traffic recorded in the dataset. Updates automatically every minute while this tab is visible.</p>
+        <button type="button" disabled={!enabled || loading || !region?.active_model_version_id} onClick={() => setRefresh((value) => value + 1)}>
+          {loading ? "Updating…" : "Refresh"}
         </button>
-      </form>
-      <p className="muted quality-chart-hint">Leave Start hour empty to use the first available post-training hour.</p>
-      {!region?.active_model_version_id && <div className="alert alert-info">Select a region with an active model to evaluate.</div>}
+      </div>
+      {!region?.active_model_version_id && <div className="alert alert-info">This region has no active model.</div>}
       {error && <div className="alert alert-error" role="alert">{error}</div>}
-      {loading && <p role="status">Preparing the selected replay window…</p>}
+      {loading && !visibleReport && <p role="status">Loading the last 24 completed hours…</p>}
       {visibleReport && <>
-        <div className={`alert ${visibleReport.mode === "observed" ? "alert-info" : "quality-reference-notice"}`}>
-          {visibleReport.mode === "observed"
-            ? "Only rows explicitly labelled as observed are used as reference. These labels come from the dataset, not a live camera."
-            : "Simulation / unverified reference: errors show agreement with dataset values, not verified real-world traffic accuracy."}
-        </div>
         <div className="quality-report-meta">
           <strong>{visibleReport.model_version} · {visibleReport.model_variant}</strong>
           <span>{visibleReport.dataset_filename}</span>
-          <span>{timeText(visibleReport.start_at, visibleReport.timezone)} — {timeText(visibleReport.end_at, visibleReport.timezone)}</span>
+          <span>{timeText(visibleReport.start_at, visibleReport.timezone)} — before {timeText(visibleReport.window_end_at, visibleReport.timezone)}</span>
+          <span>{visibleReport.timezone}</span>
         </div>
         <div className="quality-metrics">
-          <div><span>{metricsLabel} MAE</span><strong>{numberText(visibleReport.metrics.mae)}</strong><small>vehicles/hour · average absolute error</small></div>
-          <div><span>{metricsLabel} RMSE</span><strong>{numberText(visibleReport.metrics.rmse)}</strong><small>vehicles/hour · sensitive to large errors</small></div>
+          <div><span>MAE</span><strong>{numberText(visibleReport.metrics.mae)}</strong><small>vehicles/hour · average absolute error</small></div>
+          <div><span>RMSE</span><strong>{numberText(visibleReport.metrics.rmse)}</strong><small>vehicles/hour · sensitive to large errors</small></div>
           <div><span>Evaluated pairs</span><strong>{visibleReport.coverage.paired_points} / {visibleReport.coverage.requested_points}</strong><small>eligible reference + prediction</small></div>
         </div>
         <p className="muted quality-coverage">
           Labels: {visibleReport.coverage.observed_labels} observed · {visibleReport.coverage.synthetic_labels} synthetic · {visibleReport.coverage.unknown_labels} unknown.
           {" "}{visibleReport.coverage.requested_points - visibleReport.coverage.dataset_points} missing dataset hours.
         </p>
-        {visibleReport.coverage.paired_points === 0 && <div className="alert alert-info">No eligible reference pairs. Quality metrics are unavailable for this window.</div>}
+        {visibleReport.coverage.dataset_points === 0
+          ? <div className="alert alert-info">No eligible dataset rows in the last 24 hours. The chart keeps the current time window; it does not use older or future data.</div>
+          : visibleReport.coverage.observed_labels === 0
+            ? <div className="alert alert-info">No actual traffic is identified in this window. Synthetic and unverified dataset values are excluded, so accuracy cannot be calculated.</div>
+            : visibleReport.coverage.paired_points === 0 && <div className="alert alert-info">No valid actual traffic and prediction pairs are available. Accuracy cannot be calculated yet.</div>}
+        <p className="muted quality-chart-hint">Only dataset rows identified as observed traffic are compared. Generated and interpolated values are excluded.</p>
+        <p className="muted quality-chart-hint">Predictions are recalculated with the current model and historical inputs; they are not a record of forecasts issued yesterday.</p>
         <QualityChart key={`${visibleReport.generated_at}-${visibleReport.mode}`} report={visibleReport} />
         <details className="quality-details"><summary>View hourly values and evaluation notes</summary>
           <ul>{visibleReport.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
           <div className="table-wrap quality-hour-table"><table>
-            <thead><tr><th>Hour · {visibleReport.timezone}</th><th>Reference</th><th>Prediction</th><th>Absolute error</th><th>Label source</th></tr></thead>
+            <thead><tr><th>Hour · {visibleReport.timezone}</th><th>Actual traffic</th><th>Prediction</th><th>Absolute error</th><th>Label source</th></tr></thead>
             <tbody>{visibleReport.points.map((point) => <tr key={point.forecast_for}>
               <td>{timeText(point.forecast_for, visibleReport.timezone)}</td><td>{numberText(point.reference)}</td>
               <td>{numberText(point.prediction)}</td><td>{numberText(point.absolute_error)}</td><td>{point.label_source}</td>

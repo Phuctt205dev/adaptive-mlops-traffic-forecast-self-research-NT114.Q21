@@ -120,7 +120,13 @@ def _predict_points(model_version, training_run, dataset, rows):
             for when, value in zip(rows["date_time"], values)}
 
 
-def _build_report(region, model, training, dataset, frame, mode, start_at, hours):
+def _recent_start(timezone, now):
+    return _local_time(now, timezone).floor("h") - pd.Timedelta(hours=24)
+
+
+def _build_report(region, model, training, dataset, frame, mode, start_at, hours,
+                  *, window="replay", now=None):
+    now = now if now is not None else datetime.now(UTC)
     try:
         timezone = ZoneInfo(region.timezone)
         training_end = _local_time((training.configuration_json or {})["train_end_date"], timezone)
@@ -131,15 +137,18 @@ def _build_report(region, model, training, dataset, frame, mode, start_at, hours
     if frame["date_time"].duplicated().any():
         raise ApplicationError("quality_duplicate_times", "Dataset contains ambiguous or duplicate local hours.", 409)
     production = frame[frame.date_time >= training_end].sort_values("date_time")
-    if production.empty:
+    if production.empty and window == "replay":
         raise ApplicationError("quality_no_holdout", "No dataset rows exist after the training boundary.", 409)
     try:
-        start = _local_time(start_at, timezone) if start_at else production.date_time.min()
+        if window == "recent":
+            start = _recent_start(timezone, now)
+        else:
+            start = _local_time(start_at, timezone) if start_at else production.date_time.min()
     except (ValueError, TypeError) as error:
         raise ApplicationError("quality_start_invalid", "Replay start time is invalid.", 422) from error
     if start != start.floor("h"):
         raise ApplicationError("quality_start_invalid", "Select a whole hour for replay.", 422)
-    if start < training_end or start < production.date_time.min() or start > production.date_time.max():
+    if window == "replay" and (start < training_end or start < production.date_time.min() or start > production.date_time.max()):
         raise ApplicationError("quality_outside_window", "Select a time inside the available post-training window.", 409)
 
     timeline = pd.date_range(start, periods=hours, freq="h")
@@ -165,7 +174,7 @@ def _build_report(region, model, training, dataset, frame, mode, start_at, hours
             reference = None
         if mode == "observed" and source != "observed":
             reference = None
-        value = _number(predicted.get(when.to_pydatetime()))
+        value = _number(predicted.get(when.to_pydatetime())) if row is not None else None
         error = _number(abs(reference - value)) if reference is not None and value is not None else None
         points.append({"forecast_for": when.to_pydatetime(), "reference": reference,
                        "prediction": value, "absolute_error": error, "label_source": source})
@@ -179,6 +188,10 @@ def _build_report(region, model, training, dataset, frame, mode, start_at, hours
         warnings.append("Reference MAE/RMSE measure agreement with the dataset, including simulated or unverified values; they do not establish real-world accuracy.")
     if counts["unknown"]:
         warnings.append("Some rows have no label provenance. They are excluded from observed-label metrics.")
+    if window == "recent":
+        warnings.append("This window covers the last 24 completed hours in region time; missing data never shifts it to another date.")
+        if start < training_end:
+            warnings.append("Hours before the active model's training boundary are excluded to avoid scoring on training data.")
     if not errors:
         warnings.append("No eligible prediction/reference pairs exist in this window. Quality metrics are unavailable.")
     if any(point["prediction"] is None for point in points):
@@ -197,12 +210,13 @@ def _build_report(region, model, training, dataset, frame, mode, start_at, hours
         "region_id": region.id, "active_model_version_id": model.id,
         "model_version": model.version, "model_variant": model.variant,
         "dataset_id": dataset.id, "dataset_filename": dataset.original_filename,
-        "timezone": region.timezone, "mode": mode,
+        "timezone": region.timezone, "mode": mode, "window": window,
         "evaluation_policy": "post_training_one_step_replay_with_dataset_inputs",
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": pd.Timestamp(now).isoformat(),
         "start_at": as_iso(start), "end_at": as_iso(timeline[-1]),
-        "available_start_at": as_iso(production.date_time.min()),
-        "available_end_at": as_iso(production.date_time.max()),
+        "window_end_at": as_iso(timeline[-1] + pd.Timedelta(hours=1)),
+        "available_start_at": as_iso(production.date_time.min()) if not production.empty else None,
+        "available_end_at": as_iso(production.date_time.max()) if not production.empty else None,
         "training_end_at": as_iso(training_end),
         "metrics": {"mae": math.fsum(error / len(errors) for error in errors) if errors else None,
                     "rmse": math.hypot(*(error / math.sqrt(len(errors)) for error in errors)) if errors else None},
@@ -214,10 +228,12 @@ def _build_report(region, model, training, dataset, frame, mode, start_at, hours
     }
 
 
-def get_model_quality(db, region_id, *, mode="reference", start_at=None, hours=24,
-                      expected_model_id=None, serving_runtime=None):
-    if mode not in {"reference", "observed"} or not 1 <= hours <= MAX_HOURS:
+def get_model_quality(db, region_id, *, mode="observed", start_at=None, hours=24,
+                      window="recent", expected_model_id=None, serving_runtime=None):
+    if window not in {"recent", "replay"} or mode not in {"reference", "observed"} or not 1 <= hours <= MAX_HOURS:
         raise ApplicationError("quality_request_invalid", "Select a valid mode and between 1 and 168 hours.", 422)
+    if window == "recent" and (mode != "observed" or start_at is not None or hours != 24):
+        raise ApplicationError("quality_request_invalid", "Recent quality uses observed labels and the last 24 completed hours automatically.", 422)
     region = db.get(Region, region_id)
     if region is None or not region.is_active:
         raise ApplicationError("region_not_found", "Region was not found.", 404)
@@ -227,9 +243,14 @@ def get_model_quality(db, region_id, *, mode="reference", start_at=None, hours=2
     if expected_model_id is not None and model.id != expected_model_id:
         raise ApplicationError("quality_active_model_changed", "Active model changed. Refresh the region before evaluating.", 409)
     training, dataset = predictions._active_training_context(db, model)
+    now = datetime.now(UTC)
+    try:
+        window_key = str(_recent_start(ZoneInfo(region.timezone), now)) if window == "recent" else str(start_at)
+    except (ValueError, TypeError, ZoneInfoNotFoundError) as error:
+        raise ApplicationError("quality_timeline_invalid", "Region timezone is invalid.", 409) from error
     key = (str(region.id), str(model.id), model.artifact_uri, str(dataset.id), dataset.sha256,
            region.timezone, json.dumps(training.configuration_json or {}, sort_keys=True),
-           mode, str(start_at), hours)
+           mode, window, window_key, hours)
 
     # Reject competing reports instead of building an unbounded evaluation queue.
     if not _evaluation_lock.acquire(blocking=False):
@@ -245,7 +266,8 @@ def get_model_quality(db, region_id, *, mode="reference", start_at=None, hours=2
             if not runtime_acquired:
                 raise ApplicationError("quality_busy", "Prediction service is busy. Try the quality report again shortly.", 503)
         report = _build_report(region, model, training, dataset,
-                               predictions._download_dataset_frame(dataset), mode, start_at, hours)
+                               predictions._download_dataset_frame(dataset), mode, start_at, hours,
+                               window=window, now=now)
         _reports[key] = (time.monotonic(), copy.deepcopy(report))
         _reports.move_to_end(key)
         while len(_reports) > 4:

@@ -37,12 +37,14 @@ class ModelQualityReport(BaseModel):
     dataset_filename: str
     timezone: str
     mode: Literal["reference", "observed"]
+    window: Literal["recent", "replay"]
     evaluation_policy: str
     generated_at: datetime
     start_at: datetime
     end_at: datetime
-    available_start_at: datetime
-    available_end_at: datetime
+    window_end_at: datetime
+    available_start_at: datetime | None
+    available_end_at: datetime | None
     training_end_at: datetime
     metrics: QualityMetrics
     coverage: QualityCoverage

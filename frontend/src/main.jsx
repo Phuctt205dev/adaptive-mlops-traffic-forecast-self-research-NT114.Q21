@@ -10,6 +10,7 @@ const pages = [
   ["regions", "Regions"],
   ["datasets", "Datasets"],
   ["models", "Models"],
+  ["quality", "Model Quality"],
   ["drift", "Drift"],
   ["users", "Users"],
 ];
@@ -1240,7 +1241,7 @@ function isDriftRetrainedModel(model) {
   return model.training_configuration?.trigger_source === "feature_drift";
 }
 
-function ModelManager({ selectedRegion, models, refreshModels, refreshRegions, enabled }) {
+function ModelManager({ selectedRegion, models, refreshModels, refreshRegions }) {
   const [expandedModelId, setExpandedModelId] = useState("");
 
   async function activate(id) {
@@ -1258,7 +1259,6 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions, e
 
   return (
     <div className="grid model-management">
-    <ModelQualityPanel region={selectedRegion} enabled={enabled} />
     <Card title="Model Versions">
       {models.length ? (
         <div className="table-wrap">
@@ -1965,6 +1965,13 @@ function Icon({ name }) {
         <circle cx="19" cy="16" r="2" />
       </>
     ),
+    quality: (
+      <>
+        <path d="M4 4v16h16" />
+        <path d="m7 14 4-5 4 3 5-6" />
+        <path d="m7 17 4-3 4 2 5-5" strokeDasharray="2 2" />
+      </>
+    ),
     drift: (
       <>
         <path d="M4 19V5" />
@@ -2346,7 +2353,10 @@ function App() {
               />
             </section>
             <section className="page-panel" hidden={page !== "models"}>
-              <ModelManager selectedRegion={selectedRegion} models={models} refreshModels={refreshModels} refreshRegions={() => refreshRegions(user)} enabled={page === "models"} />
+              <ModelManager selectedRegion={selectedRegion} models={models} refreshModels={refreshModels} refreshRegions={() => refreshRegions(user)} />
+            </section>
+            <section className="page-panel" hidden={page !== "quality"}>
+              <ModelQualityPanel region={selectedRegion} enabled={page === "quality"} />
             </section>
             <section className="page-panel" hidden={page !== "drift"}>
               <DriftMonitor

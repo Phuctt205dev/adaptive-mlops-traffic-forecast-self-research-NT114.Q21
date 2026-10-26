@@ -134,8 +134,8 @@ export const api = {
     apiRequest(`/admin/model-versions/${modelVersionId}`),
   modelVersions: (regionId) =>
     apiRequest(`/admin/regions/${regionId}/model-versions?page_size=100`),
-  modelQuality: (regionId, { modelVersionId } = {}, options = {}) => {
-    const params = new URLSearchParams({ window: "recent", mode: "reference" });
+  modelQuality: (regionId, { modelVersionId, hours = 168 } = {}, options = {}) => {
+    const params = new URLSearchParams({ window: "recent", mode: "reference", hours: String(hours) });
     if (modelVersionId) params.set("model_version_id", modelVersionId);
     return apiRequest(`/admin/regions/${regionId}/model-quality?${params.toString()}`, options);
   },

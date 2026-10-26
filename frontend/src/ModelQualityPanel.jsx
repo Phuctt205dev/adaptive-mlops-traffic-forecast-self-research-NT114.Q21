@@ -27,11 +27,12 @@ export function QualityChart({ report }) {
   }, []);
   const points = report.points;
   const compact = width < 600;
+  const multiDay = points.length > 24;
   const height = compact ? 280 : 360;
   const left = compact ? 60 : 84;
-  const right = 24;
+  const right = multiDay ? 32 : 24;
   const top = 24;
-  const bottom = 52;
+  const bottom = multiDay ? 64 : 52;
   const values = points.flatMap((point) => [point.reference, point.prediction]).filter((value) => value != null);
   const low = Math.min(0, ...values);
   const high = Math.max(1, ...values) * 1.08;
@@ -76,7 +77,7 @@ export function QualityChart({ report }) {
       </div>
       <div className="quality-chart-scroll" ref={chartContainer}>
         <svg viewBox={`0 0 ${width} ${height}`} role="img" tabIndex={0}
-          aria-label="Actual and predicted traffic over the last 24 hours. Use left and right arrow keys to inspect hours."
+          aria-label="Actual and predicted traffic over the selected period. Use left and right arrow keys to inspect hours."
           onMouseMove={selectAt}
           onKeyDown={(event) => {
             if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
@@ -91,8 +92,11 @@ export function QualityChart({ report }) {
               <text x={left - 12} y={y(value) + 4} textAnchor="end">{Math.round(value).toLocaleString("en")}</text>
             </g>;
           })}
-          {ticks.map((index) => <text key={index} x={x(index)} y={height - 18} textAnchor="middle">
-            {timeText(points[index].forecast_for, report.timezone, true)}
+          {ticks.map((index) => <text key={index} x={x(index)} y={height - (multiDay ? 36 : 18)} textAnchor="middle">
+            {multiDay && <tspan x={x(index)}>{new Intl.DateTimeFormat("en-GB", {
+              timeZone: report.timezone, day: "2-digit", month: "short",
+            }).format(new Date(points[index].forecast_for))}</tspan>}
+            <tspan x={x(index)} dy={multiDay ? 18 : 0}>{timeText(points[index].forecast_for, report.timezone, true)}</tspan>
           </text>)}
           {points.map((point, index) => point.absolute_error != null && <line key={`error-${point.forecast_for}`}
             x1={x(index)} x2={x(index)} y1={y(point.reference)} y2={y(point.prediction)} className="quality-error-line" />)}
@@ -121,6 +125,7 @@ export default function ModelQualityPanel({ region, enabled }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  const [hours, setHours] = useState(168);
 
   useEffect(() => {
     setReport(null);
@@ -131,8 +136,10 @@ export default function ModelQualityPanel({ region, enabled }) {
     let active = true;
     let controller;
     let requestNumber = 0;
+    let timer;
     async function load() {
-      if (document.visibilityState === "hidden") return;
+      if (!active || document.visibilityState === "hidden") return;
+      clearTimeout(timer);
       controller?.abort();
       controller = new AbortController();
       const request = ++requestNumber;
@@ -140,50 +147,70 @@ export default function ModelQualityPanel({ region, enabled }) {
       setError("");
       try {
         const result = await api.modelQuality(region.id, {
-          modelVersionId: region.active_model_version_id,
+          modelVersionId: region.active_model_version_id, hours,
         }, { signal: controller.signal });
         if (!active || request !== requestNumber) return;
-        if (result.window !== "recent" || result.mode !== "reference" || result.reference_source !== "dataset_traffic_volume") {
-          throw new Error("Update the backend to compare predictions with dataset traffic_volume.");
+        if (result.window !== "recent" || result.mode !== "reference" || result.reference_source !== "dataset_traffic_volume"
+            || result.selected_hours !== hours || !Number.isFinite(Date.parse(result.server_time)) || !Number.isFinite(Date.parse(result.next_refresh_at))) {
+          throw new Error("Update the backend to support the selected time range and hourly refresh.");
         }
         setReport(result);
+        // Use fresh server time, so a cached report or an incorrect device clock
+        // does not shift the next refresh away from the region's next full hour.
+        timer = setTimeout(load, Math.max(100, Date.parse(result.next_refresh_at) - Date.parse(result.server_time)));
       } catch (err) {
         if (active && request === requestNumber && err.name !== "AbortError") {
           setError(err.status === 404
             ? "Model Quality is unavailable on this backend. Update the backend before using this chart."
             : err.message);
+          timer = setTimeout(load, 30_000);
         }
       } finally {
         if (active && request === requestNumber) setLoading(false);
       }
     }
     load();
-    const timer = setInterval(load, 60_000);
-    const onVisible = () => { if (document.visibilityState === "visible") load(); };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        load();
+      } else {
+        clearTimeout(timer);
+        controller?.abort();
+        requestNumber += 1;
+        setLoading(false);
+      }
+    };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       active = false;
       controller?.abort();
-      clearInterval(timer);
+      clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [enabled, region?.id, region?.active_model_version_id, refresh]);
+  }, [enabled, region?.id, region?.active_model_version_id, refresh, hours]);
 
   const visibleReport = report?.region_id === region?.id
-    && report?.active_model_version_id === region?.active_model_version_id ? report : null;
+    && report?.active_model_version_id === region?.active_model_version_id && report?.selected_hours === hours ? report : null;
 
   return (
     <section className="card quality-panel">
       <div className="quality-heading">
         <div>
-          <h2>Last 24 hours</h2>
-          {visibleReport && <p className="quality-period">
+          <h2>Traffic comparison</h2>
+          {visibleReport?.end_at && <p className="quality-period">
             {timeText(visibleReport.start_at, visibleReport.timezone)} — {timeText(visibleReport.end_at, visibleReport.timezone)}
           </p>}
         </div>
-        <button type="button" disabled={!enabled || loading || !region?.active_model_version_id} onClick={() => setRefresh((value) => value + 1)}>
-          {loading ? "Updating…" : "Refresh"}
-        </button>
+        <div className="quality-actions">
+          <select aria-label="Time range" value={hours} onChange={(event) => setHours(Number(event.target.value))}>
+            <option value={24}>Last 24 hours</option>
+            <option value={168}>Last 7 days</option>
+            <option value={336}>Last 14 days</option>
+          </select>
+          <button type="button" disabled={!enabled || loading || !region?.active_model_version_id} onClick={() => setRefresh((value) => value + 1)}>
+            {loading ? "Updating…" : "Refresh"}
+          </button>
+        </div>
       </div>
       {!region?.active_model_version_id && <div className="alert alert-info">This region has no active model.</div>}
       {error && <div className="alert alert-error" role="alert">{error}</div>}
@@ -194,7 +221,7 @@ export default function ModelQualityPanel({ region, enabled }) {
           <div><span>Hours compared</span><strong>{visibleReport.coverage.paired_points} / {visibleReport.coverage.requested_points}</strong></div>
         </div>
         {visibleReport.coverage.dataset_points === 0
-          ? <div className="alert alert-info">No traffic data available for the last 24 hours.</div>
+          ? <div className="alert alert-info">No traffic data available after training in this period.</div>
           : visibleReport.coverage.paired_points === 0 && <div className="alert alert-info">Not enough data to compare actual and predicted traffic.</div>}
         <QualityChart key={`${visibleReport.generated_at}-${visibleReport.mode}`} report={visibleReport} />
         <details className="quality-details"><summary>View details</summary>

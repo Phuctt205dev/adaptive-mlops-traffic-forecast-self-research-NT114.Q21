@@ -18,6 +18,8 @@
 .quality-panel .quality-heading h2 { margin: 0; font-size: 24px; }
 .quality-period { margin: 10px 0 0; font-size: 16px; line-height: 1.6; color: #475569; }
 .quality-heading button { flex-shrink: 0; min-height: 44px; font-size: 16px; }
+.quality-actions { display: flex; flex-shrink: 0; gap: 12px; align-items: center; }
+.quality-actions select { width: auto; min-height: 44px; font-size: 16px; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; color: #0f172a; background: #fff; }
 .quality-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
 .quality-metrics > div { padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; display: grid; align-content: start; gap: 14px; }
 .quality-metrics > div > span { font-size: 16px; color: #475569; }
@@ -62,6 +64,7 @@
 @media (max-width: 640px) {
   .quality-panel { padding: 20px; }
   .quality-heading { flex-wrap: wrap; }
+  .quality-actions { flex-wrap: wrap; flex-shrink: 1; }
   .quality-metrics, .quality-report-meta { grid-template-columns: minmax(0, 1fr); }
   .quality-metrics > div { padding: 20px; }
   .quality-chart-unit { margin-left: 0; width: 100%; }

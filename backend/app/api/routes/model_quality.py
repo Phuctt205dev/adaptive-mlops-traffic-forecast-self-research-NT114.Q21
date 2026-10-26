@@ -21,7 +21,7 @@ def read_model_quality(
     mode: Literal["reference", "observed"] = "reference",
     window: Literal["recent", "replay"] = "recent",
     start_at: datetime | None = None,
-    hours: int = Query(default=24, ge=1, le=168),
+    hours: int = Query(default=168, ge=1, le=336),
     model_version_id: uuid.UUID | None = None,
     db: Session = Depends(get_db),
 ):

@@ -19,7 +19,8 @@ from backend.app.services.datasets import REQUIRED_COLUMNS
 from src.time_series_inference import InsufficientHistoryError
 
 
-MAX_HOURS = 168
+MAX_HOURS = 336
+RECENT_HOURS = (24, 168, 336)
 CACHE_SECONDS = 60
 _reports = OrderedDict()
 _evaluation_lock = threading.Lock()
@@ -120,8 +121,8 @@ def _predict_points(model_version, training_run, dataset, rows):
             for when, value in zip(rows["date_time"], values)}
 
 
-def _recent_start(timezone, now):
-    return _local_time(now, timezone).floor("h") - pd.Timedelta(hours=24)
+def _recent_start(timezone, now, hours):
+    return _local_time(now, timezone).floor("h") - pd.Timedelta(hours=hours)
 
 
 def _build_report(region, model, training, dataset, frame, mode, start_at, hours,
@@ -141,7 +142,9 @@ def _build_report(region, model, training, dataset, frame, mode, start_at, hours
         raise ApplicationError("quality_no_holdout", "No dataset rows exist after the training boundary.", 409)
     try:
         if window == "recent":
-            start = _recent_start(timezone, now)
+            window_end = _local_time(now, timezone).floor("h")
+            selected_start = _recent_start(timezone, now, hours)
+            start = min(window_end, max(selected_start, training_end.ceil("h")))
         else:
             start = _local_time(start_at, timezone) if start_at else production.date_time.min()
     except (ValueError, TypeError) as error:
@@ -151,7 +154,12 @@ def _build_report(region, model, training, dataset, frame, mode, start_at, hours
     if window == "replay" and (start < training_end or start < production.date_time.min() or start > production.date_time.max()):
         raise ApplicationError("quality_outside_window", "Select a time inside the available post-training window.", 409)
 
-    timeline = pd.date_range(start, periods=hours, freq="h")
+    if window == "recent":
+        timeline = (pd.date_range(start, window_end, freq="h", inclusive="left")
+                    if start < window_end else pd.DatetimeIndex([]))
+    else:
+        timeline = pd.date_range(start, periods=hours, freq="h")
+        window_end = timeline[-1] + pd.Timedelta(hours=1)
     rows = production[production.date_time.isin(timeline)].copy()
     if not set(REQUIRED_COLUMNS).issubset(rows.columns):
         raise ApplicationError("quality_schema_invalid", "Dataset is missing replay input columns.", 409)
@@ -186,9 +194,7 @@ def _build_report(region, model, training, dataset, frame, mode, start_at, hours
     if mode == "observed" and counts["unknown"]:
         warnings.append("Some rows have no label provenance. They are excluded from observed-label metrics.")
     if window == "recent":
-        warnings.append("This window covers the last 24 completed hours in region time; missing data never shifts it to another date.")
-        if start < training_end:
-            warnings.append("Hours before the active model's training boundary are excluded to avoid scoring on training data.")
+        warnings.append("The selected recent window uses completed hours and starts no earlier than the model's training boundary.")
     if not errors:
         warnings.append("No eligible prediction/reference pairs exist in this window. Quality metrics are unavailable.")
     if any(point["prediction"] is None for point in points):
@@ -211,14 +217,17 @@ def _build_report(region, model, training, dataset, frame, mode, start_at, hours
         "reference_source": "dataset_traffic_volume" if mode == "reference" else "declared_observations",
         "evaluation_policy": "post_training_one_step_replay_with_dataset_inputs",
         "generated_at": pd.Timestamp(now).isoformat(),
-        "start_at": as_iso(start), "end_at": as_iso(timeline[-1]),
-        "window_end_at": as_iso(timeline[-1] + pd.Timedelta(hours=1)),
+        "server_time": pd.Timestamp(now).isoformat(),
+        "next_refresh_at": as_iso(_local_time(now, timezone).floor("h") + pd.Timedelta(hours=1)),
+        "selected_hours": hours,
+        "start_at": as_iso(start), "end_at": as_iso(timeline[-1]) if len(timeline) else None,
+        "window_end_at": as_iso(window_end),
         "available_start_at": as_iso(production.date_time.min()) if not production.empty else None,
         "available_end_at": as_iso(production.date_time.max()) if not production.empty else None,
         "training_end_at": as_iso(training_end),
         "metrics": {"mae": math.fsum(error / len(errors) for error in errors) if errors else None,
                     "rmse": math.hypot(*(error / math.sqrt(len(errors)) for error in errors)) if errors else None},
-        "coverage": {"requested_points": hours, "dataset_points": len(rows),
+        "coverage": {"requested_points": len(timeline), "dataset_points": len(rows),
                      "predicted_points": sum(point["prediction"] is not None for point in points),
                      "paired_points": len(errors), "observed_labels": counts["observed"],
                      "synthetic_labels": counts["synthetic"], "unknown_labels": counts["unknown"]},
@@ -226,12 +235,12 @@ def _build_report(region, model, training, dataset, frame, mode, start_at, hours
     }
 
 
-def get_model_quality(db, region_id, *, mode="reference", start_at=None, hours=24,
+def get_model_quality(db, region_id, *, mode="reference", start_at=None, hours=168,
                       window="recent", expected_model_id=None, serving_runtime=None):
     if window not in {"recent", "replay"} or mode not in {"reference", "observed"} or not 1 <= hours <= MAX_HOURS:
-        raise ApplicationError("quality_request_invalid", "Select a valid mode and between 1 and 168 hours.", 422)
-    if window == "recent" and (mode != "reference" or start_at is not None or hours != 24):
-        raise ApplicationError("quality_request_invalid", "Recent quality compares dataset traffic_volume over the last 24 completed hours automatically.", 422)
+        raise ApplicationError("quality_request_invalid", "Select a valid mode and between 1 and 336 hours.", 422)
+    if window == "recent" and (mode != "reference" or start_at is not None or hours not in RECENT_HOURS):
+        raise ApplicationError("quality_request_invalid", "Recent quality supports 24 hours, 7 days or 14 days with dataset traffic_volume.", 422)
     region = db.get(Region, region_id)
     if region is None or not region.is_active:
         raise ApplicationError("region_not_found", "Region was not found.", 404)
@@ -243,7 +252,7 @@ def get_model_quality(db, region_id, *, mode="reference", start_at=None, hours=2
     training, dataset = predictions._active_training_context(db, model)
     now = datetime.now(UTC)
     try:
-        window_key = str(_recent_start(ZoneInfo(region.timezone), now)) if window == "recent" else str(start_at)
+        window_key = str(_recent_start(ZoneInfo(region.timezone), now, hours)) if window == "recent" else str(start_at)
     except (ValueError, TypeError, ZoneInfoNotFoundError) as error:
         raise ApplicationError("quality_timeline_invalid", "Region timezone is invalid.", 409) from error
     key = (str(region.id), str(model.id), model.artifact_uri, str(dataset.id), dataset.sha256,
@@ -257,7 +266,9 @@ def get_model_quality(db, region_id, *, mode="reference", start_at=None, hours=2
     try:
         cached = _reports.get(key)
         if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
-            return copy.deepcopy(cached[1])
+            result = copy.deepcopy(cached[1])
+            result["server_time"] = datetime.now(UTC).isoformat()
+            return result
         # The deployed runtime shares this lock with normal model inference.
         if serving_runtime is not None:
             runtime_acquired = serving_runtime.lock.acquire(blocking=False)
@@ -270,6 +281,7 @@ def get_model_quality(db, region_id, *, mode="reference", start_at=None, hours=2
         _reports.move_to_end(key)
         while len(_reports) > 4:
             _reports.popitem(last=False)
+        report["server_time"] = datetime.now(UTC).isoformat()
         return report
     finally:
         if runtime_acquired:

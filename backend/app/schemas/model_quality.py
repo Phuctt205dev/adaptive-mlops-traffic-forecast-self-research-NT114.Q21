@@ -41,8 +41,11 @@ class ModelQualityReport(BaseModel):
     reference_source: Literal["dataset_traffic_volume", "declared_observations"]
     evaluation_policy: str
     generated_at: datetime
+    server_time: datetime
+    next_refresh_at: datetime
+    selected_hours: int
     start_at: datetime
-    end_at: datetime
+    end_at: datetime | None
     window_end_at: datetime
     available_start_at: datetime | None
     available_end_at: datetime | None

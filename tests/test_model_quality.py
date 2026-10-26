@@ -220,21 +220,22 @@ class QualityReportTests(unittest.TestCase):
         runtime.lock.release.assert_not_called()
         self.assertFalse(quality._evaluation_lock.locked())
 
-    def recent_report(self, frame=None):
+    def recent_report(self, frame=None, hours=24):
         with patch.object(quality, "_predict_points", return_value=fake_predictions(self.frame)) as predict:
             report = quality._build_report(
                 self.region, self.model, self.training, self.dataset,
-                self.frame if frame is None else frame, "reference", None, 24,
+                self.frame if frame is None else frame, "reference", None, hours,
                 window="recent", now=datetime(2026, 6, 1, 5, 35, tzinfo=UTC),
             )
         return report, predict
 
     def test_recent_window_uses_clock_in_region_time_not_dataset_start(self):
         report, predict = self.recent_report()
-        self.assertEqual(report["start_at"], "2026-05-31T12:00:00+07:00")
+        self.assertEqual(report["start_at"], "2026-06-01T08:00:00+07:00")
         self.assertEqual(report["end_at"], "2026-06-01T11:00:00+07:00")
         self.assertEqual(report["window_end_at"], "2026-06-01T12:00:00+07:00")
-        self.assertEqual(report["coverage"]["requested_points"], 24)
+        self.assertEqual(report["coverage"]["requested_points"], 4)
+        self.assertEqual(report["selected_hours"], 24)
         self.assertEqual(report["coverage"]["paired_points"], 4)
         self.assertEqual(report["metrics"]["mae"], 250)
         self.assertEqual(len(predict.call_args.args[-1]), 4)
@@ -253,8 +254,8 @@ class QualityReportTests(unittest.TestCase):
             frame = self.frame.copy()
             frame["date_time"] = pd.to_datetime(frame.date_time) + pd.Timedelta(hours=offset)
             report, _ = self.recent_report(frame)
-            self.assertEqual(len(report["points"]), 24)
-            self.assertEqual(report["start_at"], "2026-05-31T12:00:00+07:00")
+            self.assertEqual(len(report["points"]), 4)
+            self.assertEqual(report["start_at"], "2026-06-01T08:00:00+07:00")
             self.assertEqual(report["coverage"]["dataset_points"], 0)
             self.assertTrue(all(p["reference"] is None and p["prediction"] is None for p in report["points"]))
             self.assertIsNone(report["metrics"]["mae"])
@@ -263,6 +264,8 @@ class QualityReportTests(unittest.TestCase):
         self.training.configuration_json["train_end_date"] = "2026-06-01 11:00:00"
         report, _ = self.recent_report()
         self.assertEqual(report["coverage"]["paired_points"], 1)
+        self.assertEqual(report["coverage"]["requested_points"], 1)
+        self.assertEqual(report["start_at"], "2026-06-01T11:00:00+07:00")
         self.assertEqual(report["metrics"]["mae"], 200)
         self.assertTrue(all(p["prediction"] is None for p in report["points"][:-1]))
 
@@ -272,6 +275,8 @@ class QualityReportTests(unittest.TestCase):
         self.assertIsNone(report["available_start_at"])
         self.assertIsNone(report["available_end_at"])
         self.assertEqual(report["coverage"]["paired_points"], 0)
+        self.assertEqual(report["coverage"]["requested_points"], 0)
+        self.assertIsNone(report["end_at"])
         ModelQualityReport.model_validate(report)
 
     def test_recent_cache_rolls_window_at_the_next_region_hour(self):
@@ -291,11 +296,11 @@ class QualityReportTests(unittest.TestCase):
             clock.now.return_value = datetime(2026, 6, 1, 6, 1, tzinfo=UTC)
             second = quality.get_model_quality(db, self.region.id)
             self.assertEqual(download.call_count, 2)
-            self.assertNotEqual(first["start_at"], second["start_at"])
+            self.assertNotEqual(first["window_end_at"], second["window_end_at"])
         db.commit.assert_not_called()
 
     def test_recent_window_rejects_manual_range_or_observed_only_policy(self):
-        for kwargs in [{"mode": "observed"}, {"hours": 168}, {"start_at": "2026-06-01"}]:
+        for kwargs in [{"mode": "observed"}, {"hours": 48}, {"hours": 337}, {"start_at": "2026-06-01"}]:
             with self.subTest(kwargs=kwargs), self.assertRaises(ApplicationError) as error:
                 quality.get_model_quality(Mock(), self.region.id, **kwargs)
             self.assertEqual(error.exception.code, "quality_request_invalid")
@@ -314,6 +319,53 @@ class QualityReportTests(unittest.TestCase):
         self.assertEqual(report["coverage"]["synthetic_labels"], 4)
         self.assertEqual(report["coverage"]["paired_points"], 4)
         self.assertEqual(report["metrics"]["mae"], 250)
+
+    def test_recent_supports_all_three_windows_without_crossing_training(self):
+        self.training.configuration_json["train_end_date"] = "2026-05-01 00:00:00"
+        for hours in [24, 168, 336]:
+            with self.subTest(hours=hours):
+                report, _ = self.recent_report(hours=hours)
+                self.assertEqual(len(report["points"]), hours)
+                self.assertEqual(report["selected_hours"], hours)
+                self.assertEqual(report["coverage"]["requested_points"], hours)
+                self.assertEqual(report["window_end_at"], "2026-06-01T12:00:00+07:00")
+                self.assertEqual(report["metrics"]["mae"], 250)
+                self.assertEqual(pd.Timestamp(report["window_end_at"]) - pd.Timestamp(report["start_at"]), pd.Timedelta(hours=hours))
+
+    def test_week_and_fortnight_are_clipped_to_three_days_after_training(self):
+        self.training.configuration_json["train_end_date"] = "2026-05-29 12:00:00"
+        for hours, expected in [(24, 24), (168, 72), (336, 72)]:
+            report, predict = self.recent_report(hours=hours)
+            self.assertEqual(report["coverage"]["requested_points"], expected)
+            self.assertEqual(len(report["points"]), expected)
+            self.assertEqual(report["selected_hours"], hours)
+            self.assertTrue((predict.call_args.args[-1].date_time >= pd.Timestamp("2026-05-29 12:00")).all())
+
+    def test_fractional_training_boundary_starts_at_first_eligible_whole_hour(self):
+        self.training.configuration_json["train_end_date"] = "2026-06-01 08:30:00"
+        report, _ = self.recent_report(hours=168)
+        self.assertEqual(report["start_at"], "2026-06-01T09:00:00+07:00")
+        self.assertEqual(report["coverage"]["requested_points"], 3)
+
+    def test_cached_report_has_fresh_server_clock_and_hour_aligned_next_refresh(self):
+        db = Mock()
+        db.get.side_effect = lambda cls, identity: self.region if cls is Region else self.model
+        clock = Mock(wraps=datetime)
+        clock.now.return_value = datetime(2026, 6, 1, 5, 35, tzinfo=UTC)
+        with patch.object(quality, "datetime", clock), \
+             patch.object(quality.predictions, "_active_training_context", return_value=(self.training, self.dataset)), \
+             patch.object(quality.predictions, "_download_dataset_frame", return_value=self.frame) as download, \
+             patch.object(quality, "_predict_points", return_value=fake_predictions(self.frame)):
+            first = quality.get_model_quality(db, self.region.id)
+            clock.now.return_value = datetime(2026, 6, 1, 5, 35, 20, tzinfo=UTC)
+            cached = quality.get_model_quality(db, self.region.id)
+            self.assertEqual(download.call_count, 1)
+            self.assertEqual(first["generated_at"], cached["generated_at"])
+            self.assertNotEqual(first["server_time"], cached["server_time"])
+            self.assertEqual(cached["next_refresh_at"], "2026-06-01T13:00:00+07:00")
+            self.assertEqual(cached["selected_hours"], 168)
+            quality.get_model_quality(db, self.region.id, hours=24)
+            self.assertEqual(download.call_count, 2)
 
 
 class QualityRouteTests(unittest.TestCase):
@@ -345,7 +397,11 @@ class QualityRouteTests(unittest.TestCase):
             self.assertEqual(response.json()["metrics"]["mae"], 250)
             self.assertEqual(service.call_args.kwargs["mode"], "reference")
             self.assertEqual(service.call_args.kwargs["window"], "recent")
-            self.assertEqual(self.client.get(self.url + "?hours=169").status_code, 422)
+            self.assertEqual(service.call_args.kwargs["hours"], 168)
+            for hours in [24, 168, 336]:
+                self.assertEqual(self.client.get(self.url + f"?hours={hours}").status_code, 200)
+                self.assertEqual(service.call_args.kwargs["hours"], hours)
+            self.assertEqual(self.client.get(self.url + "?hours=337").status_code, 422)
             self.assertEqual(self.client.get(self.url + "?mode=accuracy").status_code, 422)
 
 

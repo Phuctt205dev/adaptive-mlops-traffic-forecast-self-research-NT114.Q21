@@ -388,8 +388,19 @@ class CleanupTests(unittest.TestCase):
         resource.client.get_paginator.return_value.paginate.return_value=[{'Uploads':[{'Key':'regions/own/model','UploadId':'failed-upload'}]}]
         items=CleanupResources.multipart_uploads(resource,{'bucket':'data','prefix':'regions/own/'})
         self.assertEqual(items,[{'Key':'regions/own/model','UploadId':'failed-upload'}])
-        with self.assertRaises(ApplicationError):
-            CleanupResources.multipart_uploads(resource,{'bucket':'data','prefix':'regions/other/'})
+        self.assertEqual(CleanupResources.multipart_uploads(resource,{'bucket':'data','prefix':'regions/other/'}),[])
+        resource.client.get_paginator.return_value.paginate.assert_called_with(Bucket='data')
+
+    def test_multipart_listing_ignores_broken_server_prefix_and_filters_every_page(self):
+        resource=self.resource()
+        resource.client=Mock()
+        resource.client.get_paginator.return_value.paginate.return_value=[
+            {'Uploads':[{'Key':'regions/other/model','UploadId':'keep'},
+                        {'Key':'regions/own-extra/model','UploadId':'keep-too'}]},
+            {'Uploads':[{'Key':'regions/own/model','UploadId':'remove'}]}]
+        self.assertEqual(CleanupResources.multipart_uploads(resource,{'bucket':'data','prefix':'regions/own/'}),
+                         [{'Key':'regions/own/model','UploadId':'remove'}])
+        resource.client.get_paginator.return_value.paginate.assert_called_once_with(Bucket='data')
 
 
 if __name__ == '__main__':

@@ -206,12 +206,16 @@ class CleanupResources:
 
     def multipart_uploads(self, target):
         uploads = []
-        for page in self.client.get_paginator('list_multipart_uploads').paginate(Bucket=target['bucket'], Prefix=target['prefix']):
-            uploads.extend({'Key': item['Key'], 'UploadId': item['UploadId']} for item in page.get('Uploads', []))
-            if len(uploads) > MAX_OBJECTS:
+        scanned = 0
+        # This MinIO deployment returns no uploads when Prefix is supplied,
+        # even for matching keys. Enumerate with a bound, then filter locally.
+        for page in self.client.get_paginator('list_multipart_uploads').paginate(Bucket=target['bucket']):
+            items = page.get('Uploads', [])
+            scanned += len(items)
+            if scanned > MAX_OBJECTS:
                 fail('Too many unfinished uploads for a safe cleanup.')
-        if any(not item['Key'].startswith(target['prefix']) for item in uploads):
-            fail('An unfinished upload is outside the selected region.')
+            uploads.extend({'Key': item['Key'], 'UploadId': item['UploadId']}
+                           for item in items if owns_key(item['Key'], [target['prefix']]))
         return uploads
 
     def objects(self, target):

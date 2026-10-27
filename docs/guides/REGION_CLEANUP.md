@@ -40,6 +40,8 @@ dẫn file hoặc prefix S3. File không xác định được chủ sở hữu 
 - Dataset gốc và quality report tại regions/<region UUID>/ trên bucket dataset.
 - Các multipart upload còn dở trong đúng prefix sở hữu, gồm phần còn sót
   sau upload lỗi. Uploader tự nhường quyền và sẽ thử lại sau đợt xóa.
+  Việc kiểm kê có giới hạn trên toàn bucket rồi lọc prefix trong ứng dụng,
+  để xử lý trường hợp dịch vụ lưu trữ trả thiếu kết quả khi lọc trên server.
 - Cây/thư mục model legacy, recurrent, distributed-serving, distributed-training,
   dữ liệu trung gian, SHAP, file upload cache và training-exchange đúng UUID.
 - Airflow: DAG run training thuộc vùng, kể cả run tìm thêm qua conf, và

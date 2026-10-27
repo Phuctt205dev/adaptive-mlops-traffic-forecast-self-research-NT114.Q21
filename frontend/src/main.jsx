@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api, getStoredToken, setStoredToken } from "./api";
 import ModelQualityPanel from "./ModelQualityPanel";
+import FeatureImportancePanel from "./FeatureImportancePanel";
 import "./styles.css";
 
 const pages = [
@@ -11,6 +12,7 @@ const pages = [
   ["datasets", "Datasets"],
   ["models", "Models"],
   ["quality", "Model Quality"],
+  ["importance", "Feature Importance"],
   ["drift", "Drift"],
   ["users", "Users"],
 ];
@@ -2009,6 +2011,7 @@ function Icon({ name }) {
         <path d="M21 12H9" />
       </>
     ),
+    importance: <><path d="M4 4v16h17" /><path d="M8 8h12M8 12h8M8 16h4" /></>,
     chevron: <path d="m15 18-6-6 6-6" />,
     trash: (
       <>
@@ -2357,6 +2360,9 @@ function App() {
             </section>
             <section className="page-panel" hidden={page !== "quality"}>
               <ModelQualityPanel region={selectedRegion} enabled={page === "quality"} />
+            </section>
+            <section className="page-panel" hidden={page !== "importance"}>
+              <FeatureImportancePanel region={selectedRegion} enabled={page === "importance"} />
             </section>
             <section className="page-panel" hidden={page !== "drift"}>
               <DriftMonitor

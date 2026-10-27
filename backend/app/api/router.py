@@ -9,6 +9,7 @@ from backend.app.api.routes import (
     internal_training,
     model_versions,
     model_quality,
+    feature_importance,
     predictions,
     public_regions,
     regions,
@@ -38,4 +39,5 @@ api_router.include_router(regions.router, prefix="/admin/regions", tags=["region
 api_router.include_router(datasets.router, prefix="/admin", tags=["datasets"])
 api_router.include_router(model_versions.router, prefix="/admin", tags=["models"])
 api_router.include_router(model_quality.router, prefix="/admin", tags=["model-quality"])
+api_router.include_router(feature_importance.router, prefix="/admin", tags=["feature-importance"])
 api_router.include_router(drift.router, prefix="/admin", tags=["drift"])

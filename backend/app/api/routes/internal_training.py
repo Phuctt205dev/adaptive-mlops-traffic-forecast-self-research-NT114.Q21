@@ -212,6 +212,7 @@ def execute_tree_training_branch(
             region_id=training_run.region_id,
             dataset_id=training_run.dataset_id,
             experiment_name=region_experiment_name(region.name, region.id),
+            shap_config=config.get("shap"),
         )
         model_info.update(
             {

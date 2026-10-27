@@ -19,6 +19,7 @@ from src.preprocess import (
     split_data,
 )
 from src.mlflow_regions import set_mlflow_experiment
+from src.shap_reporting import explain_saved_model, resolve_shap_config
 
 class _NullMLflowData:
     @staticmethod
@@ -247,6 +248,7 @@ def run_pipeline(
     artifact_root=".",
     mlflow_tracking_uri=None,
     experiment_name=None,
+    shap_config=None,
 ):
     """
     Train all supported models and save the best validation-MAE model.
@@ -254,6 +256,7 @@ def run_pipeline(
     Retraining workers should use model_role="candidate" and candidate output
     paths. Only the promotion step is allowed to replace the champion model.
     """
+    shap_config = resolve_shap_config(shap_config)
     print(f"\nTraining {model_role} model...")
     print(f"Random state: {random_state}")
     print(f"Data path: {data_path}")
@@ -383,6 +386,7 @@ def run_pipeline(
                 fold_metrics.append(
                     (fold_mae, fold_rmse, fold_mape)
                 )
+                del fold_model
                 mlflow.log_metrics(
                     {
                         f"fold_{fold_number}_MAE": fold_mae,
@@ -472,6 +476,17 @@ def run_pipeline(
     joblib.dump(best_model, output_model_path)
     joblib.dump(best_model, versioned_model_path)
 
+    shap_report = explain_saved_model(
+        best_model, X_development,
+        model_name=best["name"], model_path=versioned_model_path,
+        output_path=os.path.join(models_dir, f"{model_version}_shap.json"),
+        timestamps=development_part["date_time"], config=shap_config,
+        context={"region_id": str(region_id) if region_id is not None else None,
+                 "dataset_id": str(dataset_id) if dataset_id is not None else None,
+                 "train_start_date": str(train_start_date), "train_end_date": str(train_end_date),
+                 "model_version": model_version, "model_family": "legacy_sklearn"},
+    )
+
     model_info = {
         "best_model_name": best["name"],
         "model_version": model_version,
@@ -504,6 +519,7 @@ def run_pipeline(
         "saved_at": datetime.now().isoformat(),
         "model_file": output_model_path,
         "versioned_model_file": versioned_model_path,
+        "shap_report": shap_report,
         "model_comparison": [
             {
                 "model_name": result["name"],
@@ -570,6 +586,8 @@ def run_pipeline(
         )
         mlflow.log_artifact(output_model_path)
         mlflow.log_artifact(output_info_path)
+        if shap_report.get("source_report"):
+            mlflow.log_artifact(shap_report["source_report"])
         try:
             mlflow.sklearn.log_model(
                 best_model,

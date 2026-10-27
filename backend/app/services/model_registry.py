@@ -229,6 +229,7 @@ def register_training_result(
         "split_policy",
         "final_test_used_for_selection",
         "selection_metric",
+        "shap_report",
     ):
         if optional_key in model_info:
             configuration_json[optional_key] = model_info[optional_key]

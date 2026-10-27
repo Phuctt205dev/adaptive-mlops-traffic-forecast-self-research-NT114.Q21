@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from src.mlflow_regions import set_mlflow_experiment
+from src.shap_reporting import explain_saved_model, file_sha256, resolve_shap_config
 
 from src.lstm_sequences import (
     DEFAULT_SEQUENCE_LENGTH,
@@ -325,6 +326,8 @@ def _run_tree_cross_validation(
     train_start_date=None,
     train_end_date=None,
     final_test_ratio=0.15,
+    shap_config=None,
+    shap_context=None,
 ):
     if profile not in TREE_PROFILES:
         raise ValueError(
@@ -401,6 +404,8 @@ def _run_tree_cross_validation(
             }
         )
 
+        del pipeline
+
     # Sau CV, model cuối học toàn bộ Development. Final Test chưa từng tham
     # gia fit, chọn model hoặc chuẩn hóa dữ liệu.
     X_development, y_development, _ = split_features_and_target(
@@ -419,6 +424,11 @@ def _run_tree_cross_validation(
     final_training_seconds = time.perf_counter() - started_at
     test_predictions = final_model.predict(X_test)
     model_size_bytes = _save_joblib(final_model, model_path)
+    shap_report = explain_saved_model(
+        final_model, X_development, model_name=model_name, model_path=model_path,
+        output_path=f"{model_path}.shap.json", config=shap_config,
+        context=shap_context, timestamps=development[TIME_COLUMN],
+    )
     _save_predictions(
         test_timestamps,
         y_test,
@@ -448,6 +458,7 @@ def _run_tree_cross_validation(
         ),
         "model_path": model_path,
         "model_size_bytes": int(model_size_bytes),
+        "shap_report": shap_report,
         "predictions_path": predictions_path,
     }
 
@@ -574,6 +585,8 @@ def _train_final_neural_model(
     preprocessor_path,
     predictions_path,
     verbose,
+    shap_config=None,
+    shap_context=None,
 ):
     from tensorflow import keras
 
@@ -632,6 +645,14 @@ def _train_final_neural_model(
         predictions_path,
     )
     metrics = calculate_regression_metrics(actual, predictions)
+    shap_report = explain_saved_model(
+        model, datasets["train"]["X"], model_name=model_name, model_path=model_path,
+        output_path=f"{model_path}.shap.json", sequence=True, config=shap_config,
+        context={**(shap_context or {}), "preprocessor_sha256": file_sha256(preprocessor_path)},
+        feature_names=preprocessors["sequence_feature_names"],
+        target_scale=float(preprocessors["target_scaler"].scale_[0]),
+        timestamps=datasets["train"]["timestamps"],
+    )
     keras.backend.clear_session()
     return {
         "metrics": metrics,
@@ -641,6 +662,7 @@ def _train_final_neural_model(
         "preprocessor_size_bytes": int(
             preprocessor_size_bytes
         ),
+        "shap_report": shap_report,
     }
 
 
@@ -661,6 +683,8 @@ def _run_neural_cross_validation(
     train_start_date=None,
     train_end_date=None,
     final_test_ratio=0.15,
+    shap_config=None,
+    shap_context=None,
 ):
     offline, production, development, final_test = (
         _prepare_offline_features(
@@ -751,6 +775,8 @@ def _run_neural_cross_validation(
         preprocessor_path,
         predictions_path,
         verbose,
+        shap_config=shap_config,
+        shap_context=shap_context,
     )
     return {
         "family": "neural_sequence",
@@ -777,6 +803,7 @@ def _run_neural_cross_validation(
         "preprocessor_size_bytes": final_result[
             "preprocessor_size_bytes"
         ],
+        "shap_report": final_result["shap_report"],
         "predictions_path": predictions_path,
     }
 
@@ -803,6 +830,8 @@ def run_model_time_series_cross_validation(
     experiment_name=None,
     mlflow_dataset_name=None,
     mlflow_dataset_source=None,
+    shap_config=None,
+    shap_context=None,
 ):
     """Chạy CV và Final Test cho đúng một model."""
     if model_name not in SUPPORTED_MODELS:
@@ -811,6 +840,9 @@ def run_model_time_series_cross_validation(
             f"Chỉ dùng: {', '.join(SUPPORTED_MODELS)}."
         )
 
+    shap_config = resolve_shap_config(shap_config)
+    shap_context = {**(shap_context or {}), "train_start_date": str(train_start_date),
+                    "train_end_date": str(train_end_date)}
     normalized_name = artifact_name or model_name.lower()
     extension = (
         ".keras"
@@ -860,6 +892,8 @@ def run_model_time_series_cross_validation(
             train_start_date=train_start_date,
             train_end_date=train_end_date,
             final_test_ratio=final_test_ratio,
+            shap_config=shap_config,
+            shap_context=shap_context,
         )
     else:
         result = _run_tree_cross_validation(
@@ -875,6 +909,8 @@ def run_model_time_series_cross_validation(
             train_start_date=train_start_date,
             train_end_date=train_end_date,
             final_test_ratio=final_test_ratio,
+            shap_config=shap_config,
+            shap_context=shap_context,
         )
 
     split_policy = {
@@ -943,6 +979,9 @@ def run_model_time_series_cross_validation(
             else [result["model_path"]]
         ),
     }
+
+    if result.get("shap_report", {}).get("source_report"):
+        report["artifact_paths"].append(result["shap_report"]["source_report"])
 
     fold_rows = []
     for fold in report["folds"]:
@@ -1028,6 +1067,7 @@ def run_model_time_series_cross_validation(
                 report_path,
                 folds_path,
                 predictions_path,
+                result.get("shap_report", {}).get("source_report", ""),
             ):
                 if os.path.exists(artifact_path):
                     mlflow.log_artifact(artifact_path)

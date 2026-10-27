@@ -161,6 +161,7 @@ def _candidate_from_report(
         "split_policy": report["split_policy"],
         "final_test_used_for_selection": False,
         "selection_metric": "cross_validation_mean_MAE",
+        "shap_report": report.get("shap_report", {"status": "not_generated"}),
     }
 
 
@@ -201,6 +202,9 @@ def _train_variant(
         experiment_name=region_experiment_name(region_name, region_id),
         mlflow_dataset_name=f"region_{region_id}_dataset_{dataset_id}",
         mlflow_dataset_source=str(data_path),
+        shap_config=config.get("shap"),
+        shap_context={"region_id": str(region_id), "dataset_id": str(dataset_id),
+                      "training_run_id": str(training_run_id), "variant": variant},
     )
     return _candidate_from_report(
         report,

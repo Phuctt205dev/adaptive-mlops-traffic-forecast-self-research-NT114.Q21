@@ -73,8 +73,9 @@ class RegionPipelineTests(unittest.TestCase):
                 patch("src.pipeline.mlflow.set_tags"),
                 patch("src.pipeline.mlflow.log_artifact"),
                 patch("src.pipeline.mlflow.sklearn.log_model"),
+                patch("src.pipeline.explain_saved_model", return_value={"status": "completed"}),
             ]
-            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], patches[11], patches[12]:
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], patches[11], patches[12], patches[13] as explain:
                 model_info = run_pipeline(
                     train_start_date="2025-01-01",
                     train_end_date="2025-01-03",
@@ -90,6 +91,12 @@ class RegionPipelineTests(unittest.TestCase):
             region_root = os.path.join(artifact_root, "regions", "region-a")
             self.assertEqual(model_info["region_id"], "region-a")
             self.assertEqual(model_info["dataset_id"], "dataset-a")
+            self.assertEqual(model_info["shap_report"]["status"], "completed")
+            explain.assert_called_once()
+            # 48 rows split into 40 development and 8 untouched Final Test.
+            self.assertEqual(len(explain.call_args.args[1]), 40)
+            self.assertNotIn("traffic_volume", explain.call_args.args[1].columns)
+            self.assertEqual(explain.call_args.kwargs["timestamps"].max(), pd.Timestamp("2025-01-02 15:00"))
             self.assertTrue(
                 model_info["model_file"].startswith(
                     os.path.join(region_root, "models")

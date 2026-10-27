@@ -115,7 +115,14 @@ class ModelRegistryServiceTests(unittest.TestCase):
         self.assertEqual(active.status, ModelVersionStatus.ACTIVE)
         self.assertEqual(refreshed_region.active_model_version_id, model_version.id)
         self.assertEqual(total, 1)
-        self.assertEqual(items[0].id, model_version.id)
+        self.assertEqual(items[0]["id"], model_version.id)
+
+    def test_registration_preserves_shap_artifact_reference(self):
+        _user, region, dataset = self.seed_dataset()
+        info = self.model_info()
+        info["shap_report"] = {"status": "completed", "source_report": "models/model_v1_shap.json"}
+        run, _version = register_training_result(self.session, region.id, dataset.id, info)
+        self.assertEqual(run.configuration_json["shap_report"], info["shap_report"])
 
     def test_register_result_updates_existing_training_run(self):
         user, region, dataset = self.seed_dataset()

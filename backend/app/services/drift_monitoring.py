@@ -206,6 +206,7 @@ def _training_configuration(training_run: TrainingRun, current_end_at: pd.Timest
         "recurrent_batch_size": int(previous.get("recurrent_batch_size") or 32),
         "final_test_ratio": float(previous.get("final_test_ratio") or 0.15),
         "trigger_source": "feature_drift",
+        "shap": dict(previous.get("shap") or {}),
     }
 
 

@@ -1,9 +1,11 @@
 import uuid
 from datetime import datetime
+from dataclasses import asdict
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.app.db.models import ModelVersionStatus, TrainingRunStatus
+from src.shap_reporting import resolve_shap_config
 
 
 class TrainingRunRead(BaseModel):
@@ -78,6 +80,12 @@ class TrainingRunCreate(BaseModel):
     recurrent_batch_size: int = 32
     final_test_ratio: float = 0.15
     trigger_source: str | None = None
+    shap: dict = Field(default_factory=dict)
+
+    @field_validator("shap")
+    @classmethod
+    def validate_shap(cls, value):
+        return asdict(resolve_shap_config(value))
 
     @field_validator("selected_models")
     @classmethod

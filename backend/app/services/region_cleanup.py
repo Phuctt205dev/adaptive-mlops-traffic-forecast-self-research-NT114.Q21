@@ -5,6 +5,7 @@ table therefore holds a small cleanup journal; it survives a crash/retry. The
 region and its rows are removed LAST, not before their file locations are known.
 """
 from contextlib import contextmanager
+import time
 import uuid
 from urllib.parse import urlsplit
 
@@ -20,6 +21,7 @@ from backend.app.db.models import (
 PENDING = 'region_cleanup_pending'
 COMPLETED = 'region_cleanup_completed'
 LOCK_KEY = 73918046215
+INTENT_KEY = LOCK_KEY + 2
 STEPS = ('local_files', 'mlflow', 'airflow', 'objects')
 
 
@@ -37,30 +39,69 @@ def pending_cleanup(db, region_id=None):
     return db.scalars(query.order_by(AuditLog.created_at)).first()
 
 
-@contextmanager
-def database_barrier(engine, *, exclusive=False):
-    """Separate connection keeps a session lock across journal commits.
+def _try_lock(connection, key, *, shared=False):
+    from sqlalchemy import text
+    suffix = '_shared' if shared else ''
+    try:
+        acquired = connection.execute(text('SELECT pg_try_advisory_lock' + suffix + '(:key)'), {'key': key}).scalar_one()
+        connection.commit()
+        return acquired
+    except Exception:
+        connection.invalidate()
+        raise
 
-    Normal requests and cache upload cycles take SHARED locks, so they can
-    still run concurrently. A deletion takes an EXCLUSIVE lock, without waiting
-    for or cancelling a running train/prediction/upload. Deployment enables
-    this barrier on every API, both workers and both upload sidecars.
+
+def _unlock(connection, key, *, shared=False):
+    from sqlalchemy import text
+    suffix = '_shared' if shared else ''
+    released = connection.execute(text('SELECT pg_advisory_unlock' + suffix + '(:key)'), {'key': key}).scalar_one()
+    connection.commit()
+    if not released:
+        raise RuntimeError('Cleanup lock ownership was lost')
+
+
+def cleanup_requested(connection):
+    """Nonblocking intent probe; never release someone else's lock."""
+    if not _try_lock(connection, INTENT_KEY, shared=True):
+        return True
+    _unlock(connection, INTENT_KEY, shared=True)
+    return False
+
+
+@contextmanager
+def database_barrier(engine, *, exclusive=False, respect_intent=True, wait_seconds=20):
+    """A cleanup intent prevents upload cycles starving a waiting deletion.
+
+    Normal work remains concurrent. Upload callbacks yield to cleanup intent;
+    deletion waits briefly for their multipart abort and in-flight requests to
+    finish, without force-unlocking or cancelling training. Session locks stay
+    on a separate connection across journal commits.
     """
     if engine.dialect.name != 'postgresql':
         raise ApplicationError('region_cleanup_unconfigured', 'Region cleanup requires its deployment configuration.', 503)
-    from sqlalchemy import text
-    suffix = '' if exclusive else '_shared'
     with engine.connect() as connection:
-        acquired = connection.execute(text('SELECT pg_try_advisory_lock' + suffix + '(:key)'), {'key': LOCK_KEY}).scalar_one()
-        connection.commit()
-        if not acquired:
-            raise ApplicationError('region_cleanup_busy', 'Training, prediction or cleanup is busy. Please try again shortly.', 409)
+        acquired = intent = False
         try:
-            yield
+            if exclusive:
+                intent = _try_lock(connection, INTENT_KEY)
+                if intent:
+                    deadline = time.monotonic() + wait_seconds
+                    while True:
+                        acquired = _try_lock(connection, LOCK_KEY)
+                        if acquired or time.monotonic() >= deadline:
+                            break
+                        time.sleep(0.1)
+            elif not respect_intent or not cleanup_requested(connection):
+                acquired = _try_lock(connection, LOCK_KEY, shared=True)
+            if not acquired:
+                raise ApplicationError('region_cleanup_busy', 'Training, prediction or cleanup is busy. Please try again shortly.', 409)
+            yield connection
         finally:
             try:
-                connection.execute(text('SELECT pg_advisory_unlock' + suffix + '(:key)'), {'key': LOCK_KEY})
-                connection.commit()
+                if acquired:
+                    _unlock(connection, LOCK_KEY, shared=not exclusive)
+                if intent:
+                    _unlock(connection, INTENT_KEY)
             except Exception:
                 connection.invalidate()  # Never return a locked session to the pool.
                 raise

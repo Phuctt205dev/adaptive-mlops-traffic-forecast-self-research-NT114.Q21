@@ -169,7 +169,7 @@ def install(app, *, role='api', log_root=None):
             # may ask peers to remove files. A leaked/stale journal ID alone
             # is insufficient even with an authenticated internal request.
             try:
-                with database_barrier(engine):
+                with database_barrier(engine, respect_intent=False):
                     raise HTTPException(409, 'Cleanup coordinator is not active')
             except ApplicationError as error:
                 if error.code != 'region_cleanup_busy':

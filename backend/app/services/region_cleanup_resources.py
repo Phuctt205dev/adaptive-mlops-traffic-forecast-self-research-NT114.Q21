@@ -6,6 +6,7 @@ import uuid
 from urllib.parse import quote, urlsplit
 
 import requests
+from botocore.exceptions import ClientError
 from sqlalchemy import select
 
 from backend.app.core.config import get_settings
@@ -41,6 +42,7 @@ class CleanupResources:
     def barrier(self, db):
         if not INSTALLED or not self.runtime_bucket or not self.mlflow_bucket:
             raise ApplicationError('region_cleanup_unconfigured', 'Region cleanup is not deployed yet. No data was deleted.', 503)
+        self.check_idle({})  # Reject active Airflow work before requesting priority.
         return database_barrier(db.get_bind(), exclusive=True)
 
     def airflow(self, method, dag, run=None):
@@ -199,7 +201,18 @@ class CleanupResources:
         ]
         for target in plan['objects']:
             self.objects(target)  # Validate listing permissions/limits before mutation.
+            self.multipart_uploads(target)
         return plan
+
+    def multipart_uploads(self, target):
+        uploads = []
+        for page in self.client.get_paginator('list_multipart_uploads').paginate(Bucket=target['bucket'], Prefix=target['prefix']):
+            uploads.extend({'Key': item['Key'], 'UploadId': item['UploadId']} for item in page.get('Uploads', []))
+            if len(uploads) > MAX_OBJECTS:
+                fail('Too many unfinished uploads for a safe cleanup.')
+        if any(not item['Key'].startswith(target['prefix']) for item in uploads):
+            fail('An unfinished upload is outside the selected region.')
+        return uploads
 
     def objects(self, target):
         keys = []
@@ -241,6 +254,12 @@ class CleanupResources:
                     self.airflow('DELETE', run['dag_id'], run['run_id'])
         elif step == 'objects':
             for target in plan['objects']:
+                for upload in self.multipart_uploads(target):
+                    try:
+                        self.client.abort_multipart_upload(Bucket=target['bucket'], **upload)
+                    except ClientError as error:
+                        if error.response.get('Error', {}).get('Code') != 'NoSuchUpload':
+                            raise
                 keys = self.objects(target)
                 for start in range(0, len(keys), 1000):
                     result = self.client.delete_objects(Bucket=target['bucket'], Delete={
@@ -252,7 +271,7 @@ class CleanupResources:
         if self.peer_ids != sorted(p['pod'] for p in self.peers()):
             fail('A pod changed during cleanup. Retry deleting this region.')
         for target in plan['objects']:
-            if self.objects(target):
+            if self.objects(target) or self.multipart_uploads(target):
                 fail('Some region files remain. Retry deleting this region.')
         for run in plan['airflow']:
             if self.airflow('GET', run['dag_id'], run['run_id']) is not None:

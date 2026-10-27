@@ -5,9 +5,11 @@ Chỉ admin được xóa. Không có thao tác tự xóa vùng khi rollout ho�
 
 ## Luồng xử lý
 
-1. Kiểm tra không còn train, dự báo hoặc đồng bộ file đang thực thi. Các
-   tác vụ bình thường cùng giữ khóa chia sẻ nên vẫn chạy song song; xóa
-   dùng khóa độc quyền và trả lỗi để thử lại nếu hệ thống đang bận.
+1. Kiểm tra không có Airflow đang chạy. Khi admin xóa, hệ thống dành quyền
+   ưu tiên rồi chờ tối đa20 giây để tác vụ đang dùng file kết thúc. Đồng bộ
+   file nhường quyền bằng cách dừng an toàn lượt upload của chính nó;
+   không hủy training hoặc ép giải phóng khóa của tiến trình khác.
+   Tác vụ bình thường vẫn chạy song song khi không có yêu cầu xóa.
 2. Đối chiếu quyền sở hữu bằng UUID vùng/lượt train và metadata. Kiểm tra
    Airflow, MLflow, kho file và đủ hai API + hai worker trước khi xóa.
 3. Lưu danh sách cần dọn vào AuditLog, vô hiệu hóa vùng. Journal này tồn tại
@@ -36,6 +38,8 @@ dẫn file hoặc prefix S3. File không xác định được chủ sở hữu 
   các con trỏ active/recommended, cuối cùng Region. Chặn tham chiếu chéo vùng
   trước khi xóa bất cứ file nào.
 - Dataset gốc và quality report tại regions/<region UUID>/ trên bucket dataset.
+- Các multipart upload còn dở trong đúng prefix sở hữu, gồm phần còn sót
+  sau upload lỗi. Uploader tự nhường quyền và sẽ thử lại sau đợt xóa.
 - Cây/thư mục model legacy, recurrent, distributed-serving, distributed-training,
   dữ liệu trung gian, SHAP, file upload cache và training-exchange đúng UUID.
 - Airflow: DAG run training thuộc vùng, kể cả run tìm thêm qua conf, và

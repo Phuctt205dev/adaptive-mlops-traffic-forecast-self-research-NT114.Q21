@@ -173,6 +173,7 @@ class CleanupTests(unittest.TestCase):
         resource = object.__new__(CleanupResources)
         resource.client = Mock()
         resource.objects = Mock(return_value=[{'Key':'regions/test/file'}])
+        resource.multipart_uploads = Mock(return_value=[])
         resource.client.delete_objects.return_value = {'Errors': [{'Code': 'AccessDenied'}]}
         with self.assertRaises(ApplicationError):
             resource.clean('objects', {'objects': [{'bucket':'data','prefix':'regions/test/'}]}, 'id')
@@ -220,6 +221,7 @@ class CleanupTests(unittest.TestCase):
         resource.airflow = Mock(return_value=None)
         resource._mlflow = Mock(return_value=[])
         resource.objects = Mock(return_value=[])
+        resource.multipart_uploads = Mock(return_value=[])
         return resource
 
     def test_stale_queued_run_with_missing_airflow_is_inventory_not_retrained(self):
@@ -353,6 +355,41 @@ class CleanupTests(unittest.TestCase):
                 self.assertEqual(create.call_args.kwargs['aws_secret_access_key'],'unit-secret')
         finally:
             get_upload_client.cache_clear()
+
+    def test_upload_yields_via_sdk_abort_before_lock_can_be_released(self):
+        import boto3
+        from boto3.s3.transfer import TransferConfig
+        from backend.app.services.region_cleanup_uploader import YieldToCleanup, UploadPaused
+        client = boto3.client('s3',endpoint_url='http://127.0.0.1:1',region_name='us-east-1',
+                              aws_access_key_id='unit',aws_secret_access_key='unit')
+        def consume(**kwargs):
+            body=kwargs['Body']
+            body.signal_transferring()
+            body.read(512*1024)
+            return {'ETag':'unit'}
+        with TemporaryDirectory() as folder:
+            path=Path(folder)/'model.bin'
+            path.write_bytes(b'x'*(6*1024*1024))
+            with patch.object(client,'create_multipart_upload',return_value={'UploadId':'own-upload'}), \
+                 patch.object(client,'upload_part',side_effect=consume), \
+                 patch.object(client,'complete_multipart_upload') as complete, \
+                 patch.object(client,'abort_multipart_upload') as abort, \
+                 patch('backend.app.services.region_cleanup_uploader.cleanup_requested',return_value=True):
+                with self.assertRaises(UploadPaused):
+                    client.upload_file(str(path),'unit-bucket','owned/model.bin',
+                        Config=TransferConfig(multipart_threshold=1,multipart_chunksize=5*1024*1024,use_threads=False),
+                        Callback=YieldToCleanup(Mock()))
+                abort.assert_called_once_with(Bucket='unit-bucket',Key='owned/model.bin',UploadId='own-upload')
+                complete.assert_not_called()
+
+    def test_unfinished_multipart_uploads_are_scoped_to_region(self):
+        resource=self.resource()
+        resource.client=Mock()
+        resource.client.get_paginator.return_value.paginate.return_value=[{'Uploads':[{'Key':'regions/own/model','UploadId':'failed-upload'}]}]
+        items=CleanupResources.multipart_uploads(resource,{'bucket':'data','prefix':'regions/own/'})
+        self.assertEqual(items,[{'Key':'regions/own/model','UploadId':'failed-upload'}])
+        with self.assertRaises(ApplicationError):
+            CleanupResources.multipart_uploads(resource,{'bucket':'data','prefix':'regions/other/'})
 
 
 if __name__ == '__main__':

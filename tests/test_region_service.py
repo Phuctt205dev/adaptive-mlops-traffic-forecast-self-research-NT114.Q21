@@ -1,4 +1,6 @@
 import unittest
+from contextlib import nullcontext
+from unittest.mock import Mock, patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -152,7 +154,11 @@ class RegionServiceTests(unittest.TestCase):
         self.session.add(prediction)
         self.session.commit()
 
-        regions.delete_region(self.session, region.id)
+        backend = Mock()
+        backend.barrier.return_value = nullcontext()
+        backend.preflight.side_effect = lambda db, plan: plan
+        with patch('backend.app.services.region_cleanup_resources.CleanupResources', return_value=backend):
+            regions.delete_region(self.session, region.id)
 
         self.assertIsNone(self.session.get(Region, region.id))
         self.assertEqual(self.session.query(Dataset).count(), 0)

@@ -1,21 +1,15 @@
-import os
-import logging
 import uuid
 from decimal import Decimal
 
 import httpx
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.app.core.errors import ApplicationError
 from backend.app.core.config import get_settings
-from backend.app.db.models import Dataset, ModelVersion, Prediction, Region, TrainingRun
+from backend.app.db.models import ModelVersion, Region
 from backend.app.schemas.region import RegionCreate, RegionUpdate
-from src.mlflow_regions import legacy_region_experiment_name, region_experiment_name
-
-
-logger = logging.getLogger(__name__)
 
 
 def _attach_active_model_details(db: Session, regions: list[Region]) -> None:
@@ -101,72 +95,9 @@ def update_region(
     return region
 
 
-def _delete_mlflow_experiment_by_name(experiment_name: str) -> bool:
-    try:
-        from mlflow.tracking import MlflowClient
-    except ModuleNotFoundError:
-        return False
-
-    tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
-    client = MlflowClient(tracking_uri=tracking_uri) if tracking_uri else MlflowClient()
-    experiment = client.get_experiment_by_name(experiment_name)
-    if experiment is not None:
-        client.delete_experiment(experiment.experiment_id)
-        return True
-    return False
-
-
-def _delete_region_mlflow_experiments(region: Region) -> None:
-    experiment_names = {
-        region_experiment_name(region.name, region.id),
-        legacy_region_experiment_name(region.id),
-    }
-    for experiment_name in experiment_names:
-        try:
-            deleted = _delete_mlflow_experiment_by_name(experiment_name)
-            if deleted:
-                logger.info("Deleted MLflow experiment for region %s: %s", region.id, experiment_name)
-        except Exception:
-            logger.warning(
-                "Could not delete MLflow experiment for region %s: %s",
-                region.id,
-                experiment_name,
-                exc_info=True,
-            )
-
-
 def delete_region(db: Session, region_id: uuid.UUID) -> None:
-    region = get_region_or_404(db, region_id)
-    _delete_region_mlflow_experiments(region)
-    try:
-        model_ids = list(
-            db.scalars(select(ModelVersion.id).where(ModelVersion.region_id == region_id))
-        )
-        db.execute(
-            update(Region)
-            .where(Region.id == region_id)
-            .values(active_model_version_id=None)
-        )
-        db.execute(
-            update(TrainingRun)
-            .where(TrainingRun.region_id == region_id)
-            .values(recommended_model_version_id=None)
-        )
-        db.execute(delete(Prediction).where(Prediction.region_id == region_id))
-        if model_ids:
-            db.execute(delete(Prediction).where(Prediction.model_version_id.in_(model_ids)))
-        db.execute(delete(ModelVersion).where(ModelVersion.region_id == region_id))
-        db.execute(delete(TrainingRun).where(TrainingRun.region_id == region_id))
-        db.execute(delete(Dataset).where(Dataset.region_id == region_id))
-        db.delete(region)
-        db.commit()
-    except IntegrityError as error:
-        db.rollback()
-        raise ApplicationError(
-            "region_delete_conflict",
-            "Region could not be deleted because related records still reference it.",
-            409,
-        ) from error
+    from backend.app.services.region_cleanup import delete_region as cleanup_region
+    cleanup_region(db, region_id)
 
 
 def lookup_region(query: str) -> dict:

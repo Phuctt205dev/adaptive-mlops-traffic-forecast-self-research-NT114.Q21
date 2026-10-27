@@ -625,6 +625,7 @@ function TrafficChart({ points }) {
 }
 
 function RegionManager({ regions, selectedRegion, refresh }) {
+  const [deletingRegionId, setDeletingRegionId] = useState(null);
   const [lookupQuery, setLookupQuery] = useState("");
   const [lookingUp, setLookingUp] = useState(false);
   const [form, setForm] = useState({
@@ -692,11 +693,20 @@ function RegionManager({ regions, selectedRegion, refresh }) {
   }
 
   async function deleteRegion(region) {
-    if (!window.confirm(`Permanently delete "${region.name}" and all related datasets, models, training runs and predictions?`)) {
+    if (deletingRegionId || !window.confirm(`Permanently delete "${region.name}" and its datasets, models, training history, predictions, drift history and SHAP reports? This also removes its stored files.`)) {
       return;
     }
-    await api.deleteRegion(region.id);
-    await refresh();
+    setDeletingRegionId(region.id);
+    setMessage(`Deleting "${region.name}" and its data. Please wait…`);
+    try {
+      await api.deleteRegion(region.id);
+      setMessage(`Deleted "${region.name}" and its data.`);
+      await refresh();
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setDeletingRegionId(null);
+    }
   }
 
   function activeModelLabel(region) {
@@ -767,7 +777,7 @@ function RegionManager({ regions, selectedRegion, refresh }) {
                 />
                 <span />
               </label>
-              <button className="icon-button danger-icon" title="Delete region" onClick={() => deleteRegion(region)}>
+              <button className="icon-button danger-icon" title="Delete region" disabled={Boolean(deletingRegionId)} aria-busy={deletingRegionId === region.id} onClick={() => deleteRegion(region)}>
                 <Icon name="trash" />
               </button>
             </div>,

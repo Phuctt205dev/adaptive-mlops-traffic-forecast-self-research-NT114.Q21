@@ -76,7 +76,55 @@
 .feature-share { font-size: 18px; text-align: right; font-variant-numeric: tabular-nums; }
 .feature-show-all { margin-bottom: 24px; }
 
+.training-header-actions { display: flex; align-items: center; gap: 18px; }
+.cloud-training-switch { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; white-space: nowrap; }
+.cloud-training-switch input[type="checkbox"] { appearance: none; width: 44px; height: 26px; padding: 0; margin: 0; flex-shrink: 0; border: 1px solid #b7c4d4; border-radius: 20px; background: #cbd5e1; cursor: pointer; transition: background .15s; }
+.cloud-training-switch input::before { content: ""; display: block; width: 20px; height: 20px; margin: 2px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #0003; transition: transform .15s; }
+.cloud-training-switch input:checked { background: #0284c7; border-color: #0284c7; }
+.cloud-training-switch input:checked::before { transform: translateX(18px); }
+.cloud-training-switch input:focus-visible { outline: 3px solid #7dd3fc; outline-offset: 3px; }
+.cloud-training-switch input:disabled { opacity: .5; cursor: not-allowed; }
+.training-monitor { display: grid; gap: 24px; }
+.training-monitor-card { background: #fff; border: 1px solid #dce5ef; border-radius: 14px; padding: 24px; min-width: 0; }
+.training-monitor-has-error { border-color: #fca5a5; }
+.training-monitor-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.training-monitor-heading h2 { margin: 0; font-size: 20px; overflow-wrap: anywhere; }
+.training-monitor-heading p { color: #526680; margin: 8px 0 0; }
+.training-monitor-state { background: #e0f2fe; color: #075985; padding: 7px 12px; border-radius: 18px; white-space: nowrap; font-weight: 600; }
+.training-monitor-state.is-error { background: #fee2e2; color: #991b1b; }
+.training-monitor-error { margin: 16px 0; padding: 16px; border: 1px solid #fca5a5; border-radius: 10px; color: #991b1b; background: #fff1f2; font-size: 16px; }
+.training-monitor-error p { margin: 10px 0; }
+.training-monitor-error button { margin-top: 12px; }
+.training-monitor-progress { margin: 24px 0; }
+.training-monitor-progress > div { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.training-monitor-progress span { color: #526680; }
+.training-monitor-progress progress { appearance: none; width: 100%; height: 12px; border: 0; border-radius: 10px; overflow: hidden; background: #e2e8f0; }
+.training-monitor-progress progress::-webkit-progress-bar { background: #e2e8f0; }
+.training-monitor-progress progress::-webkit-progress-value { background: #0284c7; border-radius: 10px; }
+.training-monitor-progress progress::-moz-progress-bar { background: #0284c7; }
+.training-monitor-has-error progress::-webkit-progress-value { background: #dc2626; }
+.training-monitor-has-error progress::-moz-progress-bar { background: #dc2626; }
+.training-monitor-table-wrap, .training-monitor-logs { overflow: auto; }
+.training-monitor table { width: 100%; border-collapse: collapse; font-size: 15px; }
+.training-monitor th { text-align: left; background: #f1f5f9; color: #475569; }
+.training-monitor th, .training-monitor td { padding: 13px 12px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+.training-monitor-log-heading { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin-top: 24px; }
+.training-monitor-log-heading h3 { margin-right: auto; font-size: 18px; }
+.training-monitor-log-heading label { display: flex; gap: 8px; align-items: center; }
+.training-monitor-logs { max-height: 300px; border: 1px solid #e2e8f0; border-radius: 10px; }
+.training-monitor-logs th { position: sticky; top: 0; }
+.training-monitor-error-row { color: #991b1b; background: #fff1f2; }
+.training-monitor-details { margin-top: 20px; color: #526680; }
+.training-monitor-details summary { cursor: pointer; font-weight: 600; }
+.training-monitor-details p { overflow-wrap: anywhere; }
+
 @media (max-width: 640px) {
+  .train-modal-card .modal-header { flex-wrap: wrap; }
+  .training-header-actions { margin-left: auto; gap: 12px; }
+  .training-monitor-card { padding: 16px; }
+  .training-monitor-heading, .training-monitor-progress > div { flex-direction: column; }
+  .training-monitor-table-wrap table, .training-monitor-logs table { min-width: 510px; }
+  .training-monitor-log-heading { gap: 12px; }
   .feature-row { grid-template-columns: minmax(0, 1fr) 62px; gap: 8px 12px; }
   .feature-label { grid-column: 1; font-size: 16px; }
   .feature-share { grid-column: 2; grid-row: 1 / span 2; align-self: center; }

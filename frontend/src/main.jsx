@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { api, getStoredToken, setStoredToken } from "./api";
 import ModelQualityPanel from "./ModelQualityPanel";
 import FeatureImportancePanel from "./FeatureImportancePanel";
+import TrainingMonitor from "./TrainingMonitor";
 import "./styles.css";
 
 const pages = [
@@ -11,6 +12,7 @@ const pages = [
   ["regions", "Regions"],
   ["datasets", "Datasets"],
   ["models", "Models"],
+  ["training", "Training Monitor"],
   ["quality", "Model Quality"],
   ["importance", "Feature Importance"],
   ["drift", "Drift"],
@@ -1083,6 +1085,16 @@ function TrainModelModal({
   const [selectedModels, setSelectedModels] = useState(initialSelectedModels);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [cloudTraining, setCloudTraining] = useState(false);
+  const [cloudAvailable, setCloudAvailable] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    api.trainingCapabilities({ signal: controller.signal })
+      .then((result) => { if (!controller.signal.aborted) setCloudAvailable(result.cloud_training === true); })
+      .catch(() => { if (!controller.signal.aborted) setCloudAvailable(false); });
+    return () => controller.abort();
+  }, []);
 
   function toggleModel(modelId) {
     setSelectedModels((current) => (
@@ -1101,7 +1113,10 @@ function TrainModelModal({
     }
     setSubmitting(true);
     try {
-      await onSubmit(dataset, selectedModels, trainForm);
+      await onSubmit(dataset, selectedModels, {
+        ...trainForm,
+        training_backend: cloudTraining ? "kaggle" : "local",
+      });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1113,14 +1128,21 @@ function TrainModelModal({
   const neuralCount = selectedModels.filter((model) => ["lstm", "gru"].includes(model)).length;
 
   return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+    <div className="modal-backdrop" role="presentation" onClick={submitting ? undefined : onClose}>
       <form className="modal-card train-modal-card" onSubmit={submit} onClick={(event) => event.stopPropagation()}>
         <div className="modal-header">
           <div>
             <p className="eyebrow">{eyebrow}</p>
             <h2>{title}</h2>
           </div>
-          <button className="secondary" type="button" onClick={onClose}>Close</button>
+          <div className="training-header-actions">
+            <label className="cloud-training-switch" title={cloudAvailable ? "Train on Kaggle" : "Cloud training is not enabled yet"}>
+              <span>Cloud Training</span>
+              <input type="checkbox" role="switch" aria-label="Cloud Training" checked={cloudTraining}
+                disabled={submitting || !cloudAvailable} onChange={(event) => setCloudTraining(event.target.checked)} />
+            </label>
+            <button className="secondary" type="button" disabled={submitting} onClick={onClose}>Close</button>
+          </div>
         </div>
 
         <div className="train-modal-dataset">
@@ -2373,6 +2395,9 @@ function App() {
             </section>
             <section className="page-panel" hidden={page !== "importance"}>
               <FeatureImportancePanel region={selectedRegion} enabled={page === "importance"} />
+            </section>
+            <section className="page-panel" hidden={page !== "training"}>
+              <TrainingMonitor region={selectedRegion} enabled={page === "training"} />
             </section>
             <section className="page-panel" hidden={page !== "drift"}>
               <DriftMonitor

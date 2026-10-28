@@ -130,6 +130,9 @@ export const api = {
     }),
   trainingRun: (trainingRunId) =>
     apiRequest(`/admin/training-runs/${trainingRunId}`),
+  trainingCapabilities: (options = {}) => apiRequest('/admin/training-monitor/capabilities', options),
+  trainingMonitor: (regionId, options = {}) => apiRequest(`/admin/regions/${regionId}/training-monitor`, options),
+  dismissTrainingError: (runId) => apiRequest(`/admin/training-monitor/${runId}/dismiss`, { method: 'POST' }),
   modelVersion: (modelVersionId) =>
     apiRequest(`/admin/model-versions/${modelVersionId}`),
   modelVersions: (regionId) =>

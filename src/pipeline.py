@@ -20,6 +20,7 @@ from src.preprocess import (
 )
 from src.mlflow_regions import set_mlflow_experiment
 from src.shap_reporting import explain_saved_model, resolve_shap_config
+from src.training_progress import report as report_progress, set_fold
 
 class _NullMLflowData:
     @staticmethod
@@ -249,6 +250,7 @@ def run_pipeline(
     mlflow_tracking_uri=None,
     experiment_name=None,
     shap_config=None,
+    selected_models=None,
 ):
     """
     Train all supported models and save the best validation-MAE model.
@@ -357,10 +359,18 @@ def run_pipeline(
         ("XGBoost", train_xgboost),
         ("LightGBM", train_lightgbm),
     ]
+    if selected_models is not None:
+        selected_names = {"random_forest_lag": "RandomForest", "xgboost_lag": "XGBoost", "lightgbm_lag": "LightGBM"}
+        requested = {selected_names[name] for name in selected_models if name in selected_names}
+        trainers = [(name, trainer) for name, trainer in trainers if name in requested]
+        if not trainers:
+            raise ValueError("The tree branch has no selected tree models.")
     results = []
     time_series_split = TimeSeriesSplit(n_splits=cv_splits)
 
     for model_name, trainer in trainers:
+        set_fold()
+        report_progress(model_name, "model_started")
         with mlflow.start_run(run_name=f"{model_role}_{model_name}"):
             mlflow.log_input(mlflow_dataset, context="training")
             fold_metrics = []
@@ -371,6 +381,8 @@ def run_pipeline(
                 time_series_split.split(X_development),
                 start=1,
             ):
+                set_fold(fold_number, cv_splits)
+                report_progress(model_name, "fold_started")
                 fold_model = trainer(
                     X_development.iloc[train_indices],
                     y_development.iloc[train_indices],
@@ -387,6 +399,7 @@ def run_pipeline(
                     (fold_mae, fold_rmse, fold_mape)
                 )
                 del fold_model
+                report_progress(model_name, "fold_completed")
                 mlflow.log_metrics(
                     {
                         f"fold_{fold_number}_MAE": fold_mae,
@@ -444,6 +457,8 @@ def run_pipeline(
                     ),
                 }
             )
+            set_fold()
+            report_progress(model_name, "model_cv_completed")
 
     best = min(results, key=lambda result: result["validation_mae"])
     model_version = create_model_version(
@@ -457,6 +472,8 @@ def run_pipeline(
 
     # Retrain the selected algorithm on all development data before the final
     # untouched test evaluation.
+    set_fold()
+    report_progress(best["name"], "final_fit_started")
     best_model = best["trainer"](
         X_development,
         y_development,
@@ -475,7 +492,14 @@ def run_pipeline(
     versioned_model_path = os.path.join(models_dir, f"{model_version}.pkl")
     joblib.dump(best_model, output_model_path)
     joblib.dump(best_model, versioned_model_path)
+    compatibility_file = None
+    from src.training_progress import enabled as progress_enabled
+    if progress_enabled():
+        compatibility_file = os.path.join(models_dir, f"{model_version}_compatibility.npz")
+        np.savez_compressed(compatibility_file, X=X_test.iloc[:4].to_numpy(dtype=np.float64),
+                            columns=np.asarray(X_test.columns, dtype=str), expected=np.asarray(test_predictions[:4]))
 
+    report_progress(best["name"], "explaining")
     shap_report = explain_saved_model(
         best_model, X_development,
         model_name=best["name"], model_path=versioned_model_path,
@@ -519,6 +543,7 @@ def run_pipeline(
         "saved_at": datetime.now().isoformat(),
         "model_file": output_model_path,
         "versioned_model_file": versioned_model_path,
+        **({"compatibility_file": compatibility_file} if compatibility_file else {}),
         "shap_report": shap_report,
         "model_comparison": [
             {
@@ -602,5 +627,6 @@ def run_pipeline(
         except Exception as exc:
             print(f"MLflow sklearn model logging skipped: {exc}")
 
+    report_progress(best["name"], "model_evaluated")
     print(f"Model saved: {output_model_path}")
     return model_info

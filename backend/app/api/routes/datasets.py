@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.api.dependencies import require_admin
 from backend.app.core.config import get_settings
+from backend.app.core.errors import ApplicationError
 from backend.app.db.models import User
 from backend.app.db.session import get_db
 from backend.app.schemas.dataset import DatasetList, DatasetRead, DatasetUploadResponse
@@ -75,9 +76,13 @@ def trigger_dataset_training(
     admin: User = Depends(require_admin),
 ):
     settings = get_settings()
+    if payload.training_backend == "kaggle" and not (settings.training_control_enabled and settings.cloud_training_enabled):
+        raise ApplicationError("cloud_training_not_ready", "Cloud training is not enabled on this system yet.", 503)
     dataset = dataset_service.get_dataset_or_404(db, dataset_id)
     dag_run_id = f"training-{dataset_id}-{uuid.uuid4()}"
     configuration = payload.model_dump()
+    if settings.training_control_enabled:
+        configuration["_execution_protocol"] = 2
     training_run = model_registry.create_queued_training_run(
         db,
         dataset_id,
@@ -91,11 +96,16 @@ def trigger_dataset_training(
         "dataset_id": str(dataset.id),
         "training_run_id": str(training_run.id),
     }
-    airflow_response = airflow_client.trigger_dag(
-        settings.training_dag_id,
-        conf,
-        dag_run_id=dag_run_id,
-    )
+    try:
+        airflow_response = airflow_client.trigger_dag(
+            settings.training_dag_id, conf, dag_run_id=dag_run_id,
+        )
+    except Exception:
+        if configuration.get("_execution_protocol") == 2:
+            from backend.app.services.training_execution import fail_dispatch
+            db.rollback()
+            fail_dispatch(db, training_run.id)
+        raise
     return TrainingRunTriggerResponse(
         training_run=training_run,
         dag_id=settings.training_dag_id,

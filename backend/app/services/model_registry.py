@@ -248,6 +248,10 @@ def register_training_result(
             )
             if model_version is not None:
                 return training_run, model_version
+        execution_record = None
+        if (training_run.configuration_json or {}).get("_execution_protocol") == 2:
+            from backend.app.services.training_execution import publication_gate
+            execution_record = publication_gate(db, training_run.id)
         training_run.status = TrainingRunStatus.COMPLETED
         training_run.configuration_json = {
             **(training_run.configuration_json or {}),
@@ -257,6 +261,7 @@ def register_training_result(
         if training_run.started_at is None:
             training_run.started_at = now
     else:
+        execution_record = None
         training_run = TrainingRun(
             region_id=region_id,
             dataset_id=dataset_id,
@@ -310,6 +315,9 @@ def register_training_result(
         ) from error
 
     training_run.recommended_model_version_id = model_version.id
+    if execution_record is not None:
+        from backend.app.services.training_execution import complete_in_transaction
+        complete_in_transaction(execution_record)
     db.commit()
     db.refresh(training_run)
     db.refresh(model_version)
@@ -343,6 +351,10 @@ def create_queued_training_run(
         requested_by=requested_by,
     )
     db.add(training_run)
+    if configuration.get("_execution_protocol") == 2:
+        db.flush()
+        from backend.app.services.training_execution import create_execution
+        create_execution(db, training_run)
     db.commit()
     db.refresh(training_run)
     return training_run

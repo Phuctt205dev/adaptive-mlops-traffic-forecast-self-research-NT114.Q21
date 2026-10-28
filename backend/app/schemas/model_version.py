@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from dataclasses import asdict
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -60,6 +61,7 @@ class ModelActivationResponse(BaseModel):
 
 
 class TrainingRunCreate(BaseModel):
+    training_backend: Literal["local", "kaggle"] = "local"
     train_start_date: str
     train_end_date: str
     artifact_root: str = "models/regions"

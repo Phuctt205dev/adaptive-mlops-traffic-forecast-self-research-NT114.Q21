@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     airflow_admin_username: str = "admin"
     airflow_admin_password: str = "admin"
     training_dag_id: str = "traffic_region_training"
+    training_control_enabled: bool = False
+    cloud_training_enabled: bool = False
+    kaggle_username: str = ""
     drift_dag_id: str = "traffic_region_drift_monitoring"
     internal_training_token: str = "local-internal-training-token"
     drift_window_days: int = 7

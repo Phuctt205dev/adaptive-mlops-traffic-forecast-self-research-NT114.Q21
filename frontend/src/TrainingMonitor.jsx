@@ -72,11 +72,6 @@ function RunCard({ run, timezone, onDismiss }) {
   const failed = Boolean(run.error_code) || ["failed", "cancelling"].includes(run.state);
   const training = models.filter((model) => model.state === "running");
   const waiting = models.filter((model) => ["waiting", "queued"].includes(model.state));
-  const activity = failed
-    ? run.state === "cancelling" ? "Stopping the remaining models and removing temporary files." : "This run stopped. Its results will not be published."
-    : run.state === "finalizing" ? "Training checks are complete. The system is verifying and saving the results."
-      : run.state === "queued" ? "Your request is waiting to start. Updates will appear here automatically."
-        : "Models are learning and being checked. Results are saved after all selected models succeed.";
 
   useEffect(() => {
     if (autoScroll && logContainer.current) logContainer.current.scrollTop = logContainer.current.scrollHeight;
@@ -101,7 +96,6 @@ function RunCard({ run, timezone, onDismiss }) {
         {run.state === "failed" && <button type="button" className="secondary" disabled={dismissing} onClick={dismiss}>Dismiss</button>}
       </div>}
       {dismissError && <p className="training-monitor-error" role="alert">{dismissError}</p>}
-      <p className="training-monitor-activity">{activity}</p>
       <div className="training-monitor-summary">
         <div><span>Training now</span><strong>{training.length}</strong><p>{training.map((model) => model.name).join(", ") || "No model is learning right now"}</p></div>
         <div><span>Waiting to start</span><strong>{waiting.length}</strong><p>{waiting.map((model) => model.name).join(", ") || "No models waiting"}</p></div>
@@ -110,10 +104,9 @@ function RunCard({ run, timezone, onDismiss }) {
       <div className="training-monitor-progress">
         <div><strong>{evaluated} of {total} models checked</strong><span>{run.state === "finalizing" ? "Saving and checking results" : "Overall progress"}</span></div>
         <progress max={total} value={evaluated} aria-label="Models checked" />
-        <p className="training-monitor-progress-note">The bar moves when a model finishes its quality checks. It does not measure time remaining.</p>
       </div>
       <div className="training-monitor-table-wrap">
-        <table><thead><tr><th>Model</th><th>Status</th><th>What's happening</th></tr></thead>
+        <table><thead><tr><th>Model</th><th>Status</th><th>Progress</th></tr></thead>
           <tbody>{models.map((model) => <tr key={model.id} className={["failed", "cancelling"].includes(model.state) ? "training-monitor-error-row" : ""}>
             <td><strong>{model.name}</strong></td><td><span className={`training-model-state is-${model.state}`}>{labels[model.state] || "Updating"}</span></td>
             <td>{progressLabel(model)}</td>
@@ -133,17 +126,6 @@ function RunCard({ run, timezone, onDismiss }) {
           </tr>)}</tbody>
         </table>
       </div>
-      <details className="training-monitor-details"><summary>Understand this training</summary>
-        <div className="training-monitor-guide">
-          <div><span className="training-guide-number">1</span><h4>Learn from past traffic</h4><p>{run.backend === "kaggle" ? "Kaggle trains your selected models. Your system coordinates the work and receives the results." : "Your own system trains the selected models and collects their results."}</p></div>
-          <div><span className="training-guide-number">2</span><h4>Check prediction quality</h4><p>A data check tests a model on a later part of historical data. A learning round is one pass through the training data for LSTM or GRU.</p></div>
-          <div><span className="training-guide-number">3</span><h4>Save verified results</h4><p>All selected models must succeed before results can be saved. Training a new model does not automatically replace the active model.</p></div>
-        </div>
-        <details className="training-monitor-identifiers"><summary>Technical references for troubleshooting</summary>
-          <dl><dt>Training run</dt><dd>{run.training_run_id}</dd><dt>Airflow run</dt><dd>{run.airflow_dag_run_id || "Not assigned yet"}</dd>
-            <dt>Last model update</dt><dd>{timeLabel(run.updated_at, timezone)}</dd></dl>
-        </details>
-      </details>
     </article>
   );
 }

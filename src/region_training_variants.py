@@ -156,6 +156,7 @@ def _candidate_from_report(
         "mlflow_run_id": report.get("mlflow_run_id"),
         "mlflow_model_uri": report.get("mlflow_model_uri"),
         "preprocessor_file": report.get("preprocessor_path"),
+        **({"compatibility_file": report["compatibility_file"]} if report.get("compatibility_file") else {}),
         "artifact_paths": report["artifact_paths"],
         "source_report": report["report_path"],
         "split_policy": report["split_policy"],

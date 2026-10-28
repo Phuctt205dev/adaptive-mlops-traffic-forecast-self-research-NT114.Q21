@@ -9,6 +9,7 @@ import pandas as pd
 
 from src.mlflow_regions import set_mlflow_experiment
 from src.shap_reporting import explain_saved_model, file_sha256, resolve_shap_config
+from src.training_progress import epoch_callbacks, report as report_progress, set_fold
 
 from src.lstm_sequences import (
     DEFAULT_SEQUENCE_LENGTH,
@@ -548,7 +549,7 @@ def _train_neural_fold(
         ),
         epochs=max_epochs,
         batch_size=batch_size,
-        callbacks=build_training_callbacks(),
+        callbacks=build_training_callbacks() + epoch_callbacks(model_name, max_epochs),
         shuffle=False,
         verbose=verbose,
     )
@@ -590,6 +591,9 @@ def _train_final_neural_model(
 ):
     from tensorflow import keras
 
+    set_fold()
+    report_progress(model_name, "final_fit_started")
+
     from src.models.recurrent import build_recurrent_model
     from src.neural_utils import (
         configure_reproducibility,
@@ -614,6 +618,7 @@ def _train_final_neural_model(
         datasets["train"]["y"],
         epochs=epochs,
         batch_size=batch_size,
+        callbacks=epoch_callbacks(model_name, epochs),
         shuffle=False,
         verbose=verbose,
     )
@@ -627,6 +632,14 @@ def _train_final_neural_model(
         scaled_predictions,
         preprocessors["target_scaler"],
     )
+
+    from src.training_progress import enabled as progress_enabled
+    compatibility_file = None
+    if progress_enabled():
+        os.makedirs(os.path.dirname(model_path), exist_ok=True)
+        compatibility_file = model_path + ".compatibility.npz"
+        np.savez_compressed(compatibility_file, X=datasets["validation"]["X"][:4],
+                            expected=scaled_predictions[:4], raw_expected=predictions[:4])
 
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
     temporary_path = model_path.replace(".keras", ".tmp.keras")
@@ -663,6 +676,7 @@ def _train_final_neural_model(
             preprocessor_size_bytes
         ),
         "shap_report": shap_report,
+        **({"compatibility_file": compatibility_file} if compatibility_file else {}),
     }
 
 
@@ -729,6 +743,8 @@ def _run_neural_cross_validation(
     fold_results = []
     best_epochs = []
     for fold in folds:
+        set_fold(len(fold_results) + 1, len(folds))
+        report_progress(model_name, "fold_started")
         datasets, preprocessors = _build_neural_fold_datasets(
             source,
             fold["train"][TIME_COLUMN],
@@ -747,6 +763,7 @@ def _run_neural_cross_validation(
             )
         )
         best_epochs.append(best_epoch)
+        report_progress(model_name, "fold_completed")
         fold_results.append(
             {
                 **_fold_metadata(fold),
@@ -795,6 +812,7 @@ def _run_neural_cross_validation(
         "final_training_seconds": final_result[
             "training_seconds"
         ],
+        **({"compatibility_file": final_result["compatibility_file"]} if final_result.get("compatibility_file") else {}),
         "model_path": model_path,
         "model_size_bytes": final_result["model_size_bytes"],
         "preprocessor_path": final_result[

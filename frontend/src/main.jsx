@@ -49,6 +49,11 @@ const trainingModelOptions = [
 
 const defaultTrainingModels = trainingModelOptions.map((option) => option.id);
 
+function rememberedRegion(userId) {
+  try { return localStorage.getItem(`traffic_region_${userId}`) || ""; }
+  catch { return ""; }
+}
+
 function formatDate(value) {
   return value ? new Date(value).toLocaleString() : "-";
 }
@@ -1085,8 +1090,8 @@ function TrainModelModal({
   const [selectedModels, setSelectedModels] = useState(initialSelectedModels);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const [cloudTraining, setCloudTraining] = useState(false);
-  const [cloudAvailable, setCloudAvailable] = useState(false);
+  const [cloudTraining, setCloudTraining] = useState(true);
+  const [cloudAvailable, setCloudAvailable] = useState(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1109,6 +1114,10 @@ function TrainModelModal({
     setError("");
     if (!selectedModels.length) {
       setError("Select at least one model.");
+      return;
+    }
+    if (cloudTraining && cloudAvailable !== true) {
+      setError("Kaggle is not available. Turn off Cloud Training to train on this system.");
       return;
     }
     setSubmitting(true);
@@ -1136,14 +1145,21 @@ function TrainModelModal({
             <h2>{title}</h2>
           </div>
           <div className="training-header-actions">
-            <label className="cloud-training-switch" title={cloudAvailable ? "Train on Kaggle" : "Cloud training is not enabled yet"}>
+            <label className="cloud-training-switch" title="On: train on Kaggle. Off: train on this system.">
               <span>Cloud Training</span>
               <input type="checkbox" role="switch" aria-label="Cloud Training" checked={cloudTraining}
-                disabled={submitting || !cloudAvailable} onChange={(event) => setCloudTraining(event.target.checked)} />
+                disabled={submitting} onChange={(event) => setCloudTraining(event.target.checked)} />
             </label>
             <button className="secondary" type="button" disabled={submitting} onClick={onClose}>Close</button>
           </div>
         </div>
+
+        <p className={`training-location-note ${cloudTraining && cloudAvailable === false ? "is-unavailable" : ""}`} role="status">
+          {!cloudTraining ? "Models will train on this system."
+            : cloudAvailable === null ? "Checking Kaggle availability…"
+              : cloudAvailable ? "Models will train on Kaggle. Your system receives the results."
+                : "Kaggle is unavailable. Turn off Cloud Training to train on this system."}
+        </p>
 
         <div className="train-modal-dataset">
           <strong>{dataset.original_filename}</strong>
@@ -1186,7 +1202,7 @@ function TrainModelModal({
         </p>
 
         {error && <div className="alert alert-error">{error}</div>}
-        <button disabled={submitting || !selectedModels.length}>
+        <button disabled={submitting || !selectedModels.length || (cloudTraining && cloudAvailable !== true)}>
           {submitting ? "Triggering..." : `${submitVerb} ${selectedModels.length} model${selectedModels.length > 1 ? "s" : ""}`}
         </button>
       </form>
@@ -1999,6 +2015,13 @@ function Icon({ name }) {
         <circle cx="19" cy="16" r="2" />
       </>
     ),
+    training: (
+      <>
+        <rect x="3" y="3" width="18" height="14" rx="2" />
+        <path d="M8 21h8M12 17v4" />
+        <path d="m6 10 3-3 3 5 3-4h3" />
+      </>
+    ),
     quality: (
       <>
         <path d="M4 4v16h16" />
@@ -2045,15 +2068,6 @@ function Icon({ name }) {
     ),
     importance: <><path d="M4 4v16h17" /><path d="M8 8h12M8 12h8M8 16h4" /></>,
     chevron: <path d="m15 18-6-6 6-6" />,
-    trash: (
-      <>
-        <path d="M3 6h18" />
-        <path d="M8 6V4h8v2" />
-        <path d="M19 6l-1 14H6L5 6" />
-        <path d="M10 11v6" />
-        <path d="M14 11v6" />
-      </>
-    ),
     lock: (
       <>
         <rect x="4" y="11" width="16" height="10" rx="2" />
@@ -2102,9 +2116,10 @@ function Sidebar({
         )}
       </button>
 
-      <nav className="sidebar-nav">
+      <nav className="sidebar-nav" aria-label="Main navigation">
         {visiblePages.map(([id, label]) => (
-          <button className={page === id ? "active" : ""} key={id} onClick={() => onNavigate(id)} title={label}>
+          <button className={page === id ? "active" : ""} key={id} onClick={() => onNavigate(id)} title={label}
+            aria-label={label} aria-current={page === id ? "page" : undefined}>
             <Icon name={id} />
             {!collapsed && <span>{label}</span>}
           </button>
@@ -2286,11 +2301,18 @@ function App() {
       setModels([]);
       return;
     }
+    const savedRegionId = rememberedRegion(currentUser.id);
     setSelectedRegionId((currentId) => (
-      currentId && items.some((region) => region.id === currentId)
-        ? currentId
-        : items[0].id
+      items.find((region) => region.id === savedRegionId)?.id
+        || (currentUser.id === user?.id && items.find((region) => region.id === currentId)?.id)
+        || items[0].id
     ));
+  }
+
+  function selectRegion(regionId) {
+    setSelectedRegionId(regionId);
+    try { localStorage.setItem(`traffic_region_${user.id}`, regionId); }
+    catch { /* Region selection still works when browser storage is unavailable. */ }
   }
 
   async function refreshDatasets() {
@@ -2359,7 +2381,7 @@ function App() {
             <RegionDropdown
               regions={regions}
               selectedRegion={selectedRegion}
-              onChange={setSelectedRegionId}
+              onChange={selectRegion}
             />
           )}
         </header>

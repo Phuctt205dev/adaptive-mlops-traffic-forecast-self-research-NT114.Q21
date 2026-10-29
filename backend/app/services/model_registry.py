@@ -12,6 +12,7 @@ from backend.app.core.errors import ApplicationError
 from backend.app.db.models import (
     Dataset,
     DatasetStatus,
+    DriftCheck,
     ModelVersion,
     ModelVersionStatus,
     Prediction,
@@ -129,17 +130,32 @@ def delete_model_version(db: Session, model_version_id: uuid.UUID) -> None:
     model_version = get_model_version_or_404(db, model_version_id)
     region = ensure_region_exists(db, model_version.region_id)
 
-    if region.active_model_version_id == model_version.id:
-        region.active_model_version_id = None
-
-    db.execute(
-        update(TrainingRun)
-        .where(TrainingRun.recommended_model_version_id == model_version.id)
-        .values(recommended_model_version_id=None)
-    )
-    db.execute(delete(Prediction).where(Prediction.model_version_id == model_version.id))
-    db.delete(model_version)
-    db.commit()
+    try:
+        if region.active_model_version_id == model_version.id:
+            region.active_model_version_id = None
+        db.flush()
+        db.execute(
+            update(TrainingRun)
+            .where(TrainingRun.recommended_model_version_id == model_version.id)
+            .values(recommended_model_version_id=None)
+        )
+        # Keep historical drift scores/windows, releasing only the nullable
+        # reference to the model that the admin is deleting.
+        db.execute(
+            update(DriftCheck)
+            .where(DriftCheck.active_model_version_id == model_version.id)
+            .values(active_model_version_id=None)
+        )
+        db.execute(delete(Prediction).where(Prediction.model_version_id == model_version.id))
+        db.delete(model_version)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise ApplicationError(
+            "model_delete_conflict",
+            "Related data still refers to this model. Refresh and try deleting it again.",
+            409,
+        ) from None
 
 
 def _next_available_model_version(

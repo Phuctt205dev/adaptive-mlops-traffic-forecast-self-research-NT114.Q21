@@ -1293,6 +1293,15 @@ function isDriftRetrainedModel(model) {
 
 function ModelManager({ selectedRegion, models, refreshModels, refreshRegions }) {
   const [expandedModelId, setExpandedModelId] = useState("");
+  const [deletingModelId, setDeletingModelId] = useState("");
+  const [deleteError, setDeleteError] = useState("");
+  const regionIdRef = useRef(selectedRegion?.id);
+  regionIdRef.current = selectedRegion?.id;
+
+  useEffect(() => {
+    setDeleteError("");
+    setExpandedModelId("");
+  }, [selectedRegion?.id]);
 
   async function activate(id) {
     await api.activateModel(id);
@@ -1300,16 +1309,31 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions })
   }
 
   async function deleteModel(model) {
+    if (deletingModelId) return;
     if (!window.confirm(`Permanently delete ${model.version} (${model.variant}) and related predictions?`)) {
       return;
     }
-    await api.deleteModel(model.id);
-    await Promise.all([refreshModels(), refreshRegions()]);
+    const regionId = selectedRegion?.id;
+    setDeletingModelId(model.id);
+    setDeleteError("");
+    try {
+      await api.deleteModel(model.id);
+      if (regionIdRef.current === regionId) {
+        await Promise.all([refreshModels(), refreshRegions()]);
+      }
+    } catch (error) {
+      if (regionIdRef.current === regionId) {
+        setDeleteError(`Could not delete ${model.version}. ${error.message || "Please try again."}`);
+      }
+    } finally {
+      setDeletingModelId("");
+    }
   }
 
   return (
     <div className="grid model-management">
     <Card title="Model Versions">
+      {deleteError && <div className="alert alert-error" role="alert">{deleteError}</div>}
       {models.length ? (
         <div className="table-wrap">
           <table>
@@ -1357,10 +1381,12 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions })
                           >
                             {expanded ? "Hide" : "Details"}
                           </button>
-                          <button disabled={model.id === selectedRegion?.active_model_version_id} onClick={() => activate(model.id)}>
+                          <button disabled={Boolean(deletingModelId) || model.id === selectedRegion?.active_model_version_id} onClick={() => activate(model.id)}>
                             Activate
                           </button>
-                          <button className="danger" onClick={() => deleteModel(model)}>Delete</button>
+                          <button className="danger" disabled={Boolean(deletingModelId)} onClick={() => deleteModel(model)}>
+                            {deletingModelId === model.id ? "Deleting…" : "Delete"}
+                          </button>
                         </div>
                       </td>
                     </tr>

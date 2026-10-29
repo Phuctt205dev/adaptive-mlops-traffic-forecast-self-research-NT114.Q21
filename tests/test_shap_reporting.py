@@ -14,7 +14,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from src.shap_reporting import explain_saved_model, file_sha256, resolve_shap_config
+from src.shap_reporting import explain_saved_model, file_sha256, resolve_shap_config, neural_shap_config
 
 
 class ShapReportingTests(unittest.TestCase):
@@ -47,6 +47,14 @@ class ShapReportingTests(unittest.TestCase):
                         {"enabled": "yes"}, {"batch_size": True}, {"unknown": 1}):
             with self.subTest(options=options), self.assertRaises(ValueError):
                 resolve_shap_config(options)
+
+    def test_sequence_defaults_are_small_and_explicit_options_are_respected(self):
+        config = neural_shap_config()
+        self.assertEqual((config.max_samples, config.background_samples, config.batch_size, config.nsamples), (8, 4, 1, 32))
+        self.assertEqual(neural_shap_config({"max_samples": 2}).max_samples, 2)
+        self.assertFalse(neural_shap_config({"enabled": False}).enabled)
+        self.assertEqual(resolve_shap_config().max_samples, 32)
+        with self.assertRaises(ValueError): neural_shap_config(False)
 
     def test_missing_dependency_has_explicit_persisted_status(self):
         with patch.dict(sys.modules, {"shap": None}):
@@ -115,9 +123,12 @@ class ShapReportingTests(unittest.TestCase):
         with patch.dict(sys.modules, {"shap": fake_shap}):
             result = self.explain(model, inputs=inputs, sequence=True, target_scale=10,
                                   feature_names=["temperature", "humidity"],
+                                  context={"preprocessor_sha256": "b" * 64},
                                   config={"max_samples": 3, "background_samples": 2, "batch_size": 2})
         self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["preprocessor_sha256"], "b" * 64)
         report = self.read_report()
+        self.assertEqual(report["sequence_length"], 3)
         self.assertEqual([row["mean_abs_shap"] for row in report["importance"]], [30, 30])
         self.assertEqual([row["lag_hours"] for row in report["time_importance"]], [3, 2, 1])
         self.assertEqual([row["mean_abs_shap"] for row in report["time_importance"]], [20, 20, 20])

@@ -74,8 +74,54 @@ class FeatureImportanceTests(unittest.TestCase):
             self.assertEqual(self.read()["status"], "pending")
         read.assert_not_called()
 
-    def test_neural_models_are_explicitly_for_later(self):
-        self.model.variant = "LSTM"
+    def neural_report(self, name="LSTM"):
+        self.model.variant = name
+        self.run.configuration_json.update(preprocessor_file="models/preprocessor.pkl", recurrent_sequence_length=72)
+        self.report.update(model_name=name, explainer="GradientExplainer", approximate=True,
+                           aggregation="mean_samples_sum_timesteps_abs_shap", sequence_length=72,
+                           output_units="traffic_volume")
+        self.report["context"].update(training_run_id=str(self.run.id), preprocessor_sha256="b" * 64)
+        self.save_report()
+        self.run.configuration_json["shap_report"]["preprocessor_sha256"] = "b" * 64
+
+    def test_neural_reports_are_read_without_loading_model_or_tensorflow(self):
+        for name in ("LSTM", "GRU"):
+            with self.subTest(name=name):
+                self.neural_report(name)
+                result = self.read()
+                self.assertEqual(result["status"], "ready")
+                self.assertEqual(result["sequence_length"], 72)
+                self.assertEqual(result["explanation_method"], "GradientExplainer")
+                FeatureImportanceReport.model_validate(result)
+                self.db.commit.assert_not_called()
+
+    def test_neural_reports_reject_wrong_run_preprocessor_sequence_or_method(self):
+        for field, value in (("sequence_length", 24), ("sequence_length", True),
+                             ("aggregation", "mean_samples_abs_shap"), ("explainer", "TreeExplainer"),
+                             ("approximate", False), ("output_units", "scaled_target")):
+            with self.subTest(field=field, value=value):
+                self.neural_report()
+                self.report[field] = value
+                self.save_report()
+                self.run.configuration_json["shap_report"]["preprocessor_sha256"] = "b" * 64
+                with self.assertRaises(ApplicationError): self.read()
+        for field in ("training_run_id", "preprocessor_sha256"):
+            with self.subTest(context=field):
+                self.neural_report()
+                self.report["context"][field] = "wrong"
+                self.save_report()
+                self.run.configuration_json["shap_report"]["preprocessor_sha256"] = "b" * 64
+                with self.assertRaises(ApplicationError): self.read()
+
+    def test_neural_calendar_columns_are_grouped_and_past_traffic_is_named(self):
+        rows = service.grouped_features([{"feature": name, "mean_abs_shap": 1} for name in (
+            "day_of_week_sin", "day_of_week_cos", "traffic_history_value", "month_sin", "month_cos")])
+        self.assertEqual(len(rows), 3)
+        self.assertEqual({row["label"]: row["share_percent"] for row in rows},
+                         {"Day of week": 40, "Month": 40, "Past traffic volume": 20})
+
+    def test_unknown_model_is_explicitly_unsupported(self):
+        self.model.variant = "Unknown"
         self.assertEqual(self.read()["status"], "unsupported")
 
     def test_zero_contribution_does_not_become_accuracy_or_nan(self):

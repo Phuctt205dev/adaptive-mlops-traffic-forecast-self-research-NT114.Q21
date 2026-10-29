@@ -1,9 +1,12 @@
 # SHAP trong pipeline hiện có
 
 SHAP chạy sau bước lưu model, không tạo pipeline training mới, không tự
-chọn feature, train lại hoặc activate. Ưu tiên hiện tại là nhóm cây và tab
-Feature Importance cho admin; LSTM/GRU giữ source chuẩn bị, chưa rollout.
-Xem FEATURE_IMPORTANCE.md và hướng dẫn deployment trees-first.
+chọn feature, train lại hoặc activate. Nhóm cây và tab admin đã triển khai
+ở đợt trước. Source LSTM/GRU cho local/Kaggle đã nối lại ngày29/10; đã kiểm
+mạng nhỏ trên worker CPU và Kaggle GPU, cần rollout riêng trước khi coi
+hệ thống live hỗ trợ đủ năm model.
+Xem FEATURE_IMPORTANCE.md và SHAP_NEURAL_ROLLOUT.md; giữ gói trees-first cũ
+làm bằng chứng lịch sử, không chạy lại gói đã publish.
 
 ## Điểm nối
 
@@ -22,7 +25,9 @@ Xem FEATURE_IMPORTANCE.md và hướng dẫn deployment trees-first.
 ## Báo cáo và tài nguyên
 
 Mặc định lấy tối đa 32 mẫu trải theo phần training/development, background
-neural 8 mẫu, batch 4 và 64 mẫu tích phân gradient. Không lấy Final Test
+neural mới dùng8 mẫu giải thích/background4/batch1/nsamples32 nếu không ghi
+đè cấu hình; cây giữ32 mẫu/batch4. Cấu hình tường minh được kiểm và tôn trọng.
+Không lấy Final Test
 hoặc production để xếp hạng. Bộ đệm đầu vào/workload ước tính được kiểm
 32 MiB; đây không phải giới hạn RAM toàn process. Ngân sách 60 giây được
 kiểm giữa và sau các batch, không ngắt được một lời gọi SHAP đang chạy.
@@ -40,6 +45,9 @@ các mẫu, đồng thời lưu ảnh hưởng theo lag. Hai kiểu tổng hợp
 `shap_report.status` có `completed`, `disabled`, `unavailable` hoặc `failed`.
 Lỗi SHAP không làm mất candidate đã train; cần kiểm status, không coi báo
 cáo lỗi là feature importance. Lỗi/tắt SHAP không đổi cách chọn model.
+Runner điều khiển local/Kaggle mới yêu cầu báo cáo neural `completed` khi
+SHAP được bật; nếu tính lỗi, không xuất bundle thành công và bộ điều khiển
+dừng/dọn lượt theo chính sách hiện hữu. `enabled:false` vẫn được giữ nguyên.
 
 Tham chiếu file nằm ở `shap_report.source_report`, là trường bridge hiện
 có hỗ trợ lồng nhau. Manifest/receipt/SHA256 truyền file qua MinIO và gắn
@@ -91,7 +99,10 @@ Kiểm thử nhỏ, không gọi DB/S3 thật hoặc train dataset dự án:
 Đã có source tab Feature Importance trên sidebar, thanh ngang xếp hạng
 với tên dễ đọc và nhóm các cột mã hóa liên quan. Chi tiết kỹ thuật ở View
 details. Tỷ trọng là phần của tổng độ lớn SHAP, không phải phần trăm dự
-đoán đúng hay nguyên nhân gây ra giao thông. Neural/heatmap để giai đoạn sau.
+đoán đúng hay nguyên nhân gây ra giao thông. API/schema mới nhận báo cáo
+GradientExplainer gắn đúng run/model/preprocessor và độ dài chuỗi; UI dùng
+cùng thanh ngang, thông tin cửa sổ thời gian nằm trong View details.
+Kiểm trên source không thay proof rollout/GPU. Heatmap chưa thuộc đợt này.
 
 Nguồn phương pháp: [TreeExplainer](https://shap.readthedocs.io/en/latest/generated/shap.TreeExplainer.html),
 [GradientExplainer](https://shap.readthedocs.io/en/latest/generated/shap.GradientExplainer.html),

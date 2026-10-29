@@ -1,9 +1,10 @@
-"""Read bounded, saved SHAP summaries for the active tree model. Never fit/explain."""
+"""Read bounded, saved SHAP summaries for the active model. Never fit/explain."""
 
 import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 
 from backend.app.core.errors import ApplicationError
@@ -21,6 +22,10 @@ LABELS = {
     "wind_speed": "Wind speed", "wind_direction": "Wind direction",
     "visibility_in_miles": "Visibility", "dew_point": "Dew point",
     "rain_p_h": "Rainfall", "snow_p_h": "Snowfall", "clouds_all": "Cloud cover",
+    "day_of_week_sin": "Day of week", "day_of_week_cos": "Day of week",
+    "month_sin": "Month", "month_cos": "Month", "is_holiday_binary": "Holiday",
+    "traffic_history_value": "Past traffic volume",
+    "traffic_history_observed": "Past traffic availability",
 }
 
 
@@ -102,8 +107,9 @@ def get_feature_importance(db, region_id, expected_model_id=None):
               "dataset_filename": dataset.original_filename, "status": "pending",
               "message": "A SHAP report has not been created for this model yet.",
               "generated_at": None, "sample_count": 0, "transformed_feature_count": 0, "features": []}
-    if not tree_name(model.variant).startswith(("randomforest", "xgboost", "lightgbm")):
-        return {**result, "status": "unsupported", "message": "Feature importance for LSTM and GRU will be added later."}
+    neural = tree_name(model.variant) in {"lstm", "gru"}
+    if not neural and not tree_name(model.variant).startswith(("randomforest", "xgboost", "lightgbm")):
+        return {**result, "status": "unsupported", "message": "Feature importance is unavailable for this model type."}
     metadata = (run.configuration_json or {}).get("shap_report") or {}
     if metadata.get("status") != "completed":
         if metadata.get("status") in {"failed", "unavailable", "disabled"}:
@@ -119,13 +125,29 @@ def get_feature_importance(db, region_id, expected_model_id=None):
                 or context.get("region_id") != str(region.id) or context.get("dataset_id") != str(dataset.id)
                 or report["model_sha256"] != metadata["model_sha256"]
                 or tree_name(report["model_name"]) != tree_name(model.variant)
-                or report["explainer"] != "TreeExplainer" or report.get("final_test_used") is not False
+                or report["explainer"] != ("GradientExplainer" if neural else "TreeExplainer")
+                or report.get("final_test_used") is not False
                 or type(report["sample_count"]) is not int or not 1 <= report["sample_count"] <= 128):
             raise ValueError("Report belongs to another model/dataset")
+        if neural:
+            preprocessor_sha = metadata.get("preprocessor_sha256")
+            length = report.get("sequence_length")
+            if (not isinstance(preprocessor_sha, str) or not re.fullmatch("[0-9a-f]{64}", preprocessor_sha)
+                    or context.get("preprocessor_sha256") != preprocessor_sha
+                    or context.get("training_run_id") != str(run.id)
+                    or not (run.configuration_json or {}).get("preprocessor_file")
+                    or report.get("approximate") is not True
+                    or report.get("aggregation") != "mean_samples_sum_timesteps_abs_shap"
+                    or type(length) is not int or not 1 <= length <= 10000
+                    or (run.configuration_json or {}).get("recurrent_sequence_length", length) != length
+                    or report.get("output_units") != "traffic_volume"):
+                raise ValueError("Neural report does not match the sequence/preprocessor")
         features = grouped_features(report["importance"])
         return {**result, "status": "ready", "message": None, "features": features,
                 "sample_count": report["sample_count"], "generated_at": report["created_at"],
-                "transformed_feature_count": len(report["importance"])}
+                "transformed_feature_count": len(report["importance"]),
+                "explanation_method": report["explainer"],
+                "sequence_length": report["sequence_length"] if neural else None}
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         raise ApplicationError("shap_report_invalid", "The saved report does not match this model.", 409) from None
     except Exception:

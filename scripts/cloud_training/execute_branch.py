@@ -33,11 +33,12 @@ from src.training_progress import reporting, report, set_fold
 PREFIX = "TRAFFIC_EXECUTION_EVENT "
 
 
-def run(job, dataset, output):
-    context, config = job["context"], job["configuration"]
-    if (sha256_file(dataset) != job["dataset_sha256"]
-            or configuration_digest(config) != context["configuration_sha256"]):
-        raise ValueError("Dataset/configuration hash differs from the execution contract.")
+def prepare_runtime(job):
+    """Resolve only the reviewed dependency location/profile, before ML imports."""
+    config = job["configuration"]
+    dependencies = Path("/opt/traffic-shap-deps")
+    if config.get("training_backend", "local") == "local" and dependencies.is_dir():
+        sys.path.insert(0, str(dependencies))
     if config.get("training_backend") == "kaggle" and job.get("runtime_profile"):
         import importlib.metadata
         import re
@@ -62,6 +63,14 @@ def run(job, dataset, output):
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             sys.path.insert(0, target)
             importlib.invalidate_caches()
+
+
+def run(job, dataset, output):
+    context, config = job["context"], job["configuration"]
+    if (sha256_file(dataset) != job["dataset_sha256"]
+            or configuration_digest(config) != context["configuration_sha256"]):
+        raise ValueError("Dataset/configuration hash differs from the execution contract.")
+    prepare_runtime(job)
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     os.environ["MLFLOW_TRACKING_URI"] = (output / "offline-mlflow").as_uri()
@@ -94,19 +103,17 @@ def run(job, dataset, output):
                 result = {"branch": "tree", "status": "completed", "production_candidate": info, "candidates": [info]}
         elif branch in {"lstm", "gru"}:
             from src.region_training_variants import train_region_recurrent_candidate
-            effective = dict(config)
-            # Preserve the deployed trees-first SHAP profile. Neural SHAP is a
-            # separate deferred task, not silently enabled by this execution move.
-            effective["shap"] = {**config.get("shap", {}), "enabled": False}
             if branch in selected:
                 report(branch, "model_started")
             result = train_region_recurrent_candidate(
                 selected_models=selected, model_name=branch.upper(), data_path=str(dataset),
                 artifact_root=str(output), region_id=context["region_id"], dataset_id=context["dataset_id"],
-                training_run_id=context["run_id"], config=effective,
+                training_run_id=context["run_id"], config=config,
             )
             for item in result.get("candidates", []):
                 item.update(benchmark_only=False, inference_supported=True)
+                if config.get("shap", {}).get("enabled", True) and item.get("shap_report", {}).get("status") != "completed":
+                    raise RuntimeError("The requested neural SHAP report did not complete.")
             if branch in selected:
                 set_fold()
                 report(branch, "model_evaluated")

@@ -7,7 +7,11 @@ báo cáo SHAP của đúng model active và dataset đã tạo model đó.
 - Tỷ lệ là phần của tổng độ lớn SHAP, không phải phần trăm dự đoán đúng.
 - Time of day gộp hour/hour_sin/hour_cos; Weather conditions gộp các cột
   mã hóa weather_type. View details giữ tên cột model và điểm gốc.
-- Chỉ hiển thị nhóm cây ở giai đoạn này. LSTM/GRU có thông báo để giai đoạn sau.
+- Source mới hỗ trợ cả cây và LSTM/GRU; cần triển khai bản neural theo
+  SHAP_NEURAL_ROLLOUT.md. Bản live trees-first cũ vẫn thông báo chưa hỗ trợ.
+- Với LSTM/GRU, điểm được cộng theo độ lớn qua các giờ quá khứ rồi lấy trung
+  bình các chuỗi. View details ghi số giờ mỗi chuỗi; không so điểm tuyệt đối
+  giữa tree và neural hoặc xem tỷ trọng là chiều tăng/giảm.
 - Mở tab, đổi region/model hoặc bấm Refresh chỉ đọc JSON đã lưu. Không fit,
   nạp model lớn hoặc chạy SHAP trong request API; tab ẩn dừng request.
 - Model cũ chưa có report hiển thị pending, không bịa số liệu. Sau rollout,
@@ -17,6 +21,9 @@ API admin: `GET /api/v1/admin/regions/{region_id}/feature-importance`.
 Client gửi model_version_id kỳ vọng để phát hiện model active đã đổi.
 Backend kiểm SHA256 report, context region/dataset và model SHA; đọc tối đa
 512KiB từ cache models hoặc MinIO. Không tải file tùy ý ngoài models root.
+Neural kiểm thêm training_run_id, preprocessor SHA đã ghi bởi producer,
+preprocessor_file, sequence_length, đơn vị và cách tổng hợp. API không
+deserialize model/preprocessor hoặc tính gradient khi xem báo cáo.
 
 Mô hình huấn luyện mới sinh báo cáo tự động sau bước lưu model cuối. Luồng
 cây legacy vẫn chỉ lưu model thắng CV; SHAP không làm phát sinh lượt fit

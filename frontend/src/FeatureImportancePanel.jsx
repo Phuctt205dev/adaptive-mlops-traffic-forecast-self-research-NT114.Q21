@@ -76,10 +76,12 @@ export default function FeatureImportancePanel({ region, enabled }) {
         {showAll ? "Show top 10" : `Show all ${rows.length} inputs`}</button>}
       <details className="quality-details"><summary>View details</summary>
         <p>Percentages show each input’s share of total SHAP influence, not prediction accuracy. Related encoded features are grouped together.</p>
+        {visible.sequence_length && <p>For this model, influence is added across the previous {visible.sequence_length} hours in each input sequence. Gradient-based estimates explain this model’s predictions.</p>}
         <dl className="quality-report-meta">
           <div><dt>Model</dt><dd>{visible.model_version} · {visible.model_variant}</dd></div>
           <div><dt>Dataset</dt><dd>{visible.dataset_filename}</dd></div>
           <div><dt>Records explained</dt><dd>{visible.sample_count}</dd></div>
+          {visible.sequence_length && <div><dt>Past hours per record</dt><dd>{visible.sequence_length}</dd></div>}
           <div><dt>Report created</dt><dd>{new Date(visible.generated_at).toLocaleString()}</dd></div>
         </dl>
         <div className="table-wrap"><table><thead><tr><th>Input</th><th>Model features</th><th>Mean influence</th></tr></thead>

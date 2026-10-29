@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from src.mlflow_regions import set_mlflow_experiment
-from src.shap_reporting import explain_saved_model, file_sha256, resolve_shap_config
+from src.shap_reporting import explain_saved_model, file_sha256, resolve_shap_config, neural_shap_config
 from src.training_progress import epoch_callbacks, report as report_progress, set_fold
 
 from src.lstm_sequences import (
@@ -658,6 +658,7 @@ def _train_final_neural_model(
         predictions_path,
     )
     metrics = calculate_regression_metrics(actual, predictions)
+    report_progress(model_name, "explaining")
     shap_report = explain_saved_model(
         model, datasets["train"]["X"], model_name=model_name, model_path=model_path,
         output_path=f"{model_path}.shap.json", sequence=True, config=shap_config,
@@ -858,7 +859,8 @@ def run_model_time_series_cross_validation(
             f"Chỉ dùng: {', '.join(SUPPORTED_MODELS)}."
         )
 
-    shap_config = resolve_shap_config(shap_config)
+    shap_config = (neural_shap_config(shap_config) if model_name in {"LSTM", "GRU"}
+                   else resolve_shap_config(shap_config))
     shap_context = {**(shap_context or {}), "train_start_date": str(train_start_date),
                     "train_end_date": str(train_end_date)}
     normalized_name = artifact_name or model_name.lower()

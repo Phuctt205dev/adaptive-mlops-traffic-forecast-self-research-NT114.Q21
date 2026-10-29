@@ -24,3 +24,5 @@ class FeatureImportanceReport(BaseModel):
     sample_count: int
     transformed_feature_count: int
     features: list[FeatureInfluence]
+    explanation_method: Literal["TreeExplainer", "GradientExplainer"] | None = None
+    sequence_length: int | None = Field(default=None, ge=1)

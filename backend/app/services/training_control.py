@@ -182,7 +182,7 @@ class WorkerController:
                     if branch == "tree" and "lightgbm_lag" in configuration["selected_models"]:
                         packages.append("lightgbm")
                     profile = {name: importlib.metadata.version(name) for name in packages}
-                    if branch == "tree" and configuration.get("shap", {}).get("enabled", True):
+                    if configuration.get("shap", {}).get("enabled", True):
                         profile["shap"] = importlib.metadata.version("shap")
                 if not skip:
                     source = self.training._ensure_dataset_downloaded(dataset, run)

@@ -45,6 +45,14 @@ def resolve_shap_config(config=None):
     return options
 
 
+def neural_shap_config(config=None):
+    """Use a small sequence workload; preserve explicit, validated settings."""
+    resolve_shap_config(config)
+    values = asdict(config) if isinstance(config, ShapConfig) else dict(config or {})
+    return resolve_shap_config({"max_samples": 8, "background_samples": 4,
+                                "batch_size": 1, "nsamples": 32, **values})
+
+
 def _sample_indices(length, limit):
     if length == 0:
         raise ValueError("SHAP training samples are empty.")
@@ -95,7 +103,7 @@ def explain_saved_model(model, training_inputs, *, model_name, model_path,
     Sequence attributions are converted back to traffic units. max_seconds is
     checked between batches, not an OS timeout. Failures preserve the candidate.
     """
-    options = resolve_shap_config(config)
+    options = neural_shap_config(config) if sequence else resolve_shap_config(config)
     if not options.enabled:
         return {"status": "disabled"}
     started = time.perf_counter()
@@ -153,6 +161,7 @@ def explain_saved_model(model, training_inputs, *, model_name, model_path,
             explainer = shap.GradientExplainer(model, background, batch_size=options.batch_size)
             report.update(explainer="GradientExplainer", approximate=True,
                           background_indices=background_indices.tolist(),
+                          sequence_length=int(sample.shape[1]),
                           aggregation="mean_samples_sum_timesteps_abs_shap")
             time_totals = np.zeros(sample.shape[1], dtype=float)
         else:
@@ -207,6 +216,8 @@ def explain_saved_model(model, training_inputs, *, model_name, model_path,
         logger.warning("SHAP %s for %s (%s)", report["status"], model_name, type(error).__name__)
     report["elapsed_seconds"] = round(time.perf_counter() - started, 4)
     metadata = {key: report[key] for key in ("status", "model_name", "elapsed_seconds", "model_sha256", "error_type") if key in report}
+    if sequence and report["context"].get("preprocessor_sha256"):
+        metadata["preprocessor_sha256"] = report["context"]["preprocessor_sha256"]
     path = Path(output_path)
     temporary = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
     try:

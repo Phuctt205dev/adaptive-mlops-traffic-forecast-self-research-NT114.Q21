@@ -89,6 +89,62 @@ class CloudRolloutTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Runtime bundle/flags differ"):
                 rollout.verify(expected=True)
 
+    def with_api_pods(self, rollout, transform):
+        original = rollout.call
+        def call(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if args[:2] == ("get", "pods"):
+                result["items"] = transform(result["items"])
+            return result
+        rollout.call = call
+
+    def test_verify_ignores_retained_evicted_completed_and_terminating_pods(self):
+        with tempfile.TemporaryDirectory() as directory:
+            rollout = self.verification_fixture(directory)
+            historical = [{"metadata": {"name": "old-api-" + str(index), "labels": {"app": "traffic-api"}},
+                           "status": {"phase": "Failed", "reason": "Evicted", "containerStatuses": [{"ready": False}]}}
+                          for index in range(26)]
+            historical.append({"metadata": {"name": "completed-api", "labels": {"app": "traffic-api"}},
+                               "status": {"phase": "Succeeded"}})
+            historical.append({"metadata": {"name": "terminating-api", "labels": {"app": "traffic-api"},
+                                            "deletionTimestamp": "2026-10-30T00:00:00Z"}, "status": {"phase": "Running"}})
+            self.with_api_pods(rollout, lambda pods: pods + historical)
+            result = rollout.verify(expected=True)
+        self.assertTrue(result["rollout_verified"])
+        self.assertEqual(len(result["checked_pods"]), 6)
+        self.assertFalse(any(pod["pod"].startswith("old-api") for pod in result["checked_pods"]))
+
+    def test_verify_still_rejects_extra_pending_or_unknown_api_pod(self):
+        for phase in ("Pending", "Unknown"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                rollout = self.verification_fixture(directory)
+                self.with_api_pods(rollout, lambda pods: pods + [{
+                    "metadata": {"name": "extra-api", "labels": {"app": "traffic-api"}}, "status": {"phase": phase}}])
+                with self.assertRaisesRegex(RuntimeError, "replica count differs"):
+                    rollout.verify(expected=True)
+
+    def test_verify_never_uses_a_terminal_pod_to_replace_a_missing_live_replica(self):
+        with tempfile.TemporaryDirectory() as directory:
+            rollout = self.verification_fixture(directory)
+            def replace(pods):
+                pod = next(p for p in pods if p["metadata"]["name"] == "traffic-api-1")
+                pod["status"]["phase"] = "Failed"
+                return pods
+            self.with_api_pods(rollout, replace)
+            with self.assertRaisesRegex(RuntimeError, "replica count differs"):
+                rollout.verify(expected=True)
+
+    def test_verify_still_rejects_an_unready_live_api_replica(self):
+        with tempfile.TemporaryDirectory() as directory:
+            rollout = self.verification_fixture(directory)
+            def unready(pods):
+                pod = next(p for p in pods if p["metadata"]["name"] == "traffic-api-1")
+                pod["status"]["containerStatuses"][0]["ready"] = False
+                return pods
+            self.with_api_pods(rollout, unready)
+            with self.assertRaisesRegex(RuntimeError, "required pod is not ready"):
+                rollout.verify(expected=True)
+
     def test_existing_credential_secret_is_preserved_without_reading_token(self):
         rollout = object.__new__(Rollout)
         rollout.call = Mock(return_value="secret/traffic-kaggle-credentials")

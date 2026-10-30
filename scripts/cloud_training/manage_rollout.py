@@ -154,7 +154,10 @@ class Rollout:
                     or any(status.get(key, 0) != desired for key in ("updatedReplicas", "readyReplicas", "availableReplicas"))):
                 raise RuntimeError("Deployment rollout is not fully ready: " + name)
             selector = deployment["spec"]["selector"]["matchLabels"]
+            # Retained Evicted/Completed pods are historical records, not replicas.
+            # Keep Pending/Unknown/unready pods in the count so real failures still fail.
             selected = [pod for pod in pods if not pod["metadata"].get("deletionTimestamp")
+                        and pod.get("status", {}).get("phase") not in {"Failed", "Succeeded"}
                         and all(pod["metadata"].get("labels", {}).get(k) == v for k, v in selector.items())]
             if len(selected) != desired:
                 raise RuntimeError("The ready replica count differs: " + name)

@@ -114,3 +114,20 @@ thái pause DAG theo journal ban đầu. Verify chỉ đọc; nếu Apply hồi 
 đã bắt đầu nhưng dừng giữa chừng, không replay Apply: chẩn đoán rồi dùng
 `Resume` để kiểm và hoàn tất khi API đã ready. Dùng **Verify của recovery**
 sau bước này; Verify gói history-v2 cũ sẽ từ chối spec đã tăng cache.
+
+Nếu cache recovery đã tạo đủ hai API2/2 nhưng báo `The ready replica count
+differs`, bộ Verify cũ đã đếm cả pod Failed/Evicted còn lưu trong Kubernetes.
+Bản sửa trong `scripts/cloud_training/manage_rollout.py` bỏ qua phase
+Failed/Succeeded và pod đang xóa; vẫn kiểm đủ replica, Running/ready, bundle,
+flags, UID/spec và Airflow. Không cần xóa pod lịch sử để làm Verify đạt.
+Sau khi có bản sửa và Verify đạt, hoàn tất recovery đang dở bằng:
+
+```powershell
+& $py -B -X utf8 scripts/shap/recover_feature_importance_cache.py Resume
+& $py -B -X utf8 scripts/shap/recover_feature_importance_cache.py Verify
+```
+
+Resume không patch hoặc tạo pod lại: kiểm hệ thống, ghi hoàn tất recovery
+và phục hồi pause state của DAG theo journal. Không chạy lại Apply/Check
+trước patch vì spec đã ở trạng thái4Gi mới. Những dòng Error cũ trong K9s
+là bản ghi các pod đã kết thúc; chúng không được tính là API đang phục vụ.

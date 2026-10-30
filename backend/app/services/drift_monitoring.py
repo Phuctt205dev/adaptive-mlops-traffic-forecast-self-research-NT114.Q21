@@ -195,6 +195,7 @@ def _training_configuration(training_run: TrainingRun, current_end_at: pd.Timest
     selected_models = _selected_models_from_previous(previous)
     return {
         "train_start_date": str(train_start.date()),
+        "training_backend": previous.get("training_backend", "local"),
         "train_end_date": str(train_end.date()),
         "artifact_root": previous.get("artifact_root", "models/regions"),
         "model_role": "candidate",
@@ -206,6 +207,7 @@ def _training_configuration(training_run: TrainingRun, current_end_at: pd.Timest
         "recurrent_batch_size": int(previous.get("recurrent_batch_size") or 32),
         "final_test_ratio": float(previous.get("final_test_ratio") or 0.15),
         "trigger_source": "feature_drift",
+        "drift_current_end": str(current_end_at),
         "shap": dict(previous.get("shap") or {}),
     }
 
@@ -232,6 +234,7 @@ def retrain_plan_for_region(
             f"from {production_start.isoformat()} to {production_end.isoformat()}."
         )
     configuration = _training_configuration(training_run, current_end)
+    configuration["retrain_source_model_id"] = str(model_version.id)
     return {
         "region_id": str(region.id),
         "active_model_version_id": str(model_version.id),
@@ -255,9 +258,23 @@ def _trigger_retraining(
     dataset: Dataset,
     training_run: TrainingRun,
     current_end_at: pd.Timestamp,
+    serving_runtime=None,
 ) -> TrainingRun:
     settings = get_settings()
     configuration = _training_configuration(training_run, current_end_at)
+    if configuration["training_backend"] == "kaggle" and not (settings.training_control_enabled and settings.cloud_training_enabled):
+        raise ValueError("Kaggle retraining is unavailable; automatic fallback is disabled.")
+    region = db.get(Region, dataset.region_id)
+    model, active_training, active_dataset = _active_context(db, region)
+    if active_training.id != training_run.id or active_dataset.id != dataset.id:
+        raise ValueError("Active model changed before retraining.")
+    from backend.app.services.retrain_selection import prepare_retrain_selection
+    configuration["retrain_source_model_id"] = str(model.id)
+    configuration["feature_selection"] = prepare_retrain_selection(
+        db, region, model, training_run, dataset, configuration, _download_dataset_frame(dataset),
+        serving_runtime=serving_runtime)
+    if settings.training_control_enabled:
+        configuration["_execution_protocol"] = 2
     dag_run_id = f"drift-training-{dataset.id}-{uuid.uuid4()}"
     queued_run = model_registry.create_queued_training_run(
         db,
@@ -280,11 +297,12 @@ def _trigger_retraining(
             dag_run_id=dag_run_id,
         )
     except Exception as error:
-        model_registry.mark_training_run_failed(
-            db,
-            queued_run.id,
-            f"Drift retrain trigger failed: {error}",
-        )
+        if configuration.get("_execution_protocol") == 2:
+            from backend.app.services.training_execution import fail_dispatch
+            db.rollback()
+            fail_dispatch(db, queued_run.id)
+        else:
+            model_registry.mark_training_run_failed(db, queued_run.id, f"Drift retrain trigger failed: {error}")
         raise
     return queued_run
 
@@ -297,6 +315,7 @@ def _check_region(
     force_retrain: bool = False,
     current_end_at=None,
     check_method: str = "auto",
+    serving_runtime=None,
 ) -> DriftCheck:
     settings = get_settings()
     try:
@@ -413,6 +432,7 @@ def _check_region(
                     dataset,
                     training_run,
                     current_end,
+                    serving_runtime=serving_runtime,
                 )
                 status = DriftCheckStatus.RETRAIN_TRIGGERED
 
@@ -542,6 +562,7 @@ def check_drift_for_region(
     force_retrain: bool = False,
     current_end_at=None,
     check_method: str = "auto",
+    serving_runtime=None,
 ) -> dict:
     region = db.get(Region, region_id)
     if region is None:
@@ -553,6 +574,7 @@ def check_drift_for_region(
         force_retrain=force_retrain,
         current_end_at=current_end_at,
         check_method=check_method,
+        serving_runtime=serving_runtime,
     )
     return {
         "checked_regions": 1,
@@ -569,6 +591,7 @@ def check_drift_for_regions(
     max_regions: int | None = None,
     current_end_at=None,
     check_method: str = "auto",
+    serving_runtime=None,
 ) -> dict:
     settings = get_settings()
     limit = max_regions or settings.drift_max_regions_per_run
@@ -580,6 +603,7 @@ def check_drift_for_regions(
             auto_retrain=auto_retrain,
             current_end_at=current_end_at,
             check_method=check_method,
+            serving_runtime=serving_runtime,
         )
         for region in regions
     ]

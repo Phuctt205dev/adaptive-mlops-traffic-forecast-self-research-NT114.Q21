@@ -83,6 +83,8 @@ class TrainingRunCreate(BaseModel):
     final_test_ratio: float = 0.15
     trigger_source: str | None = None
     shap: dict = Field(default_factory=dict)
+    drift_current_end: str | None = None
+    retrain_source_model_id: uuid.UUID | None = None
 
     @field_validator("shap")
     @classmethod

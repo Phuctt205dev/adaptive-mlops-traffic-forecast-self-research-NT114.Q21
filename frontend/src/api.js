@@ -143,7 +143,7 @@ export const api = {
     return apiRequest(`/admin/regions/${regionId}/model-quality?${params.toString()}`, options);
   },
   featureImportance: (regionId, modelVersionId, options = {}) =>
-    apiRequest(`/admin/regions/${regionId}/feature-importance?model_version_id=${encodeURIComponent(modelVersionId)}`, options),
+    apiRequest(`/admin/regions/${regionId}/feature-importance${modelVersionId ? `?model_version_id=${encodeURIComponent(modelVersionId)}` : ""}`, options),
   driftRetrainPlan: (regionId, payload = {}) => {
     const params = new URLSearchParams();
     if (payload.currentEnd) {

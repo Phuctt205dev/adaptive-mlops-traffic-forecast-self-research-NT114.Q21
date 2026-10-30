@@ -1,12 +1,12 @@
 import uuid
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Query, UploadFile, status, Request
 from sqlalchemy.orm import Session
 
 from backend.app.api.dependencies import require_admin
 from backend.app.core.config import get_settings
 from backend.app.core.errors import ApplicationError
-from backend.app.db.models import User
+from backend.app.db.models import User, Region
 from backend.app.db.session import get_db
 from backend.app.schemas.dataset import DatasetList, DatasetRead, DatasetUploadResponse
 from backend.app.schemas.model_version import (
@@ -74,13 +74,29 @@ def trigger_dataset_training(
     payload: TrainingRunCreate,
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
+    request: Request = None,
 ):
     settings = get_settings()
     if payload.training_backend == "kaggle" and not (settings.training_control_enabled and settings.cloud_training_enabled):
         raise ApplicationError("cloud_training_not_ready", "Cloud training is not enabled on this system yet.", 503)
     dataset = dataset_service.get_dataset_or_404(db, dataset_id)
     dag_run_id = f"training-{dataset_id}-{uuid.uuid4()}"
-    configuration = payload.model_dump()
+    configuration = payload.model_dump(mode="json")
+    # Build selectors on the server, not from a browser-supplied SHAP ranking.
+    if payload.trigger_source == "feature_drift":
+        from backend.app.services import drift_monitoring
+        from backend.app.services.retrain_selection import prepare_retrain_selection
+        region = db.get(Region, dataset.region_id)
+        try:
+            model, source_training, source_dataset = drift_monitoring._active_context(db, region)
+        except ValueError as error:
+            raise ApplicationError("retrain_source_changed", "Active model changed. Reopen Retrain.", 409) from error
+        if payload.retrain_source_model_id != model.id or dataset.id != source_dataset.id:
+            raise ApplicationError("retrain_source_changed", "Active model or dataset changed. Reopen Retrain.", 409)
+        configuration["retrain_source_model_id"] = str(model.id)
+        configuration["feature_selection"] = prepare_retrain_selection(
+            db, region, model, source_training, dataset, configuration, drift_monitoring._download_dataset_frame(dataset),
+            serving_runtime=getattr(request.app.state, "prediction_runtime", None) if request else None)
     if settings.training_control_enabled:
         configuration["_execution_protocol"] = 2
     training_run = model_registry.create_queued_training_run(

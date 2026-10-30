@@ -20,6 +20,8 @@ from src.preprocess import (
 )
 from src.mlflow_regions import set_mlflow_experiment
 from src.shap_reporting import explain_saved_model, resolve_shap_config
+from src.feature_selection import (MODEL_KEYS, validate_selection, reusable_groups, rank_training_features,
+                                  columns_for_groups, selection_summary, wrap_tree_model, guard_quality_holdout)
 from src.training_progress import report as report_progress, set_fold
 
 class _NullMLflowData:
@@ -251,6 +253,7 @@ def run_pipeline(
     experiment_name=None,
     shap_config=None,
     selected_models=None,
+    feature_selection=None,
 ):
     """
     Train all supported models and save the best validation-MAE model.
@@ -259,6 +262,8 @@ def run_pipeline(
     paths. Only the promotion step is allowed to replace the champion model.
     """
     shap_config = resolve_shap_config(shap_config)
+    selection_config = validate_selection(feature_selection)
+    selecting = selection_config.get("enabled", False)
     print(f"\nTraining {model_role} model...")
     print(f"Random state: {random_state}")
     print(f"Data path: {data_path}")
@@ -318,6 +323,7 @@ def run_pipeline(
         },
     )
     train_part, val_part, test_part = split_data(df)
+    selection_config = guard_quality_holdout(selection_config, test_part["date_time"].min())
     development_part = pd.concat(
         [train_part, val_part],
         ignore_index=True,
@@ -374,22 +380,32 @@ def run_pipeline(
         with mlflow.start_run(run_name=f"{model_role}_{model_name}"):
             mlflow.log_input(mlflow_dataset, context="training")
             fold_metrics = []
+            selection_folds = []
+            splits = list(time_series_split.split(X_development))
+            cached_groups = (reusable_groups(selection_config, model_name, list(X_development.columns),
+                             development_part.iloc[splits[0][0][-1]]["date_time"]) if selecting else None)
 
             # TimeSeriesSplit always trains on the past and validates on the
             # following period. This is more stable than one validation slice.
             for fold_number, (train_indices, val_indices) in enumerate(
-                time_series_split.split(X_development),
+                splits,
                 start=1,
             ):
                 set_fold(fold_number, cv_splits)
                 report_progress(model_name, "fold_started")
+                fold_X = X_development.iloc[train_indices]
+                fold_validation = X_development.iloc[val_indices]
+                fold_columns = (columns_for_groups(list(fold_X.columns), cached_groups)
+                                if cached_groups else list(fold_X.columns))
+                import time
+                fold_started = time.perf_counter()
                 fold_model = trainer(
-                    X_development.iloc[train_indices],
+                    fold_X[fold_columns],
                     y_development.iloc[train_indices],
                     random_state,
                 )
                 predictions = fold_model.predict(
-                    X_development.iloc[val_indices]
+                    fold_validation[fold_columns]
                 )
                 fold_mae, fold_rmse, fold_mape = evaluate(
                     y_development.iloc[val_indices],
@@ -398,6 +414,34 @@ def run_pipeline(
                 fold_metrics.append(
                     (fold_mae, fold_rmse, fold_mape)
                 )
+                if selecting:
+                    row = {"train_end": str(development_part.iloc[train_indices[-1]]["date_time"]),
+                           "validation_start": str(development_part.iloc[val_indices[0]]["date_time"]),
+                           "full_metrics": None if cached_groups else [fold_mae, fold_rmse, fold_mape],
+                           "reduced_metrics": [fold_mae, fold_rmse, fold_mape] if cached_groups else None,
+                           "selected_groups": cached_groups, "status": "reused" if cached_groups else "full"}
+                    if not cached_groups:
+                        try:
+                            report_progress(model_name, "explaining")
+                            groups = rank_training_features(fold_model, fold_X, list(fold_X.columns),
+                                shap_config=shap_config, retain_share=selection_config.get("retain_share", .95))
+                            columns = columns_for_groups(list(fold_X.columns), groups)
+                            row["selected_groups"] = groups
+                            if len(columns) < len(fold_X.columns):
+                                del fold_model
+                                fold_model = None
+                                import gc
+                                gc.collect()
+                                reduced_model = trainer(fold_X[columns], y_development.iloc[train_indices], random_state)
+                                row["reduced_metrics"] = list(evaluate(y_development.iloc[val_indices],
+                                                                      reduced_model.predict(fold_validation[columns])))
+                                del reduced_model
+                                row["status"] = "compared"
+                        except (ValueError, RuntimeError, MemoryError, TimeoutError, ImportError) as error:
+                            row["status"] = "full_fallback"
+                            row["reason"] = type(error).__name__
+                    row["total_seconds"] = round(time.perf_counter() - fold_started, 4)
+                    selection_folds.append(row)
                 del fold_model
                 report_progress(model_name, "fold_completed")
                 mlflow.log_metrics(
@@ -408,6 +452,15 @@ def run_pipeline(
                     }
                 )
 
+            model_selection = None
+            if selecting:
+                model_selection = selection_summary(model_name, selection_config, selection_folds,
+                    list(X_development.columns), selection_train_end=selection_folds[-1]["train_end"],
+                    reused=bool(cached_groups))
+                if cached_groups:
+                    model_selection["selection_train_end"] = selection_config["profiles"][MODEL_KEYS[model_name]]["selection_train_end"]
+                if model_selection["mode"] == "reduced":
+                    fold_metrics = [row["reduced_metrics"] for row in selection_folds]
             mae = float(np.mean([item[0] for item in fold_metrics]))
             rmse = float(np.mean([item[1] for item in fold_metrics]))
             mape = float(np.mean([item[2] for item in fold_metrics]))
@@ -449,6 +502,7 @@ def run_pipeline(
                 {
                     "name": model_name,
                     "trainer": trainer,
+                    "feature_selection": model_selection,
                     "validation_mae": mae,
                     "validation_rmse": rmse,
                     "validation_mape": mape,
@@ -474,11 +528,15 @@ def run_pipeline(
     # untouched test evaluation.
     set_fold()
     report_progress(best["name"], "final_fit_started")
+    selected_columns = ((best.get("feature_selection") or {}).get("selected_features")
+                        or list(X_development.columns))
     best_model = best["trainer"](
-        X_development,
+        X_development[selected_columns],
         y_development,
         random_state,
     )
+    if selected_columns != list(X_development.columns):
+        best_model = wrap_tree_model(best_model, list(X_development.columns), selected_columns)
     test_predictions = best_model.predict(X_test)
     test_mae, test_rmse, test_mape = evaluate(y_test, test_predictions)
 
@@ -545,6 +603,9 @@ def run_pipeline(
         "versioned_model_file": versioned_model_path,
         **({"compatibility_file": compatibility_file} if compatibility_file else {}),
         "shap_report": shap_report,
+        **({"feature_selection_result": best["feature_selection"],
+            "feature_profiles": {MODEL_KEYS[result["name"]]: result["feature_selection"] for result in results}}
+           if selecting else {}),
         "model_comparison": [
             {
                 "model_name": result["name"],

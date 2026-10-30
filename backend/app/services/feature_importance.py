@@ -1,11 +1,13 @@
-"""Read bounded, saved SHAP summaries for the active model. Never fit/explain."""
+"""Read saved SHAP summaries and average normalized reports. Never fit/explain."""
 
 import hashlib
 import json
 import math
 import os
 import re
+from datetime import datetime
 from pathlib import Path
+from sqlalchemy import select
 
 from backend.app.core.errors import ApplicationError
 from backend.app.db.models import Dataset, ModelVersion, Region, TrainingRun
@@ -89,7 +91,7 @@ def grouped_features(importance):
     return sorted(groups.values(), key=lambda group: (-group["mean_abs_shap"], group["label"]))
 
 
-def get_feature_importance(db, region_id, expected_model_id=None):
+def get_active_feature_importance(db, region_id, expected_model_id=None):
     region = db.get(Region, region_id)
     if region is None:
         raise ApplicationError("region_not_found", "Region was not found.", 404)
@@ -102,6 +104,15 @@ def get_feature_importance(db, region_id, expected_model_id=None):
     dataset = db.get(Dataset, run.dataset_id) if run and run.region_id == region.id else None
     if dataset is None or dataset.region_id != region.id:
         raise ApplicationError("model_dataset_not_found", "The model dataset was not found.", 409)
+    return model_feature_importance(region, model, run, dataset)
+
+
+def model_feature_importance(region, model, run, dataset):
+    """Use the same ownership, digest and schema checks for every saved version."""
+    if (model.region_id != region.id or run is None or run.id != model.training_run_id
+            or run.region_id != region.id or dataset is None or dataset.id != run.dataset_id
+            or dataset.region_id != region.id):
+        raise ApplicationError("model_dataset_not_found", "The model dataset was not found.", 409)
     result = {"region_id": region.id, "active_model_version_id": model.id,
               "model_version": model.version, "model_variant": model.variant,
               "dataset_filename": dataset.original_filename, "status": "pending",
@@ -110,7 +121,14 @@ def get_feature_importance(db, region_id, expected_model_id=None):
     neural = tree_name(model.variant) in {"lstm", "gru"}
     if not neural and not tree_name(model.variant).startswith(("randomforest", "xgboost", "lightgbm")):
         return {**result, "status": "unsupported", "message": "Feature importance is unavailable for this model type."}
-    metadata = (run.configuration_json or {}).get("shap_report") or {}
+    configuration = run.configuration_json or {}
+    if not isinstance(configuration, dict):
+        raise ApplicationError("shap_report_invalid", "The saved report does not match this model.", 409)
+    metadata = configuration.get("shap_report")
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        raise ApplicationError("shap_report_invalid", "The saved report does not match this model.", 409)
     if metadata.get("status") != "completed":
         if metadata.get("status") in {"failed", "unavailable", "disabled"}:
             return {**result, "status": "unavailable", "message": "No completed SHAP report is available for this model."}
@@ -120,6 +138,9 @@ def get_feature_importance(db, region_id, expected_model_id=None):
         if len(raw) > MAX_REPORT_BYTES or hashlib.sha256(raw).hexdigest() != metadata["report_sha256"]:
             raise ValueError("Report digest differs")
         report = json.loads(raw)
+        if not isinstance(report, dict) or not isinstance(report.get("created_at"), str):
+            raise ValueError("Invalid report timestamp")
+        datetime.fromisoformat(report["created_at"].replace("Z", "+00:00"))
         context = report["context"]
         if (not isinstance(context, dict) or report["schema_version"] != 1 or report["status"] != "completed"
                 or context.get("region_id") != str(region.id) or context.get("dataset_id") != str(dataset.id)
@@ -152,3 +173,78 @@ def get_feature_importance(db, region_id, expected_model_id=None):
         raise ApplicationError("shap_report_invalid", "The saved report does not match this model.", 409) from None
     except Exception:
         raise ApplicationError("shap_report_unavailable", "The report is temporarily unavailable. Please refresh.", 503) from None
+
+
+def saved_model_history(db, region, active_report):
+    # One streamed join; each object read remains bounded to MAX_REPORT_BYTES.
+    # No version cap or model/status filter: all stored versions in this region count.
+    statement = (select(ModelVersion, TrainingRun, Dataset)
+        .outerjoin(TrainingRun, TrainingRun.id == ModelVersion.training_run_id)
+        .outerjoin(Dataset, Dataset.id == TrainingRun.dataset_id)
+        .where(ModelVersion.region_id == region.id).order_by(ModelVersion.id)
+        .execution_options(yield_per=100))
+    summary = {"status": "pending", "total_models": 0, "used_reports": 0,
+               "excluded_reports": {key: 0 for key in ("missing", "unavailable", "unsupported", "invalid", "zero")},
+               "dataset_count": 0, "features": [], "models": []}
+    groups, datasets = {}, set()
+    for model, run, dataset in db.execute(statement):
+        summary["total_models"] += 1
+        item = {"model_version_id": model.id, "model_version": model.version,
+                "model_variant": model.variant,
+                "dataset_filename": dataset.original_filename if dataset and dataset.region_id == region.id else None}
+        try:
+            report = (active_report if model.id == region.active_model_version_id and active_report
+                      else model_feature_importance(region, model, run, dataset))
+            status = report["status"]
+            if status != "ready":
+                reason = report.get("exclusion_reason") or {"pending": "missing", "unavailable": "unavailable",
+                                                          "unsupported": "unsupported"}[status]
+            elif not any(row["mean_abs_shap"] > 0 for row in report["features"]):
+                reason = "zero"
+            else:
+                reason = None
+        except ApplicationError as error:
+            reason = "unavailable" if error.status_code == 503 else "invalid"
+        if reason:
+            summary["excluded_reports"][reason] += 1
+            summary["models"].append({**item, "status": reason})
+            continue
+        summary["used_reports"] += 1
+        datasets.add(dataset.id)
+        summary["models"].append({**item, "status": "included"})
+        for row in report["features"]:
+            group = groups.setdefault(row["label"], {"label": row["label"], "share_percent": 0.0,
+                                                     "features": set(), "reports_present": 0})
+            group["share_percent"] += row["share_percent"]
+            group["features"].update(row["features"])
+            group["reports_present"] += 1
+    used = summary["used_reports"]
+    if used:
+        summary["status"] = "ready"
+        summary["features"] = sorted([
+            {**group, "features": sorted(group["features"]), "share_percent": group["share_percent"] / used}
+            for group in groups.values()], key=lambda row: (-row["share_percent"], row["label"]))
+    summary["dataset_count"] = len(datasets)
+    return summary
+
+
+def get_feature_importance(db, region_id, expected_model_id=None):
+    region = db.get(Region, region_id)
+    if region is None:
+        raise ApplicationError("region_not_found", "Region was not found.", 404)
+    if expected_model_id and expected_model_id != region.active_model_version_id:
+        raise ApplicationError("active_model_changed", "The active model changed. Refresh this page.", 409)
+    empty = {"region_id": region.id, "active_model_version_id": region.active_model_version_id,
+             "model_version": None, "model_variant": None, "dataset_filename": None,
+             "status": "pending", "message": "This region has no active model.",
+             "generated_at": None, "sample_count": 0, "transformed_feature_count": 0, "features": []}
+    active = None
+    if region.active_model_version_id:
+        try:
+            active = get_active_feature_importance(db, region.id, expected_model_id)
+        except ApplicationError as error:
+            # A broken active report must not hide valid historical reports.
+            active = {**empty, "status": "unavailable", "message": error.message,
+                      "exclusion_reason": "unavailable" if error.status_code == 503 else "invalid"}
+    history = saved_model_history(db, region, active)
+    return {**(active or empty), "history": history}

@@ -163,6 +163,9 @@ def _candidate_from_report(
         "final_test_used_for_selection": False,
         "selection_metric": "cross_validation_mean_MAE",
         "shap_report": report.get("shap_report", {"status": "not_generated"}),
+        **({"feature_selection_result": report["feature_selection_result"],
+            "feature_profiles": {variant: report["feature_selection_result"]}}
+           if report.get("feature_selection_result") else {}),
     }
 
 
@@ -204,6 +207,7 @@ def _train_variant(
         mlflow_dataset_name=f"region_{region_id}_dataset_{dataset_id}",
         mlflow_dataset_source=str(data_path),
         shap_config=config.get("shap"),
+        feature_selection=config.get("feature_selection"),
         shap_context={"region_id": str(region_id), "dataset_id": str(dataset_id),
                       "training_run_id": str(training_run_id), "variant": variant},
     )

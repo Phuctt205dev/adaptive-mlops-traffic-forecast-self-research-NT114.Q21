@@ -246,6 +246,9 @@ def register_training_result(
         "final_test_used_for_selection",
         "selection_metric",
         "shap_report",
+        "feature_selection_result",
+        "feature_profiles",
+        "execution_cost",
     ):
         if optional_key in model_info:
             configuration_json[optional_key] = model_info[optional_key]

@@ -260,7 +260,8 @@ class WorkerController:
             with self.sessions() as db:
                 db.rollback()
                 state.fail_run(db, run_id, branch, attempt,
-                               "cloud_unavailable" if handle["provider"] is not None else "training_failed")
+                               "cloud_unavailable" if handle["provider"] is not None and not (
+                                   isinstance(error, ProviderError) and error.category == "ml_execution_failed") else "training_failed")
             # Watcher retries network/cleanup failures without making a new fit.
         finally:
             if handle["stopped"]:

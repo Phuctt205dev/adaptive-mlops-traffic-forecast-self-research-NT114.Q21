@@ -159,6 +159,7 @@ def operation(api, name, request, stdout):
         from src.cloud_training.probe import safe_status
         return {"state": safe_status(api.kernels_status(request["reference"]).status)}
     if name == "events":
+        from src.cloud_training.errors import validate_failure
         context = request["context"]
         for item in api.kernels_logs_stream(request["reference"]):
             raw = item.get("data", "") if isinstance(item, dict) else ""
@@ -172,6 +173,22 @@ def operation(api, name, request, stdout):
                     if event.get("context") != context:
                         raise ValueError("Progress belongs to another execution.")
                     payload = event["event"] if prefix == "TRAFFIC_EXECUTION_EVENT " else {"control": event["stage"]}
+                    if prefix == "TRAFFIC_CONTROL_EVENT " and "failure" in event:
+                        if event["stage"] != "failed":
+                            raise ValueError("Unexpected failure stage.")
+                        payload["failure"] = validate_failure(event["failure"])
+                    if prefix == "TRAFFIC_CONTROL_EVENT " and "supervisor_failure" in event:
+                        status = event.get("supervisor_http_status")
+                        phase = event.get("supervisor_phase")
+                        child_code = event.get("supervisor_child_returncode")
+                        if (event["stage"] != "failed" or phase not in {"startup", "control_check", "input_validation", "child_monitoring"}
+                                or status is not None and (type(status) is not int or not 100 <= status <= 599)):
+                            raise ValueError("Invalid normalized supervisor failure.")
+                        if child_code is not None and (type(child_code) is not int or not -999 <= child_code <= 999):
+                            raise ValueError("Invalid normalized child exit code.")
+                        payload.update(supervisor_failure=validate_failure(event["supervisor_failure"]),
+                                       supervisor_http_status=status, supervisor_phase=phase,
+                                       supervisor_child_returncode=child_code)
                     stdout.write("TRAFFIC_EXECUTION_EVENT " + json.dumps({"context": context, "event": payload}, allow_nan=False) + "\n")
                     stdout.flush()
         return {"stream_ended": True}

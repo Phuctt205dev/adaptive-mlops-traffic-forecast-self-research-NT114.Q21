@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     drift_retrain_window_months: int = 24
     drift_retrain_cooldown_hours: int = 72
     drift_max_regions_per_run: int = 1
+    retrain_quality_mae_increase: float = .15
+    retrain_quality_min_hours: int = 24
+    retrain_quality_min_coverage: float = .8
     auth_secret_key: str = "change-me-in-production"
     access_token_expire_minutes: int = 60 * 24
     auth_rate_limit_per_minute: int = 20

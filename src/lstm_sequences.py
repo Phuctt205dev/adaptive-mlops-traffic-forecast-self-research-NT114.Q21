@@ -180,10 +180,18 @@ def transform_sequence_source(source_df, preprocessors):
     weather_values = preprocessors["weather_encoder"].transform(
         source_df[[SEQUENCE_CATEGORICAL_COLUMN]]
     ).astype(np.float32)
-    return np.concatenate(
+    values = np.concatenate(
         [numeric_values, weather_values],
         axis=1,
     )
+    indices = preprocessors.get("selected_feature_indices")
+    if indices is not None:
+        if (not isinstance(indices, list) or not indices or len(indices) != len(set(indices))
+                or any(type(i) is not int or i < 0 or i >= values.shape[1] for i in indices)
+                or len(indices) != len(preprocessors["sequence_feature_names"])):
+            raise ValueError("Invalid saved sequence feature selection.")
+        values = values[:, indices]
+    return values
 
 
 def build_sequences(

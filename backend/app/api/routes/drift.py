@@ -1,7 +1,7 @@
 from datetime import datetime
 import uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from backend.app.api.dependencies import require_admin
@@ -36,6 +36,7 @@ def run_region_drift_check(
     force_retrain: bool = Query(default=False),
     current_end: datetime | None = Query(default=None),
     db: Session = Depends(get_db),
+    request: Request = None,
 ):
     try:
         return drift_monitoring.check_drift_for_region(
@@ -45,6 +46,7 @@ def run_region_drift_check(
             force_retrain=force_retrain,
             current_end_at=current_end,
             check_method="manual",
+            serving_runtime=getattr(request.app.state, "prediction_runtime", None) if request else None,
         )
     except ValueError as error:
         raise ApplicationError("drift_region_invalid", str(error), 404) from error

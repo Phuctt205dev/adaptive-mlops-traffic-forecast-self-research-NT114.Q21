@@ -15,7 +15,9 @@ from src.cloud_training.package import ml_sources
 BACKEND = ("core/config.py", "schemas/model_version.py", "api/routes/datasets.py", "api/routes/training_monitor.py",
            "db/training_execution.py", "services/model_registry.py", "services/training_execution.py",
            "services/training_control.py", "services/training_tracking.py",
-           "services/feature_importance.py", "schemas/feature_importance.py")
+           "services/feature_importance.py", "schemas/feature_importance.py",
+           "services/drift_monitoring.py", "services/retrain_selection.py", "api/routes/internal_training.py",
+           "api/routes/drift.py", "api/routes/internal_drift.py")
 CLOUD = ("__init__.py", "probe.py", "artifacts.py", "package.py", "process.py", "control.py", "notebook.py",
          "kaggle_rpc.py", "kaggle_transport.py", "kaggle_execution.py")
 SDK_LOCK = """attrs==26.1.0

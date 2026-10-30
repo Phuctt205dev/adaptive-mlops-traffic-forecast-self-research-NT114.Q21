@@ -9,6 +9,8 @@ import pandas as pd
 
 from src.mlflow_regions import set_mlflow_experiment
 from src.shap_reporting import explain_saved_model, file_sha256, resolve_shap_config, neural_shap_config
+from src.feature_selection import (validate_selection, reusable_groups, rank_training_features,
+                                  columns_for_groups, selection_summary, MODEL_KEYS, guard_quality_holdout)
 from src.training_progress import epoch_callbacks, report as report_progress, set_fold
 
 from src.lstm_sequences import (
@@ -23,6 +25,7 @@ from src.models import (
     build_original_model,
 )
 from src.time_series_preprocess import TARGET_COLUMN, TIME_COLUMN
+from src.time_series_features import DEFAULT_LAG_HOURS
 from src.time_series_splits import (
     DEFAULT_CV_SPLITS,
     DEVELOPMENT_END,
@@ -469,6 +472,7 @@ def _build_neural_fold_datasets(
     train_timestamps,
     validation_timestamps,
     sequence_length,
+    selected_groups=None,
 ):
     train_indices = timestamps_to_source_indices(
         source_df,
@@ -484,9 +488,17 @@ def _build_neural_fold_datasets(
         )
 
     preprocessors = fit_sequence_preprocessors(
-        source_df,
-        train_indices,
+        source_df.iloc[_sequence_preprocessor_start(source_df):],
+        train_indices - _sequence_preprocessor_start(source_df),
     )
+    if selected_groups:
+        names = preprocessors["sequence_feature_names"]
+        selected = columns_for_groups(names, selected_groups)
+        if not selected:
+            raise ValueError("No sequence features match the selected groups.")
+        preprocessors["selected_feature_indices"] = [names.index(name) for name in selected]
+        preprocessors["all_sequence_feature_names"] = names
+        preprocessors["sequence_feature_names"] = selected
     transformed = transform_sequence_source(
         source_df,
         preprocessors,
@@ -520,6 +532,11 @@ def _train_neural_fold(
     batch_size,
     random_state,
     verbose,
+    selection_config=None,
+    selection_row=None,
+    feature_names=None,
+    shap_config=None,
+    inner_validation=False,
 ):
     # TensorFlow chỉ được import khi người dùng thực sự chạy LSTM/GRU.
     from tensorflow import keras
@@ -540,13 +557,20 @@ def _train_neural_fold(
         input_shape=datasets["train"]["X"].shape[1:],
     )
     started_at = time.perf_counter()
+    fit_X, fit_y = datasets["train"]["X"], datasets["train"]["y"]
+    validation = (datasets["validation"]["X"], datasets["validation"]["y"])
+    if selection_row is not None or inner_validation:
+        # A selector must not inherit weights/epochs chosen on the outer
+        # validation labels. Both alternatives stop on the same inner tail.
+        if len(fit_X) < 2:
+            raise ValueError("Feature selection needs at least two training sequences.")
+        split = max(1, min(len(fit_X) - 1, int(len(fit_X) * .9)))
+        validation = (fit_X[split:], fit_y[split:])
+        fit_X, fit_y = fit_X[:split], fit_y[:split]
     history = model.fit(
-        datasets["train"]["X"],
-        datasets["train"]["y"],
-        validation_data=(
-            datasets["validation"]["X"],
-            datasets["validation"]["y"],
-        ),
+        fit_X,
+        fit_y,
+        validation_data=validation,
         epochs=max_epochs,
         batch_size=batch_size,
         callbacks=build_training_callbacks() + epoch_callbacks(model_name, max_epochs),
@@ -569,6 +593,39 @@ def _train_neural_fold(
     )
     best_epoch = int(np.argmin(history.history["val_loss"]) + 1)
     trained_epochs = int(len(history.epoch))
+    if selection_row is not None:
+        # Explicit ordering matches calculate_regression_metrics, independent of dict order.
+        selection_row["full_metrics"] = [metrics[key] for key in ("MAE", "RMSE", "MAPE")]
+        selection_row["reduced_metrics"] = None
+        selection_row["status"] = "full"
+        selection_row["early_stopping_source"] = "inner_training_tail"
+        try:
+            report_progress(model_name, "explaining")
+            groups = rank_training_features(model, datasets["train"]["X"], feature_names, sequence=True,
+                        shap_config=shap_config, retain_share=selection_config.get("retain_share", .95))
+            selected = columns_for_groups(feature_names, groups)
+            selection_row["selected_groups"] = groups
+        except (ValueError, RuntimeError, MemoryError, TimeoutError, ImportError) as error:
+            selection_row["reason"] = type(error).__name__
+            selected = list(feature_names)
+        if len(selected) < len(feature_names):
+            indices = [feature_names.index(name) for name in selected]
+            del model
+            del history
+            keras.backend.clear_session()
+            import gc
+            gc.collect()
+            # Replace the caller's arrays after the full model is released,
+            # instead of retaining full and reduced sequence tensors together.
+            del fit_X, fit_y, validation
+            for value in datasets.values():
+                value["X"] = value["X"][:, :, indices]
+            reduced_metrics, reduced_epoch, reduced_epochs, reduced_seconds = _train_neural_fold(
+                model_name, datasets, target_scaler, max_epochs, batch_size, random_state, verbose, inner_validation=True)
+            selection_row.update(reduced_metrics=[reduced_metrics[key] for key in ("MAE", "RMSE", "MAPE")],
+                                 reduced_validation_metrics=dict(reduced_metrics),
+                                 reduced_best_epoch=reduced_epoch, reduced_epochs=reduced_epochs,
+                                 reduced_training_seconds=reduced_seconds, status="compared")
     keras.backend.clear_session()
     return metrics, best_epoch, trained_epochs, training_seconds
 
@@ -588,6 +645,7 @@ def _train_final_neural_model(
     verbose,
     shap_config=None,
     shap_context=None,
+    selected_groups=None,
 ):
     from tensorflow import keras
 
@@ -605,6 +663,7 @@ def _train_final_neural_model(
         development[TIME_COLUMN],
         final_test[TIME_COLUMN],
         sequence_length,
+        selected_groups=selected_groups,
     )
     keras.backend.clear_session()
     configure_reproducibility(random_state)
@@ -677,8 +736,32 @@ def _train_final_neural_model(
             preprocessor_size_bytes
         ),
         "shap_report": shap_report,
+        "selected_feature_names": preprocessors["sequence_feature_names"],
         **({"compatibility_file": compatibility_file} if compatibility_file else {}),
     }
+
+
+def _sequence_preprocessor_start(source_df):
+    start = source_df.attrs.get("preprocessor_start_at")
+    if start is None:
+        return 0
+    times = pd.to_datetime(source_df[TIME_COLUMN]).to_numpy(dtype="datetime64[ns]")
+    return int(np.searchsorted(times, pd.Timestamp(start).to_datetime64()))
+
+
+def _prepare_neural_sequence_source(hourly_df, audit_df, offline_start, offline_end, sequence_length):
+    """Keep pre-window history as context, not as extra training targets."""
+    offline_start, offline_end = pd.Timestamp(offline_start), pd.Timestamp(offline_end)
+    # Causal traffic may need a past-week fallback before the first input
+    # sequence. Keep that warmup too, but do not use it to fit the scalers.
+    context_start = offline_start - pd.Timedelta(hours=sequence_length + max(DEFAULT_LAG_HOURS))
+    hourly_times = pd.to_datetime(hourly_df[TIME_COLUMN], errors="raise")
+    audit_times = pd.to_datetime(audit_df[TIME_COLUMN], errors="raise")
+    hourly = hourly_df.loc[(hourly_times >= context_start) & (hourly_times <= offline_end)].copy()
+    audit = audit_df.loc[(audit_times >= context_start) & (audit_times <= offline_end)].copy()
+    source = prepare_sequence_source(hourly, audit).reset_index(drop=True)
+    source.attrs["preprocessor_start_at"] = (offline_start - pd.Timedelta(hours=sequence_length)).isoformat()
+    return source
 
 
 def _run_neural_cross_validation(
@@ -700,6 +783,7 @@ def _run_neural_cross_validation(
     final_test_ratio=0.15,
     shap_config=None,
     shap_context=None,
+    feature_selection=None,
 ):
     offline, production, development, final_test = (
         _prepare_offline_features(
@@ -716,31 +800,18 @@ def _run_neural_cross_validation(
 
     # Cắt production trước khi tạo feature causal để luồng neural hoàn toàn
     # không xử lý các giá trị từ năm 2016 trong giai đoạn nghiên cứu offline.
-    hourly_times = pd.to_datetime(
-        hourly_df[TIME_COLUMN],
-        errors="raise",
-    )
-    audit_times = pd.to_datetime(
-        audit_df[TIME_COLUMN],
-        errors="raise",
-    )
     offline_end = pd.Timestamp(offline[TIME_COLUMN].max())
     offline_start = (
         pd.Timestamp(train_start_date)
         if train_start_date is not None
         else pd.Timestamp(offline[TIME_COLUMN].min())
     )
-    offline_hourly = hourly_df.loc[
-        (hourly_times >= offline_start) & (hourly_times <= offline_end)
-    ].copy()
-    offline_audit = audit_df.loc[
-        (audit_times >= offline_start) & (audit_times <= offline_end)
-    ].copy()
-    source = prepare_sequence_source(
-        offline_hourly,
-        offline_audit,
-    ).reset_index(drop=True)
+    source = _prepare_neural_sequence_source(hourly_df, audit_df, offline_start, offline_end, sequence_length)
 
+    selection_config = guard_quality_holdout(feature_selection, final_test[TIME_COLUMN].min())
+    selecting = selection_config.get("enabled", False)
+    selection_folds = []
+    cached_groups = None
     fold_results = []
     best_epochs = []
     for fold in folds:
@@ -752,6 +823,21 @@ def _run_neural_cross_validation(
             fold["validation"][TIME_COLUMN],
             sequence_length,
         )
+        names = preprocessors["sequence_feature_names"]
+        if selecting and not selection_folds:
+            cached_groups = reusable_groups(selection_config, model_name, names, fold["train"][TIME_COLUMN].max())
+            if cached_groups and selection_config["profiles"][MODEL_KEYS[model_name]].get("sequence_length") != sequence_length:
+                cached_groups = None
+        if cached_groups:
+            indices = [names.index(name) for name in columns_for_groups(names, cached_groups)]
+            datasets = {key: {**value, "X": value["X"][:, :, indices]} for key, value in datasets.items()}
+        row = {"train_end": str(fold["train"][TIME_COLUMN].max()),
+               "validation_start": str(fold["validation"][TIME_COLUMN].min()),
+               "selected_groups": cached_groups}
+        selection_kwargs = ({"selection_config": selection_config, "selection_row": row,
+                             "feature_names": names, "shap_config": shap_config}
+                            if selecting and not cached_groups else {})
+        started = time.perf_counter()
         metrics, best_epoch, trained_epochs, training_seconds = (
             _train_neural_fold(
                 model_name,
@@ -761,8 +847,16 @@ def _run_neural_cross_validation(
                 batch_size,
                 random_state,
                 verbose,
+                **selection_kwargs,
             )
         )
+        if selecting:
+            if cached_groups:
+                row.update(full_metrics=None, reduced_metrics=[metrics[key] for key in ("MAE", "RMSE", "MAPE")],
+                           reduced_validation_metrics=dict(metrics),
+                           status="reused", reduced_best_epoch=best_epoch)
+            row["total_seconds"] = round(time.perf_counter() - started, 4)
+            selection_folds.append(row)
         best_epochs.append(best_epoch)
         report_progress(model_name, "fold_completed")
         fold_results.append(
@@ -778,6 +872,20 @@ def _run_neural_cross_validation(
             }
         )
 
+    model_selection = None
+    if selecting:
+        model_selection = selection_summary(model_name, selection_config, selection_folds, names,
+            selection_train_end=selection_folds[-1]["train_end"], reused=bool(cached_groups))
+        if cached_groups:
+            model_selection["selection_train_end"] = selection_config["profiles"][MODEL_KEYS[model_name]]["selection_train_end"]
+        model_selection["sequence_length"] = sequence_length
+        if model_selection["mode"] == "reduced":
+            best_epochs = [row["reduced_best_epoch"] for row in selection_folds]
+            for fold_result, selection_row in zip(fold_results, selection_folds):
+                fold_result["validation_metrics"] = dict(selection_row["reduced_validation_metrics"])
+                fold_result["best_epoch"] = selection_row["reduced_best_epoch"]
+                fold_result["epochs_trained"] = selection_row.get("reduced_epochs", fold_result["epochs_trained"])
+                fold_result["training_seconds"] += selection_row.get("reduced_training_seconds", 0.)
     # Median làm giảm ảnh hưởng của một fold quá dễ hoặc quá khó.
     final_epochs = max(1, int(round(float(np.median(best_epochs)))))
     final_result = _train_final_neural_model(
@@ -795,6 +903,8 @@ def _run_neural_cross_validation(
         verbose,
         shap_config=shap_config,
         shap_context=shap_context,
+        **({"selected_groups": model_selection["selected_groups"]}
+           if model_selection and model_selection["mode"] == "reduced" else {}),
     )
     return {
         "family": "neural_sequence",
@@ -803,6 +913,8 @@ def _run_neural_cross_validation(
         "final_test": summarize_time_range(final_test),
         "production_reserved": summarize_time_range(production),
         "sequence_length_hours": int(sequence_length),
+        "history_context": {"start": str(source[TIME_COLUMN].min()), "targets_start": str(offline_start),
+                            "context_is_not_training_targets": True},
         "max_epochs_per_fold": int(max_epochs),
         "batch_size": int(batch_size),
         "folds": fold_results,
@@ -823,6 +935,8 @@ def _run_neural_cross_validation(
             "preprocessor_size_bytes"
         ],
         "shap_report": final_result["shap_report"],
+        **({"feature_selection_result": {**model_selection, "selected_features": final_result["selected_feature_names"]}}
+           if model_selection else {}),
         "predictions_path": predictions_path,
     }
 
@@ -851,6 +965,7 @@ def run_model_time_series_cross_validation(
     mlflow_dataset_source=None,
     shap_config=None,
     shap_context=None,
+    feature_selection=None,
 ):
     """Chạy CV và Final Test cho đúng một model."""
     if model_name not in SUPPORTED_MODELS:
@@ -914,6 +1029,7 @@ def run_model_time_series_cross_validation(
             final_test_ratio=final_test_ratio,
             shap_config=shap_config,
             shap_context=shap_context,
+            feature_selection=feature_selection,
         )
     else:
         result = _run_tree_cross_validation(

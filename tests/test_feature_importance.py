@@ -35,6 +35,7 @@ class FeatureImportanceTests(unittest.TestCase):
         self.model = SimpleNamespace(id=self.region.active_model_version_id, region_id=self.region.id,
                                      training_run_id=self.run.id, version="model_v1", variant="RandomForest")
         self.db = Mock()
+        self.db.execute.return_value = []
         self.db.get.side_effect = lambda cls, key: {Region:self.region, ModelVersion:self.model, TrainingRun:self.run, Dataset:self.dataset}[cls]
         self.report = {"schema_version":1, "status":"completed", "explainer":"TreeExplainer",
                        "context":{"region_id":str(self.region.id),"dataset_id":str(self.dataset.id)},
@@ -56,7 +57,7 @@ class FeatureImportanceTests(unittest.TestCase):
         return path
 
     def read(self):
-        return service.get_feature_importance(self.db, self.region.id, self.model.id)
+        return service.get_active_feature_importance(self.db, self.region.id, self.model.id)
 
     def test_groups_encoded_features_and_recomputes_shares(self):
         self.save_report()

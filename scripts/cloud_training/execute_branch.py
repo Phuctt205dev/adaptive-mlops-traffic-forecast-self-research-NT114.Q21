@@ -29,6 +29,7 @@ from src.cloud_training.artifacts import write_bundle
 from src.cloud_training.probe import canonical, sha256_file
 from src.cloud_training.package import configuration_digest
 from src.training_progress import reporting, report, set_fold
+from src.cloud_training.errors import FAILURE_PREFIX, safe_failure
 
 PREFIX = "TRAFFIC_EXECUTION_EVENT "
 
@@ -66,6 +67,8 @@ def prepare_runtime(job):
 
 
 def run(job, dataset, output):
+    import time
+    started = time.perf_counter()
     context, config = job["context"], job["configuration"]
     if (sha256_file(dataset) != job["dataset_sha256"]
             or configuration_digest(config) != context["configuration_sha256"]):
@@ -97,6 +100,7 @@ def run(job, dataset, output):
                     artifact_root=str(output), region_id=context["region_id"], dataset_id=context["dataset_id"],
                     mlflow_tracking_uri=os.environ["MLFLOW_TRACKING_URI"], selected_models=selected,
                     shap_config=config.get("shap"),
+                    feature_selection=config.get("feature_selection"),
                 )
                 info.update(model_family="legacy_sklearn", benchmark_only=False, inference_supported=True,
                             selection_metric="cross_validation_mean_MAE")
@@ -119,6 +123,17 @@ def run(job, dataset, output):
                 report(branch, "model_evaluated")
         else:
             raise ValueError("Unsupported training branch.")
+    cost = {"execution_seconds": round(time.perf_counter() - started, 4),
+            "includes": "preparation_cv_selection_final_fit_test_and_shap"}
+    try:
+        import resource
+        cost["process_peak_rss_bytes"] = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024)
+        cost["memory_scope"] = "process_high_water_mark_linux"
+    except ImportError:
+        pass
+    result["execution_cost"] = cost
+    for candidate in result.get("candidates", []):
+        candidate["execution_cost"] = cost
     write_bundle(result, context, output)
 
 
@@ -128,6 +143,7 @@ def main():
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
+    job = None
     try:
         guard_parent()
         job = json.loads(Path(args.job).read_text(encoding="utf-8"))
@@ -135,7 +151,10 @@ def main():
         return 0
     except Exception as error:
         # Raw exception strings can contain connection URLs and dataset values.
-        print(json.dumps({"execution_failed": True, "error_type": type(error).__name__}), flush=True)
+        if job and isinstance(job.get("context"), dict):
+            print(FAILURE_PREFIX + json.dumps({"context": job["context"], "failure": safe_failure(error)}), flush=True)
+        else:
+            print(json.dumps({"execution_failed": True, "error_type": type(error).__name__}), flush=True)
         return 2
 
 

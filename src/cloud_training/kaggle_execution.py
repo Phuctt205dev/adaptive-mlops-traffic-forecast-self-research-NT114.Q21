@@ -15,6 +15,7 @@ from src.cloud_training.artifacts import MAX_BYTES, MAX_FILES, read_bundle, rela
 from src.cloud_training.control import render_notebook, source_configuration, with_control
 from src.cloud_training.kaggle_transport import ProviderError
 from src.cloud_training.probe import canonical, sha256_file
+from src.cloud_training.errors import validate_failure
 
 TERMINAL = {"COMPLETE", "ERROR", "CANCEL_ACKNOWLEDGED"}
 
@@ -230,6 +231,21 @@ class KaggleExecution:
                 if stage not in {"control_ready", "child_running", "child_completed", "cancelled", "failed"}:
                     raise ProviderError("Invalid notebook control event.")
                 self.save(**{stage + "_observed": True})
+                if "failure" in event:
+                    if stage != "failed":
+                        raise ProviderError("Unexpected child failure stage.")
+                    self.save(failure_diagnostic=validate_failure(event["failure"]))
+                if "supervisor_failure" in event:
+                    status, phase = event.get("supervisor_http_status"), event.get("supervisor_phase")
+                    child_code = event.get("supervisor_child_returncode")
+                    if (stage != "failed" or phase not in {"startup", "control_check", "input_validation", "child_monitoring"}
+                            or status is not None and (type(status) is not int or not 100 <= status <= 599)):
+                        raise ProviderError("Invalid supervisor failure metadata.")
+                    if child_code is not None and (type(child_code) is not int or not -999 <= child_code <= 999):
+                        raise ProviderError("Invalid child exit code.")
+                    self.save(supervisor_failure=validate_failure(event["supervisor_failure"]),
+                              supervisor_http_status=status, supervisor_phase=phase,
+                              supervisor_child_returncode=child_code)
             else:
                 sequence = event.get("sequence")
                 if type(sequence) is not int or sequence < 1:
@@ -263,7 +279,9 @@ class KaggleExecution:
                             break
                         self.sleep(1)
                     if state != "COMPLETE" or not self.ledger.get("child_completed_observed"):
-                        raise ProviderError("The notebook ended without successful ML output.")
+                        category = ("ml_execution_failed" if self.ledger.get("failure_diagnostic") or self.ledger.get("supervisor_child_returncode") not in (None, 0) else
+                                    "supervisor_failed" if self.ledger.get("supervisor_failure") else "execution_validation")
+                        raise ProviderError("The notebook ended without successful ML output.", category=category)
                     return self.fetch()
                 self.sleep(3)
             raise ProviderError("Kaggle execution exceeded its monitoring deadline.")

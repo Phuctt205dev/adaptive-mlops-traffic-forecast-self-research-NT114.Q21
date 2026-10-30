@@ -17,7 +17,7 @@ BACKEND = ("core/config.py", "schemas/model_version.py", "api/routes/datasets.py
            "services/training_control.py", "services/training_tracking.py",
            "services/feature_importance.py", "schemas/feature_importance.py",
            "services/drift_monitoring.py", "services/retrain_selection.py", "api/routes/internal_training.py",
-           "api/routes/drift.py", "api/routes/internal_drift.py")
+           "api/routes/drift.py", "api/routes/internal_drift.py", "services/region_cleanup_resources.py")
 CLOUD = ("__init__.py", "probe.py", "artifacts.py", "package.py", "process.py", "control.py", "notebook.py",
          "kaggle_rpc.py", "kaggle_transport.py", "kaggle_execution.py")
 SDK_LOCK = """attrs==26.1.0

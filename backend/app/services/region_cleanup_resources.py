@@ -104,9 +104,13 @@ class CleanupResources:
         from mlflow.tracking import MlflowClient
         client = MlflowClient()
         rid = plan['region_id']
-        names = {region_experiment_name(plan['region_name'], rid), legacy_region_experiment_name(rid)}
-        other_names = {region_experiment_name(r.name, r.id) for r in db.scalars(select(Region).where(Region.id != uuid.UUID(rid)))}
+        names = {region_experiment_name(plan['region_name'], rid), legacy_region_experiment_name(rid),
+                 region_experiment_name(region_id=rid)}
+        others = list(db.scalars(select(Region).where(Region.id != uuid.UUID(rid))))
+        other_names = {name for r in others for name in (
+            region_experiment_name(r.name, r.id), region_experiment_name(region_id=r.id), legacy_region_experiment_name(r.id))}
         known = {m.mlflow_run_id: str(m.region_id) for m in db.scalars(select(ModelVersion))}
+        training_owners = {str(run.id): str(run.region_id) for run in db.scalars(select(TrainingRun))}
         selected = []
         experiments = []
         token = None
@@ -129,14 +133,27 @@ class CleanupResources:
                     break
                 if len(runs) >= 10000:
                     fail('MLflow history is too large for a safe cleanup.')
-            owners = [r.data.tags.get('region_id') or known.get(r.info.run_id) for r in runs]
-            if exp.name not in names and rid not in owners:
+            experiment_owners = {str(value) for key in ('region_id', 'traffic_region_id')
+                                 if (value := (getattr(exp, 'tags', None) or {}).get(key))}
+            owners = []
+            for run in runs:
+                tags = run.data.tags
+                evidence = {str(value) for key in ('region_id', 'traffic_region_id') if (value := tags.get(key))}
+                if run.info.run_id in known:
+                    evidence.add(known[run.info.run_id])
+                for key in ('training_run_id', 'traffic_training_run_id'):
+                    owner = training_owners.get(str(tags.get(key)))
+                    if owner:
+                        evidence.add(owner)
+                owners.append(evidence)
+            if exp.name not in names and rid not in experiment_owners and not any(rid in owner for owner in owners):
                 continue
-            if exp.name in other_names or any(owner not in {None, '', rid} for owner in owners):
+            if (exp.name in other_names or experiment_owners - {rid}
+                    or any(owner - {rid} for owner in owners)):
                 fail('MLflow experiment ownership is ambiguous. Nothing was deleted.', 'region_cleanup_ownership_conflict')
             # Untagged legacy neural runs are allowed only in an unambiguous
             # region-named experiment. Renamed/mixed experiments fail closed.
-            if exp.name not in names and any(not owner for owner in owners):
+            if exp.name not in names and rid not in experiment_owners and any(not owner for owner in owners):
                 fail('Some MLflow runs have no region identity. Nothing was deleted.', 'region_cleanup_ownership_conflict')
             if not exp.experiment_id.isdigit() or exp.artifact_location != f'mlflow-artifacts:/{exp.experiment_id}':
                 fail('Unsupported MLflow artifact location. Nothing was deleted.')

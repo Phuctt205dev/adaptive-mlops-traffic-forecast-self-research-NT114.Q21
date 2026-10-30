@@ -1343,10 +1343,14 @@ main {
   gap: 10px;
 }
 
-.region-form-grid input:nth-child(1),
-.region-form-grid input:nth-child(2),
-.region-form-grid input:nth-child(5) {
+.region-form-grid input:first-child,
+.region-form-grid input:last-child {
   grid-column: 1 / -1;
+}
+
+.region-form-grid input[readonly] {
+  background: #f8fafc;
+  cursor: default;
 }
 
 .map-preview {

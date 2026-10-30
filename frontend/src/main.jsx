@@ -632,6 +632,9 @@ function TrafficChart({ points }) {
 }
 
 function RegionManager({ regions, selectedRegion, refresh }) {
+  const lookupSequence = useRef(0);
+  const [lookupReady, setLookupReady] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [deletingRegionId, setDeletingRegionId] = useState(null);
   const [lookupQuery, setLookupQuery] = useState("");
   const [lookingUp, setLookingUp] = useState(false);
@@ -646,6 +649,9 @@ function RegionManager({ regions, selectedRegion, refresh }) {
   const mapUrl = mapPreviewUrl(form.latitude, form.longitude);
 
   useEffect(() => {
+    lookupSequence.current += 1;
+    setLookupReady(false);
+    setLookingUp(false);
     if (!selectedRegion) return;
     setForm({
       name: selectedRegion.name || "",
@@ -659,6 +665,8 @@ function RegionManager({ regions, selectedRegion, refresh }) {
 
   async function createRegion(event) {
     event.preventDefault();
+    if (!lookupReady || lookingUp || creating) return;
+    setCreating(true);
     setMessage("");
     try {
       await api.createRegion({
@@ -667,19 +675,25 @@ function RegionManager({ regions, selectedRegion, refresh }) {
         longitude: Number(form.longitude),
       });
       setForm({ ...form, name: "", description: "" });
+      setLookupReady(false);
       await refresh();
       setMessage("Region created.");
     } catch (err) {
       setMessage(err.message);
+    } finally {
+      setCreating(false);
     }
   }
 
   async function lookupLocation() {
     if (!lookupQuery.trim()) return;
+    const sequence = ++lookupSequence.current;
+    setLookupReady(false);
     setMessage("");
     setLookingUp(true);
     try {
       const result = await api.lookupRegion(lookupQuery);
+      if (sequence !== lookupSequence.current) return;
       setForm({
         name: result.name,
         description: result.display_name,
@@ -687,10 +701,11 @@ function RegionManager({ regions, selectedRegion, refresh }) {
         longitude: result.longitude,
         timezone: result.timezone,
       });
+      setLookupReady(true);
     } catch (err) {
-      setMessage(err.message);
+      if (sequence === lookupSequence.current) setMessage(err.message);
     } finally {
-      setLookingUp(false);
+      if (sequence === lookupSequence.current) setLookingUp(false);
     }
   }
 
@@ -733,25 +748,30 @@ function RegionManager({ regions, selectedRegion, refresh }) {
                 <input
                   placeholder="Search city or place, e.g. Ho Chi Minh City"
                   value={lookupQuery}
-                  onChange={(e) => setLookupQuery(e.target.value)}
+                  onChange={(e) => {
+                    lookupSequence.current += 1;
+                    setLookupReady(false);
+                    setLookingUp(false);
+                    setLookupQuery(e.target.value);
+                  }}
+                  disabled={creating}
                 />
                 <button
                   type="button"
                   className="secondary"
-                  disabled={lookingUp || !lookupQuery.trim()}
+                  disabled={creating || lookingUp || !lookupQuery.trim()}
                   onClick={lookupLocation}
                 >
                   {lookingUp ? "Looking..." : "Lookup"}
                 </button>
               </div>
               <div className="region-form-grid">
-                <input placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-                <input placeholder="Description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-                <input placeholder="Latitude" value={form.latitude} onChange={(e) => setForm({ ...form, latitude: e.target.value })} />
-                <input placeholder="Longitude" value={form.longitude} onChange={(e) => setForm({ ...form, longitude: e.target.value })} />
-                <input placeholder="Timezone" value={form.timezone} onChange={(e) => setForm({ ...form, timezone: e.target.value })} />
+                <input aria-label="Location" placeholder="Location" value={form.description} readOnly />
+                <input aria-label="Latitude" placeholder="Latitude" value={form.latitude} readOnly />
+                <input aria-label="Longitude" placeholder="Longitude" value={form.longitude} readOnly />
+                <input aria-label="Timezone" placeholder="Timezone" value={form.timezone} readOnly />
               </div>
-              <button>Create</button>
+              <button disabled={!lookupReady || lookingUp || creating}>{creating ? "Creating…" : "Create"}</button>
               {message && <p className="muted">{message}</p>}
             </div>
             {mapUrl && (

@@ -935,6 +935,7 @@ def _run_neural_cross_validation(
             "preprocessor_size_bytes"
         ],
         "shap_report": final_result["shap_report"],
+        "model_input_features": final_result.get("selected_feature_names", []),
         **({"feature_selection_result": {**model_selection, "selected_features": final_result["selected_feature_names"]}}
            if model_selection else {}),
         "predictions_path": predictions_path,

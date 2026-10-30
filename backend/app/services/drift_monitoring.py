@@ -513,11 +513,16 @@ def list_region_drift_checks(
         )
     )
     latest = checks[0] if checks else None
+    from backend.app.services.feature_importance import active_model_feature_usage, raw_feature_is_used
+    usage = active_model_feature_usage(db, region)
+    feature_names = {name for check in checks for name in (check.feature_drift_json or {}).get("features", {})}
+    usage["features"] = {name: raw_feature_is_used(name, usage["input_features"]) for name in feature_names}
     return {
         "region_id": str(region_id),
         "latest": _serialize_check(latest) if latest else None,
         "items": [_serialize_check(check) for check in checks],
         "total": len(checks),
+        "active_model_feature_usage": usage,
     }
 
 

@@ -11,7 +11,7 @@ from playwright.sync_api import sync_playwright, expect
 
 ROOT = Path(__file__).resolve().parents[2]
 BASE = "/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/"
-OUTPUT = ROOT / "results/feature-importance/ui"
+OUTPUT = ROOT / "results/feature-importance/five-model-ui"
 
 
 def main():
@@ -86,17 +86,34 @@ def main():
             if active == "model-b":
                 body.update(sequence_length=72)
                 body["features"][0]["label"] = "Humidity"
-            if region_id == "region-c":
-                body["history"].update(status="pending", total_models=0, used_reports=0, models=[], features=[])
+            body.pop("history")
+            body["model_reports"] = [{"model_name": name, "status": "ready", "message": None,
+                "features": copy.deepcopy(active_rows), "sample_count": 8, "generated_at": body["generated_at"],
+                "sequence_length": 72 if name in {"LSTM", "GRU"} else None,
+                "is_serving": name == body["model_variant"]} for name in ("RandomForest", "XGBoost", "LightGBM", "LSTM", "GRU")]
+            body["model_reports"][-1]["features"][0]["label"] = "Humidity"
+            body["model_average"] = {"status": "ready", "used_reports": 5, "total_models": 5, "features": copy.deepcopy(average_rows)}
+            if not active:
+                body["model_reports"] = []
+                body["model_average"].update(status="incomplete", used_reports=0, features=[])
             if state["scenario"] == "broken_active":
                 body.update(status="unavailable", message="The saved report does not match this model.", features=[])
+                body["model_reports"][1].update(status="unavailable", message="No saved report for XGBoost.", features=[])
+                body["model_average"].update(status="incomplete", used_reports=4, features=[])
             elif state["scenario"] == "legacy":
-                body.pop("history")
+                body.pop("model_reports")
+                body.pop("model_average")
             elif state["scenario"] == "unavailable":
                 status = 503
                 body = {"error": {"message": "Reports temporarily unavailable."}}
         elif path.endswith("/drift-checks"):
-            body = {"items": [], "latest": None}
+            names = ["temperature", "humidity", "weather_type", "weather_description", "is_holiday"] + [f"input_{i}" for i in range(8)]
+            check = {"id": "check-1", "active_model_version_id": state["active"], "status": "stable", "created_at": "2026-02-01T00:00:00Z",
+                "current_start_at": "2026-01-25T00:00:00Z", "current_end_at": "2026-02-01T00:00:00Z",
+                "feature_count": 13, "drifted_feature_count": 0, "feature_drift_json": {"summary": {"min_drifted_features": 2},
+                    "features": {name: {"type": "numeric", "metric": "psi", "value": .1, "threshold": .2, "drift": False} for name in names}}}
+            body = {"items": [check], "latest": check, "active_model_feature_usage": {"model_version_id": state["active"],
+                "features": {name: True if name in {"temperature", "weather_type"} else None if name == "is_holiday" else False for name in names}}}
         else:
             body = {"items": []}
         route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
@@ -115,22 +132,25 @@ def main():
             page.goto(f"http://127.0.0.1:{server.server_port}{BASE}")
             assert not calls
             page.get_by_role("button", name="Feature Importance", exact=True).click()
-            history = page.get_by_role("region", name="Across saved models", exact=True)
-            active = page.get_by_role("region", name="Active model", exact=True)
-            expect(history.locator(".feature-coverage")).to_contain_text("3 of 5")
+            history = page.get_by_role("region", name="Average across five models", exact=True)
+            active = page.get_by_role("region", name="Model details", exact=True)
+            expect(history.locator(".feature-coverage")).to_contain_text("5 of 5")
             expect(history.locator(".feature-row")).to_have_count(10)
             expect(active.locator(".feature-row")).to_have_count(3)
-            assert page.locator(".feature-sections select").count() == 0
+            expect(active.get_by_label("Model", exact=True).locator("option")).to_have_count(5)
             assert history.bounding_box()["y"] < active.bounding_box()["y"]
-            cases.append("two stacked sections, independent data, no version selector")
+            active.get_by_label("Model", exact=True).select_option("GRU")
+            expect(active.locator(".feature-highlight")).to_contain_text("Humidity")
+            active.get_by_label("Model", exact=True).select_option("RandomForest")
+            cases.append("two sections, five algorithm choices, selection changes report without Activate")
             history.get_by_role("button", name="Show all 12 inputs").click()
             expect(history.locator(".feature-row")).to_have_count(12)
             expect(active.locator(".feature-row")).to_have_count(3)
-            history.get_by_text("Reports included and excluded", exact=True).click()
-            expect(history).to_contain_text("No report yet")
+            history.get_by_text("Report availability", exact=True).click()
+            expect(history).to_contain_text("LightGBM")
             history.get_by_text("View details", exact=True).click()
-            expect(history).to_contain_text("same weight")
-            expect(history).to_contain_text("2 datasets")
+            expect(history).to_contain_text("20%")
+            expect(history).to_contain_text("activated")
             cases.append("show all and inclusion details")
             for width, height in ((1440, 1080), (390, 844), (320, 740)):
                 page.set_viewport_size({"width": width, "height": height})
@@ -141,13 +161,14 @@ def main():
             page.set_viewport_size({"width": 1440, "height": 1080})
             page.locator(".region-dropdown-trigger").click()
             page.get_by_role("option", name="No Active Region", exact=False).click()
-            expect(active).to_contain_text("no active model")
-            expect(history.locator(".feature-row")).to_have_count(10)
+            expect(history).to_contain_text("Activate a model")
+            expect(history.locator(".feature-row")).to_have_count(0)
+            expect(active.get_by_label("Model", exact=True)).to_have_count(0)
             assert "model_version_id" not in calls[-1]
             page.locator(".region-dropdown-trigger").click()
             page.get_by_role("option", name="Empty Region", exact=False).click()
-            expect(history).to_contain_text("no saved models")
-            cases.append("history without active model and empty region")
+            expect(history).to_contain_text("Activate a model")
+            cases.append("no borrowing reports without an activated run")
             page.locator(".region-dropdown-trigger").click()
             page.get_by_role("option", name="Demo Region", exact=False).click()
             expect(active).to_contain_text("model_v1")
@@ -161,8 +182,12 @@ def main():
             cases.append("Activate changes active report including neural context")
             state["scenario"] = "broken_active"
             history.get_by_role("button", name="Refresh", exact=True).click()
-            expect(active).to_contain_text("does not match")
-            expect(history.locator(".feature-row")).to_have_count(10)
+            expect(history.locator(".feature-coverage")).to_contain_text("4 of 5")
+            expect(history.locator(".feature-row")).to_have_count(0)
+            active.get_by_label("Model", exact=True).select_option("XGBoost")
+            expect(active).to_contain_text("No saved report for XGBoost")
+            active.get_by_label("Model", exact=True).select_option("GRU")
+            expect(active.locator(".feature-highlight")).to_contain_text("Humidity")
             state["scenario"] = "legacy"
             history.get_by_role("button", name="Refresh", exact=True).click()
             expect(history).to_contain_text("Update the backend")
@@ -171,6 +196,15 @@ def main():
             history.get_by_role("button", name="Refresh", exact=True).click()
             expect(history.get_by_role("alert")).to_contain_text("temporarily unavailable")
             cases.append("broken active, older backend and request errors")
+            state["scenario"] = "ready"
+            page.get_by_role("button", name="Drift", exact=True).click()
+            page.locator(".drift-layout .selectable-row").first.click()
+            feature_scores = page.locator(".drift-layout .card").filter(has=page.get_by_role("heading", name="Feature Scores", exact=True))
+            expect(feature_scores.locator("tbody tr")).to_have_count(13)
+            expect(feature_scores.locator("tbody tr").filter(has_text="temperature")).to_contain_text("Used")
+            expect(feature_scores.locator("tbody tr").filter(has_text="humidity")).to_contain_text("Not used")
+            expect(feature_scores.locator("tbody tr").filter(has_text="is_holiday")).to_contain_text("Unknown")
+            cases.append("Drift marks active input membership and shows all 13 scores")
             page.get_by_role("button", name="Models", exact=True).click()
             count = len(calls)
             page.wait_for_timeout(300)

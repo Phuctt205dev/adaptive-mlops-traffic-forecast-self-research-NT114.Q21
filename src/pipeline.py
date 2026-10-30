@@ -254,6 +254,8 @@ def run_pipeline(
     shap_config=None,
     selected_models=None,
     feature_selection=None,
+    training_run_id=None,
+    explain_all_models=False,
 ):
     """
     Train all supported models and save the best validation-MAE model.
@@ -566,7 +568,8 @@ def run_pipeline(
         context={"region_id": str(region_id) if region_id is not None else None,
                  "dataset_id": str(dataset_id) if dataset_id is not None else None,
                  "train_start_date": str(train_start_date), "train_end_date": str(train_end_date),
-                 "model_version": model_version, "model_family": "legacy_sklearn"},
+                 "model_version": model_version, "model_family": "legacy_sklearn",
+                 "training_run_id": str(training_run_id) if training_run_id is not None else None},
     )
 
     model_info = {
@@ -603,6 +606,8 @@ def run_pipeline(
         "versioned_model_file": versioned_model_path,
         **({"compatibility_file": compatibility_file} if compatibility_file else {}),
         "shap_report": shap_report,
+        "model_input_features": list(selected_columns),
+        "shap_reports": {best["name"]: {**shap_report, "input_features": list(selected_columns)}},
         **({"feature_selection_result": best["feature_selection"],
             "feature_profiles": {MODEL_KEYS[result["name"]]: result["feature_selection"] for result in results}}
            if selecting else {}),
@@ -689,5 +694,48 @@ def run_pipeline(
             print(f"MLflow sklearn model logging skipped: {exc}")
 
     report_progress(best["name"], "model_evaluated")
+    if explain_all_models and shap_config.enabled:
+        # Fit/explain other selected algorithms on the same Development window.
+        # Only the winning weights are retained/registered. Release it first so
+        # this loop never holds two full-data trees in memory at the same time.
+        import gc
+        import tempfile
+        del best_model
+        gc.collect()
+        for result in results:
+            if result["name"] == best["name"]:
+                continue
+            name = result["name"]
+            columns = ((result.get("feature_selection") or {}).get("selected_features")
+                       or list(X_development.columns))
+            report_progress(name, "final_fit_started")
+            explained_model = result["trainer"](X_development[columns], y_development, random_state)
+            if columns != list(X_development.columns):
+                explained_model = wrap_tree_model(explained_model, list(X_development.columns), columns)
+            try:
+                with tempfile.TemporaryDirectory(prefix="shap-final-", dir=models_dir) as temporary:
+                    path = os.path.join(temporary, "explained_model.pkl")
+                    joblib.dump(explained_model, path)
+                    report_progress(name, "explaining")
+                    metadata = explain_saved_model(explained_model, X_development,
+                        model_name=name, model_path=path,
+                        output_path=os.path.join(models_dir, f"{model_version}_{name}_shap.json"),
+                        timestamps=development_part["date_time"], config=shap_config,
+                        context={"region_id": str(region_id) if region_id is not None else None,
+                                 "dataset_id": str(dataset_id) if dataset_id is not None else None,
+                                 "training_run_id": str(training_run_id) if training_run_id is not None else None,
+                                 "model_version": model_version, "model_family": "legacy_sklearn"})
+                    model_info["shap_reports"][name] = {**metadata, "input_features": list(columns)}
+            finally:
+                del explained_model
+                gc.collect()
+            report_progress(name, "model_evaluated")
+        save_model_info(model_info, output_info_path)
+        if selected_mlflow_run_id:
+            with mlflow.start_run(run_id=selected_mlflow_run_id):
+                mlflow.log_artifact(output_info_path)
+                for metadata in model_info["shap_reports"].values():
+                    if metadata.get("source_report"):
+                        mlflow.log_artifact(metadata["source_report"])
     print(f"Model saved: {output_model_path}")
     return model_info

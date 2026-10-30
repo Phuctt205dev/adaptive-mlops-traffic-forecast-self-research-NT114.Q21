@@ -68,6 +68,15 @@ class TrainingTrackingTests(unittest.TestCase):
         self.assertEqual(self.client.runs[0].info.lifecycle_stage, "deleted")
         self.assertFalse(self.client.files)
 
+    def test_all_algorithm_reports_are_logged_with_the_single_registered_candidate(self):
+        self.info["shap_reports"] = {name: {"source_report": f"/verified/{name}.json"}
+                                     for name in ("RandomForest", "XGBoost", "LightGBM", "LSTM", "GRU")}
+        result = self.tracker.publish(self.run, self.info)
+        paths = {item[2] for item in self.client.files}
+        self.assertTrue({"shap_" + name for name in self.info["shap_reports"]} <= paths)
+        self.assertEqual(len(self.client.runs), 1)
+        self.assertEqual(set(result["shap_reports"]), set(self.info["shap_reports"]))
+
     def test_cleanup_cannot_delete_foreign_or_unscoped_tracking_output(self):
         self.tracker.publish(self.run, self.info)
         self.client.runs[0].data.tags["traffic_region_id"] = str(uuid.uuid4())

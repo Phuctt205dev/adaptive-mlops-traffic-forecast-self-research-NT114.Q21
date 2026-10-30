@@ -246,6 +246,8 @@ def register_training_result(
         "final_test_used_for_selection",
         "selection_metric",
         "shap_report",
+        "shap_reports",
+        "model_input_features",
         "feature_selection_result",
         "feature_profiles",
         "execution_cost",

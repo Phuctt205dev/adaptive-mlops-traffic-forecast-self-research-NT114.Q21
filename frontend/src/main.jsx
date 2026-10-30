@@ -1581,11 +1581,13 @@ function driftFeatureRows(check) {
       threshold: Number(details.threshold ?? 0),
       drifted: Boolean(details.drift),
     }))
-    .sort((left, right) => Number(right.drifted) - Number(left.drifted) || right.score - left.score)
-    .slice(0, 12);
+    .sort((left, right) => Number(right.drifted) - Number(left.drifted) || right.score - left.score);
 }
 
 function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshRegions = async () => {} }) {
+  const usageRegionRef = useRef(selectedRegion?.id);
+  usageRegionRef.current = selectedRegion?.id;
+  const [modelFeatureUsage, setModelFeatureUsage] = useState(null);
   const [checks, setChecks] = useState([]);
   const [latest, setLatest] = useState(null);
   const [selectedCheck, setSelectedCheck] = useState(null);
@@ -1601,17 +1603,21 @@ function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshR
   const [messageType, setMessageType] = useState("info");
 
   async function refresh(options = {}) {
+    const requestedRegionId = selectedRegion?.id;
     if (!selectedRegion?.id) {
       setChecks([]);
       setLatest(null);
       setSelectedCheck(null);
+      setModelFeatureUsage(null);
       return null;
     }
     setLoading(true);
     setMessage("");
     try {
       const data = await api.driftChecks(selectedRegion.id);
+      if (usageRegionRef.current !== requestedRegionId) return null;
       const items = data.items || [];
+      setModelFeatureUsage(data.active_model_feature_usage || null);
       const nextLatest = data.latest || null;
       setChecks(items);
       setLatest(nextLatest);
@@ -1631,7 +1637,7 @@ function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshR
       setMessage(err.message);
       return null;
     } finally {
-      setLoading(false);
+      if (usageRegionRef.current === requestedRegionId) setLoading(false);
     }
   }
 
@@ -1838,9 +1844,13 @@ function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshR
       <Card title="Feature Scores">
         {featureRows.length ? (
           <Table
-            columns={["Feature", "Type", "Metric", "Score", "Threshold", "Status"]}
+            columns={["Feature", "Active model", "Type", "Metric", "Score", "Threshold", "Status"]}
             rows={featureRows.map((feature) => [
               feature.name,
+              <span className={`feature-usage ${modelFeatureUsage?.model_version_id === selectedRegion?.active_model_version_id && modelFeatureUsage?.features?.[feature.name] === true ? "feature-usage-used" : ""}`}>
+                {modelFeatureUsage?.model_version_id !== selectedRegion?.active_model_version_id || modelFeatureUsage?.features?.[feature.name] == null
+                  ? "Unknown" : modelFeatureUsage.features[feature.name] ? "Used" : "Not used"}
+              </span>,
               feature.type,
               feature.metric,
               feature.score.toFixed(4),

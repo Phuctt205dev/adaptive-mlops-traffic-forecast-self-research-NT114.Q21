@@ -1,133 +1,126 @@
-# Feature Importance cho admin
+# Feature Importance và feature đang được model sử dụng
 
-Mở sidebar **Feature Importance**, chọn region ở thanh trên. Trang gồm
-hai khu vực xếp dọc, cùng đọc báo cáo SHAP đã lưu:
+Chọn region rồi mở sidebar **Feature Importance**. Phiên bản được admin
+Activate ở trang Models xác định **một lượt train** để xem cả hai khu vực.
 
-1. **Across saved models:** đóng góp trung bình qua các phiên bản đã lưu
-   trong region, gồm candidate/active/archived có báo cáo hợp lệ. Gộp cột
-   cùng ý nghĩa, chuẩn hóa từng report thành100% rồi trung bình ngang nhau
-   theo phiên bản. Không cộng điểm SHAP gốc của cây với neural.
-2. **Active model:** báo cáo đúng model admin đã Activate tại trang Models.
-   Không có bộ chọn v1/v2 riêng. Khu vực tổng quan vẫn xem được khi chưa
-   có model active; lỗi báo cáo active không che báo cáo lịch sử hợp lệ.
+1. **Average across five models:** trung bình báo cáo của Random Forest,
+   XGBoost, LightGBM, LSTM và GRU trong đúng lượt đó. Gộp feature cùng ý
+   nghĩa, chuẩn hóa mỗi report thành100%, rồi mỗi loại model đóng20%.
+   Không lấy số phiên bản đã lưu làm trọng số hoặc gom các lượt train khác.
+2. **Model details:** dropdown chọn một trong năm **loại model**, rồi xem
+   báo cáo riêng của loại đó. Không chọn v1/v2 ở đây. Đổi dropdown chỉ đổi
+   báo cáo, không Activate, train hoặc thay model phục vụ dự báo. Option
+   **Currently serving** đánh dấu thuật toán đang phục vụ.
 
-Dòng **N of M saved models included** cho biết số báo cáo dùng/tổng model.
-Mở **Reports included and excluded** để xem phiên bản nào thiếu/lỗi/chưa
-hỗ trợ hoặc toàn điểm0. Những báo cáo này bị loại khỏi mẫu số trung bình,
-không coi là đóng góp0. Nhóm vắng trong một report hợp lệ góp0 vào trung
-bình; **Present in reports** phân biệt điều đó với report bị thiếu. Vắng
-trong báo cáo không chứng minh feature không quan trọng với mọi model.
+Chỉ vẽ trung bình khi có đủ5 report hợp lệ với đóng góp đo được. Nếu thiếu,
+báo **N of5 model reports included**, giữ khu vực trung bình ở trạng thái
+incomplete và vẫn cho xem riêng report hiện có. Report thiếu/lỗi/toàn0
+không được coi là0% để vẽ trung bình giả. Một nhóm vắng trong report hợp lệ
+góp0 vào tổng nhóm khi đã có đủ năm report.
 
-Đây là tổng quan lịch sử, không phải mỗi thuật toán một phiếu: thuật toán
-có nhiều phiên bản sẽ có nhiều trọng số hơn. Có thể gồm nhiều dataset và
-khoảng train trong cùng region; View details ghi số dataset và giải thích.
+Tỷ lệ thể hiện đóng góp tương đối vào dự đoán, không phải accuracy hoặc
+chiều tăng/giảm. Model neural cộng độ lớn qua các giờ trong sequence rồi
+lấy trung bình theo chuỗi; View details ghi số giờ. Không so điểm SHAP
+tuyệt đối của tree với neural. Biểu đồ này không chọn feature cho retrain;
+selector riêng từng model ở [SHAP_RETRAIN_SELECTION.md](SHAP_RETRAIN_SELECTION.md).
 
-- Thanh dài hơn: model dựa nhiều hơn vào thông tin này trên các mẫu giải thích.
-- Tỷ lệ là phần của tổng độ lớn SHAP, không phải phần trăm dự đoán đúng.
-- Time of day gộp hour/hour_sin/hour_cos; Weather conditions gộp các cột
-  mã hóa weather_type. View details giữ tên cột model và điểm gốc.
-- Hỗ trợ cả cây và LSTM/GRU; không cần train hoặc backfill để mở trang.
-- Với LSTM/GRU, điểm được cộng theo độ lớn qua các giờ quá khứ rồi lấy trung
-  bình các chuỗi. View details ghi số giờ mỗi chuỗi; không so điểm tuyệt đối
-  giữa tree và neural hoặc xem tỷ trọng là chiều tăng/giảm.
-- Mở tab, đổi region/model hoặc bấm Refresh chỉ đọc JSON đã lưu. Không fit,
-  nạp model lớn hoặc chạy SHAP trong request API; tab ẩn dừng request.
-- Model cũ chưa có report hiển thị pending và bị loại khỏi trung bình,
-  không bịa số liệu hoặc tự backfill.
+## Báo cáo sinh và lưu lúc nào
 
-API admin: `GET /api/v1/admin/regions/{region_id}/feature-importance`.
-Client gửi model_version_id kỳ vọng để phát hiện model active đã đổi.
-Response giữ các field báo cáo active, thêm `history` với features theo%,
-total_models, used_reports, excluded_reports, dataset_count và danh sách
-model kèm trạng thái report. Region không có active trả active ID null;
-không gửi query model_version_id trong trường hợp đó. ID kỳ vọng cũ vẫn
-trả409 nếu active đã đổi. Backend đọc toàn bộ phiên bản trong đúng region
-bằng một streamed join; không cắt theo topN model. Không trả đường dẫn
-artifact, SHA hoặc message exception storage ra bảng lịch sử.
+Train đầu vẫn dùng đầy đủ feature và tính SHAP. Retrain sử dụng các bộ
+feature riêng theo policy hiện hành và tạo report cho những model được
+chọn chạy. Local xử lý trên worker; cloud xử lý trên Kaggle.
 
-Backend kiểm SHA256 report, context region/dataset và model SHA; đọc tối đa
-512KiB từ cache models hoặc MinIO. Không tải file tùy ý ngoài models root.
-Neural kiểm thêm training_run_id, preprocessor SHA đã ghi bởi producer,
-preprocessor_file, sequence_length, đơn vị và cách tổng hợp. API không
-deserialize model/preprocessor hoặc tính gradient khi xem báo cáo.
+Nhánh cây trước chỉ fit cuối/lưu report model thắng. Bản này bật
+`explain_all_models` trong runner training: model thắng giữ cách lưu/đánh
+giá Final Test cũ; các cây được chọn còn lại lần lượt fit trên Development,
+tạo SHAP rồi giải phóng. Chỉ giữ JSON của chúng, không giữ thêm trọng số
+hoặc đăng ký thêm ModelVersion. Model thắng được giải phóng trước vòng này
+để không giữ hai model fit toàn bộ dữ liệu cùng lúc. Có thêm chi phí fit
+cuối và SHAP của các cây còn lại; không lấy Final Test làm mẫu giải thích.
 
-Mô hình huấn luyện mới sinh báo cáo tự động sau bước lưu model cuối. Luồng
-cây legacy vẫn chỉ lưu model thắng CV; SHAP không làm phát sinh lượt fit
-cho các thuật toán bị loại. Selector retrain riêng từng model đã thêm ở
-[SHAP_RETRAIN_SELECTION.md](SHAP_RETRAIN_SELECTION.md); biểu đồ lịch sử
-không được dùng làm selector hoặc thay cách lựa chọn model.
+LSTM/GRU đã có final fit và SHAP; bản này giữ report, sequence/preprocessor
+và input schema riêng của từng loại trong `shap_reports`. Finalize gộp các
+report từ ba nhánh trước khi đăng ký **một candidate thắng**. Contract file/
+SHA hiện có chuyển các JSON/preprocessor qua Kaggle→worker→MinIO; MLflow
+lưu từng JSON riêng, registry giữ metadata. Không đổi schema DB/graph DAG.
 
-Kiểm thử: tests/test_feature_importance.py, tests/test_feature_importance_history.py,
-tests/test_shap_reporting.py, tests/test_shap_pipeline.py và
-`scripts/shap/check_feature_importance_ui.py` với API mô phỏng. Số trên ảnh
-kiểm thử UI không phải kết quả model đang chạy.
+Model cũ thường chỉ giữ report của model thắng; API tiếp tục cho xem report
+đó, không mượn report từ phiên bản/dataset khác. **Không tự backfill hoặc
+fit model cũ khi xem trang.** Để có đủ năm report mới: admin chủ động train
+đủ năm model, chờ thành công, rồi Activate phiên bản mới khi phù hợp.
+Nếu chỉ chọn một phần model để train hoặc tắt SHAP thì không có trung bình
+đủ năm; dropdown sẽ giải thích những báo cáo còn thiếu.
 
-Gói mở rộng lịch sử dựa trên neural-metrics-v1 đã Apply, không replay gói
-trees-first/neural cũ. AI chuẩn bị source, ba startup proof và server
-dry-run; người dùng triển khai backend bằng PowerShell tại project root:
+## Drift: model active đang dùng feature nào
+
+Bảng **Feature Scores** có cột **Active model**:
+
+- **Used:** feature là đầu vào trực tiếp hoặc có cột mã hóa tương ứng.
+- **Not used:** biết schema đầu vào và feature không nằm trong đó.
+- **Unknown:** chưa có metadata/report đủ tin cậy, không tự đoán là bị loại.
+
+Membership dựa trên `model_input_features` của model active; model cũ dùng
+tên input trong report SHAP đã xác minh nếu có. `weather_type_*` được quy
+về weather_type, is_holiday_binary về is_holiday. Điểm SHAP bằng0 vẫn có
+thể là input **Used**. Bảng hiển thị tất cả score, bỏ giới hạn12 hàng cũ.
+
+Dấu này luôn nói về **model đang active**, kể cả khi xem check lịch sử.
+Nó không đổi giá trị score, số feature drift, threshold hoặc trigger
+retrain. Đổi region/model active sẽ tải lại thông tin; thiếu metadata hiện
+Unknown. Không chạy SHAP hoặc deserialize model để đánh dấu input.
+
+## API và giới hạn
+
+`GET /api/v1/admin/regions/{region_id}/feature-importance` vẫn require_admin.
+Query model_version_id là ID active kỳ vọng để bắt đổi active→409, không
+phải dropdown phiên bản. Giữ field report phục vụ ở top-level; thêm
+`model_reports` (năm loại) và `model_average` (ready/incomplete, used_reports,
+total_models5, features). Trung bình phiên bản lịch sử `history` đã được
+thay thế. Không có active thì không tự chọn phiên bản khác.
+
+Mỗi JSON tối đa512KiB, tối đa1000 input; SHA/context region/dataset/model
+được kiểm trước khi hiển thị. Report bộ mới kiểm thêm training_run_id cả
+cây và neural. Neural kiểm preprocessor SHA/path, sequence length, đơn vị
+và phương pháp tổng hợp riêng từng entry. API chỉ đọc saved JSON trong
+models root hoặc MinIO, không tải đường dẫn tùy ý; không trả artifact path
+hoặc raw storage exception. Lỗi một model không che báo cáo các model khác.
+
+Drift list trả thêm `active_model_feature_usage` với model ID/version,
+input names và map raw feature→true/false/null. Không ghi annotation này
+ngược vào kết quả detection để làm thay đổi lịch sử.
+
+## Triển khai và dạo test
+
+Gói mới mặc định `results/feature-importance/five-model-v1`, bundle
+`6af7ad7253beadff55d3d8c925126778d02374038e5b4ad781065c935b001864`.
+Baseline history-v2 đã phục hồi cache4Gi và Resume hoàn tất. Giữ các gói/
+hash/journal cũ; không replay Apply hoặc recovery của đợt trước.
 
 ```powershell
 $py = '.\.venv\Scripts\python.exe'
-& $py -B -X utf8 scripts/shap/rollout_feature_importance.py Check
-& $py -B -X utf8 scripts/shap/rollout_feature_importance.py Apply
-& $py -B -X utf8 scripts/shap/rollout_feature_importance.py Verify
+& $py -B -X utf8 scripts/shap/rollout_five_model_reports.py Check
+& $py -B -X utf8 scripts/shap/rollout_five_model_reports.py Apply
+& $py -B -X utf8 scripts/shap/rollout_five_model_reports.py Verify
 ```
 
-Review mặc định `results/feature-importance/history-v2`, source bundle
-`04a19f466b70a420dfeeba0aa1d19ecd88956eee997caadde46661400920e345`.
-Helper chỉ cập nhật source ConfigMap mount cho API/hai worker; giữ image,
-schema DB, graph DAG và các cấu hình retrain. Check chặn khi training/
-cleanup còn chạy hoặc source/spec/UID khác review. Apply có journal chống
-lặp, pause DAG trong rollout và phục hồi trạng thái trước đó. Rollback
-riêng của helper trả về neural-metrics-v1, vẫn hỗ trợ model đã rút gọn.
-Không sửa hash/guard để ép qua kiểm tra hoặc dùng review từ clone khác.
+AI chuẩn bị/kiểm gói; user Apply. Helper giữ cache4Gi, image/DB/DAG, kiểm
+idle/source/spec/UID và dung lượng restore trước rollout, ba entrypoint
+đúng bundle. Pod Failed/Succeeded lịch sử bị loại khỏi đếm replica; các
+pod Pending/Unknown/unready vẫn chặn. Verify xác minh schema model_reports/
+model_average trên process API đang phục vụ. Push frontend lên GitHub
+Pages không tự Apply backend. Không tự train, Activate hoặc đổi dữ liệu.
 
-Frontend được publish qua GitHub Pages khi push source frontend; việc
-push không Apply backend. Nếu trang mới báo cần cập nhật backend ở khu
-vực tổng quan, hoàn tất Apply/Verify trên trước khi nghiệm thu.
+Sau Verify đạt, Ctrl+F5 và thử:
 
-Thử sau triển khai: Ctrl+F5/đăng nhập admin, mở Feature Importance; xem hai
-biểu đồ và số report được dùng, đổi region, thử vùng chưa active/nếu có,
-Activate model khác tại Models rồi quay lại xem khu vực dưới đổi đúng.
-Refresh chỉ đọc báo cáo; không cần bắt đầu training để thử giao diện.
+1. Kiểm tra dropdown có đủ năm loại; đổi loại không đổi model active.
+2. Với phiên bản cũ, xem trạng thái thiếu report và report còn dùng được.
+3. Với lượt mới đã train đủ năm và được Activate, xem coverage5/5, biểu
+   đồ trung bình và từng report; đổi Activate thì cả bộ đổi đúng lượt.
+4. Mở Drift, chọn check lịch sử nếu cửa sổ hiện tại chưa được kiểm; xem
+   Used/Not used/Unknown và đủ các hàng feature. Đổi region/model để kiểm.
 
-Nếu history-v2 đã Apply dở và API bị Evicted vì `artifact-cache` vượt2Gi,
-**không chạy lại Apply cũ**. Dùng review phục hồi riêng đã chuẩn bị:
-
-```powershell
-& $py -B -X utf8 scripts/shap/recover_feature_importance_cache.py Check
-& $py -B -X utf8 scripts/shap/recover_feature_importance_cache.py Apply
-& $py -B -X utf8 scripts/shap/recover_feature_importance_cache.py Verify
-```
-
-Recovery mặc định `results/feature-importance/cache-recovery-v1`: chỉ nâng
-EmptyDir lên4Gi, requests đĩa API/init restore lên3Gi, limit đĩa API4Gi/
-init5Gi. Sidecar limit1Gi giữ nguyên nên tổng limit đĩa container thường
-là5Gi, đủ cho cache4Gi và overhead. Không tăng RAM, đổi image/source hoặc
-xóa model/MinIO. Check chỉ đọc metadata kích thước và dung lượng node,
-chặn nếu restore vượt80% cache mới hoặc node còn dưới6Gi. Guard giữ UID,
-full spec và review/journal cũ; không sửa gói history-v2 để vượt guard.
-
-Apply chỉ patch API đang dở, không rollout lại hai worker. Khi đủ hai API
-ready và toàn bộ nguồn/health/schema history hợp lệ, helper phục hồi trạng
-thái pause DAG theo journal ban đầu. Verify chỉ đọc; nếu Apply hồi phục
-đã bắt đầu nhưng dừng giữa chừng, không replay Apply: chẩn đoán rồi dùng
-`Resume` để kiểm và hoàn tất khi API đã ready. Dùng **Verify của recovery**
-sau bước này; Verify gói history-v2 cũ sẽ từ chối spec đã tăng cache.
-
-Nếu cache recovery đã tạo đủ hai API2/2 nhưng báo `The ready replica count
-differs`, bộ Verify cũ đã đếm cả pod Failed/Evicted còn lưu trong Kubernetes.
-Bản sửa trong `scripts/cloud_training/manage_rollout.py` bỏ qua phase
-Failed/Succeeded và pod đang xóa; vẫn kiểm đủ replica, Running/ready, bundle,
-flags, UID/spec và Airflow. Không cần xóa pod lịch sử để làm Verify đạt.
-Sau khi có bản sửa và Verify đạt, hoàn tất recovery đang dở bằng:
-
-```powershell
-& $py -B -X utf8 scripts/shap/recover_feature_importance_cache.py Resume
-& $py -B -X utf8 scripts/shap/recover_feature_importance_cache.py Verify
-```
-
-Resume không patch hoặc tạo pod lại: kiểm hệ thống, ghi hoàn tất recovery
-và phục hồi pause state của DAG theo journal. Không chạy lại Apply/Check
-trước patch vì spec đã ở trạng thái4Gi mới. Những dòng Error cũ trong K9s
-là bản ghi các pod đã kết thúc; chúng không được tính là API đang phục vụ.
+Kiểm tự động: test_all_model_shap (tiny tree thật/transport),
+test_feature_importance/history (năm loại/context/mean/usage), neural
+metadata/registry/tracking và hồi quy retrain. Browser checker
+`scripts/shap/check_feature_importance_ui.py` dùng API synthetic,
+desktop/mobile320–390px, không live writes. Số demo không phải benchmark.

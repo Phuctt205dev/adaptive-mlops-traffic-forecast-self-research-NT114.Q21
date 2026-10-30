@@ -121,8 +121,13 @@ class ModelRegistryServiceTests(unittest.TestCase):
         _user, region, dataset = self.seed_dataset()
         info = self.model_info()
         info["shap_report"] = {"status": "completed", "source_report": "models/model_v1_shap.json"}
+        info["shap_reports"] = {name: {"status": "completed", "source_report": f"models/{name}.json"}
+                                 for name in ("RandomForest", "XGBoost", "LightGBM", "LSTM", "GRU")}
+        info["model_input_features"] = ["temperature", "weather_type_Rain"]
         run, _version = register_training_result(self.session, region.id, dataset.id, info)
         self.assertEqual(run.configuration_json["shap_report"], info["shap_report"])
+        self.assertEqual(run.configuration_json["shap_reports"], info["shap_reports"])
+        self.assertEqual(run.configuration_json["model_input_features"], info["model_input_features"])
 
     def test_register_result_updates_existing_training_run(self):
         user, region, dataset = self.seed_dataset()

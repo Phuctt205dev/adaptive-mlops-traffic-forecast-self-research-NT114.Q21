@@ -214,6 +214,7 @@ def execute_tree_training_branch(
             experiment_name=region_experiment_name(region.name, region.id),
             shap_config=config.get("shap"),
             feature_selection=config.get("feature_selection"),
+            training_run_id=training_run.id, explain_all_models=True,
         )
         model_info.update(
             {
@@ -368,6 +369,8 @@ def finalize_parallel_training_run(
         best_info["selected_from_candidates"] = selected_models
         best_info["feature_profiles"] = {key: profile for candidate in production_candidates
                                          for key, profile in candidate.get("feature_profiles", {}).items()}
+        best_info["shap_reports"] = {name: metadata for candidate in production_candidates
+                                    for name, metadata in candidate.get("shap_reports", {}).items()}
         best_info["selected_model_policy"] = (
             "lowest_cross_validation_mean_MAE_then_CV_std_among_inference_supported_models"
         )

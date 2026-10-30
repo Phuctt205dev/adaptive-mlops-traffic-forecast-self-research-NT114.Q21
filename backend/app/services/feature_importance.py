@@ -7,7 +7,7 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from sqlalchemy import select
+from types import SimpleNamespace
 
 from backend.app.core.errors import ApplicationError
 from backend.app.db.models import Dataset, ModelVersion, Region, TrainingRun
@@ -16,6 +16,7 @@ from backend.app.services import storage
 
 MODEL_ROOT = Path("models").resolve()
 MAX_REPORT_BYTES = 512 * 1024
+MODEL_NAMES = ("RandomForest", "XGBoost", "LightGBM", "LSTM", "GRU")
 LABELS = {
     "hour": "Time of day", "hour_sin": "Time of day", "hour_cos": "Time of day",
     "day": "Day of week", "is_weekend": "Day of week", "dayofweek": "Day of week",
@@ -87,7 +88,7 @@ def grouped_features(importance):
     if not math.isfinite(total):
         raise ValueError("SHAP importance overflow")
     for group in groups.values():
-        group["share_percent"] = 100 * group["mean_abs_shap"] / total if total else 0.0
+        group["share_percent"] = 100 * (group["mean_abs_shap"] / total) if total else 0.0
     return sorted(groups.values(), key=lambda group: (-group["mean_abs_shap"], group["label"]))
 
 
@@ -107,7 +108,7 @@ def get_active_feature_importance(db, region_id, expected_model_id=None):
     return model_feature_importance(region, model, run, dataset)
 
 
-def model_feature_importance(region, model, run, dataset):
+def model_feature_importance(region, model, run, dataset, expected_run_id=None):
     """Use the same ownership, digest and schema checks for every saved version."""
     if (model.region_id != region.id or run is None or run.id != model.training_run_id
             or run.region_id != region.id or dataset is None or dataset.id != run.dataset_id
@@ -144,6 +145,7 @@ def model_feature_importance(region, model, run, dataset):
         context = report["context"]
         if (not isinstance(context, dict) or report["schema_version"] != 1 or report["status"] != "completed"
                 or context.get("region_id") != str(region.id) or context.get("dataset_id") != str(dataset.id)
+                or (expected_run_id is not None and context.get("training_run_id") != str(expected_run_id))
                 or report["model_sha256"] != metadata["model_sha256"]
                 or tree_name(report["model_name"]) != tree_name(model.variant)
                 or report["explainer"] != ("GradientExplainer" if neural else "TreeExplainer")
@@ -168,6 +170,7 @@ def model_feature_importance(region, model, run, dataset):
                 "sample_count": report["sample_count"], "generated_at": report["created_at"],
                 "transformed_feature_count": len(report["importance"]),
                 "explanation_method": report["explainer"],
+                "input_features": [row["feature"] for row in report["importance"]],
                 "sequence_length": report["sequence_length"] if neural else None}
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         raise ApplicationError("shap_report_invalid", "The saved report does not match this model.", 409) from None
@@ -175,57 +178,61 @@ def model_feature_importance(region, model, run, dataset):
         raise ApplicationError("shap_report_unavailable", "The report is temporarily unavailable. Please refresh.", 503) from None
 
 
-def saved_model_history(db, region, active_report):
-    # One streamed join; each object read remains bounded to MAX_REPORT_BYTES.
-    # No version cap or model/status filter: all stored versions in this region count.
-    statement = (select(ModelVersion, TrainingRun, Dataset)
-        .outerjoin(TrainingRun, TrainingRun.id == ModelVersion.training_run_id)
-        .outerjoin(Dataset, Dataset.id == TrainingRun.dataset_id)
-        .where(ModelVersion.region_id == region.id).order_by(ModelVersion.id)
-        .execution_options(yield_per=100))
-    summary = {"status": "pending", "total_models": 0, "used_reports": 0,
-               "excluded_reports": {key: 0 for key in ("missing", "unavailable", "unsupported", "invalid", "zero")},
-               "dataset_count": 0, "features": [], "models": []}
-    groups, datasets = {}, set()
-    for model, run, dataset in db.execute(statement):
-        summary["total_models"] += 1
-        item = {"model_version_id": model.id, "model_version": model.version,
-                "model_variant": model.variant,
-                "dataset_filename": dataset.original_filename if dataset and dataset.region_id == region.id else None}
+def active_run_reports(region, model, run, dataset, active):
+    """One report per algorithm in this activated run; never borrow other versions."""
+    configuration = run.configuration_json if isinstance(run.configuration_json, dict) else {}
+    collection = configuration.get("shap_reports") or {}
+    if not isinstance(collection, dict):
+        collection = {}
+    reports, groups = [], {}
+    used = 0
+    for name in MODEL_NAMES:
+        metadata = collection.get(name)
+        fallback = tree_name(name) == tree_name(model.variant) and metadata is None
+        result = {"model_name": name, "status": "pending", "message": "No saved report for this model in the activated training run.",
+                  "features": [], "sample_count": 0, "generated_at": None, "sequence_length": None,
+                  "explanation_method": None, "input_features": [], "is_serving": tree_name(name) == tree_name(model.variant)}
         try:
-            report = (active_report if model.id == region.active_model_version_id and active_report
-                      else model_feature_importance(region, model, run, dataset))
-            status = report["status"]
-            if status != "ready":
-                reason = report.get("exclusion_reason") or {"pending": "missing", "unavailable": "unavailable",
-                                                          "unsupported": "unsupported"}[status]
-            elif not any(row["mean_abs_shap"] > 0 for row in report["features"]):
-                reason = "zero"
+            if fallback:
+                report = active
+            elif metadata is not None:
+                if not isinstance(metadata, dict):
+                    raise ApplicationError("shap_report_invalid", "The saved report is invalid.", 409)
+                config = {**configuration, "shap_report": metadata,
+                          "preprocessor_file": metadata.get("preprocessor_file"),
+                          "recurrent_sequence_length": metadata.get("sequence_length")}
+                context_run = SimpleNamespace(id=run.id, region_id=run.region_id,
+                    dataset_id=run.dataset_id, configuration_json=config)
+                context_model = SimpleNamespace(id=model.id, region_id=model.region_id, training_run_id=run.id,
+                    version=model.version, variant=name)
+                report = model_feature_importance(region, context_model, context_run, dataset, expected_run_id=run.id)
             else:
-                reason = None
+                report = None
+            if report:
+                for key in ("status", "message", "features", "sample_count", "generated_at", "sequence_length", "explanation_method", "input_features"):
+                    if key in report:
+                        result[key] = report[key]
         except ApplicationError as error:
-            reason = "unavailable" if error.status_code == 503 else "invalid"
-        if reason:
-            summary["excluded_reports"][reason] += 1
-            summary["models"].append({**item, "status": reason})
+            result.update(status="unavailable", message=error.message)
+        reports.append(result)
+        if result["status"] != "ready" or not any(row["mean_abs_shap"] > 0 for row in result["features"]):
             continue
-        summary["used_reports"] += 1
-        datasets.add(dataset.id)
-        summary["models"].append({**item, "status": "included"})
-        for row in report["features"]:
-            group = groups.setdefault(row["label"], {"label": row["label"], "share_percent": 0.0,
-                                                     "features": set(), "reports_present": 0})
+        used += 1
+        for row in result["features"]:
+            group = groups.setdefault(row["label"], {"label": row["label"], "share_percent": 0.,
+                "features": set(), "reports_present": 0})
             group["share_percent"] += row["share_percent"]
             group["features"].update(row["features"])
             group["reports_present"] += 1
-    used = summary["used_reports"]
-    if used:
-        summary["status"] = "ready"
-        summary["features"] = sorted([
-            {**group, "features": sorted(group["features"]), "share_percent": group["share_percent"] / used}
-            for group in groups.values()], key=lambda row: (-row["share_percent"], row["label"]))
-    summary["dataset_count"] = len(datasets)
-    return summary
+    # An incomplete set must never be presented as the average of all five.
+    complete = used == len(MODEL_NAMES)
+    average = {"status": "ready" if complete else "incomplete", "used_reports": used,
+               "total_models": len(MODEL_NAMES), "features": []}
+    if complete:
+        average["features"] = sorted([{**row, "features": sorted(row["features"]),
+            "share_percent": row["share_percent"] / used} for row in groups.values()],
+            key=lambda row: (-row["share_percent"], row["label"]))
+    return reports, average
 
 
 def get_feature_importance(db, region_id, expected_model_id=None):
@@ -243,8 +250,49 @@ def get_feature_importance(db, region_id, expected_model_id=None):
         try:
             active = get_active_feature_importance(db, region.id, expected_model_id)
         except ApplicationError as error:
-            # A broken active report must not hide valid historical reports.
+            # A broken serving report must not hide the other algorithms.
             active = {**empty, "status": "unavailable", "message": error.message,
                       "exclusion_reason": "unavailable" if error.status_code == 503 else "invalid"}
-    history = saved_model_history(db, region, active)
-    return {**(active or empty), "history": history}
+    reports, average = [], {"status": "incomplete", "used_reports": 0, "total_models": 5, "features": []}
+    model = db.get(ModelVersion, region.active_model_version_id) if region.active_model_version_id else None
+    if model and model.region_id == region.id:
+        run = db.get(TrainingRun, model.training_run_id)
+        dataset = db.get(Dataset, run.dataset_id) if run and run.region_id == region.id else None
+        if dataset and dataset.region_id == region.id:
+            reports, average = active_run_reports(region, model, run, dataset, active)
+            if active:
+                active.update(model_version=model.version, model_variant=model.variant,
+                              dataset_filename=dataset.original_filename)
+    return {**(active or empty), "model_reports": reports, "model_average": average}
+
+
+def active_model_feature_usage(db, region):
+    """Input membership, including zero-SHAP inputs; not a drift trigger/filter."""
+    result = {"model_version_id": str(region.active_model_version_id) if region.active_model_version_id else None,
+              "model_version": None, "model_variant": None, "input_features": None}
+    model = db.get(ModelVersion, region.active_model_version_id) if region.active_model_version_id else None
+    if not model or model.region_id != region.id:
+        return result
+    result.update(model_version=model.version, model_variant=model.variant)
+    run = db.get(TrainingRun, model.training_run_id)
+    if not run or run.region_id != region.id:
+        return result
+    names = (run.configuration_json if isinstance(run.configuration_json, dict) else {}).get("model_input_features")
+    if not (isinstance(names, list) and 0 < len(names) <= 1000 and
+            all(isinstance(name, str) and 0 < len(name) <= 200 for name in names)):
+        try:
+            names = get_active_feature_importance(db, region.id).get("input_features")
+        except ApplicationError:
+            names = None
+    result["input_features"] = names or None
+    return result
+
+
+def raw_feature_is_used(name, inputs):
+    if inputs is None:
+        return None
+    if name == "is_holiday":
+        return any(value == "is_holiday" or value.startswith("is_holiday_") for value in inputs)
+    if name in {"weather_type", "weather_description"}:
+        return any(value == name or value.startswith(name + "_") for value in inputs)
+    return name in inputs

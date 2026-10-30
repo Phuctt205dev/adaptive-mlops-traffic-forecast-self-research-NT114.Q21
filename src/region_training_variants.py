@@ -163,6 +163,11 @@ def _candidate_from_report(
         "final_test_used_for_selection": False,
         "selection_metric": "cross_validation_mean_MAE",
         "shap_report": report.get("shap_report", {"status": "not_generated"}),
+        "model_input_features": report.get("model_input_features", []),
+        "shap_reports": {display_name: {**report.get("shap_report", {"status": "not_generated"}),
+            "input_features": report.get("model_input_features", []),
+            "preprocessor_file": report.get("preprocessor_path"),
+            "sequence_length": report.get("training_configuration", {}).get("sequence_length_hours")}},
         **({"feature_selection_result": report["feature_selection_result"],
             "feature_profiles": {variant: report["feature_selection_result"]}}
            if report.get("feature_selection_result") else {}),

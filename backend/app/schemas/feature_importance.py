@@ -26,7 +26,9 @@ class FeatureImportanceReport(BaseModel):
     features: list[FeatureInfluence]
     explanation_method: Literal["TreeExplainer", "GradientExplainer"] | None = None
     sequence_length: int | None = Field(default=None, ge=1)
-    history: "FeatureImportanceHistory | None" = None
+    input_features: list[str] = []
+    model_reports: list["AlgorithmFeatureReport"] = []
+    model_average: "ModelAverage | None" = None
 
 
 class AverageFeatureInfluence(BaseModel):
@@ -36,30 +38,24 @@ class AverageFeatureInfluence(BaseModel):
     reports_present: int = Field(ge=1)
 
 
-class SavedModelReport(BaseModel):
-    model_version_id: uuid.UUID
-    model_version: str
-    model_variant: str
-    dataset_filename: str | None
-    status: Literal["included", "missing", "unavailable", "unsupported", "invalid", "zero"]
+class AlgorithmFeatureReport(BaseModel):
+    model_name: str
+    status: Literal["ready", "pending", "unavailable", "unsupported"]
+    message: str | None
+    features: list[FeatureInfluence]
+    input_features: list[str] = []
+    sample_count: int = Field(ge=0)
+    generated_at: datetime | None
+    sequence_length: int | None
+    explanation_method: str | None
+    is_serving: bool
 
 
-class ExcludedReports(BaseModel):
-    missing: int = Field(ge=0)
-    unavailable: int = Field(ge=0)
-    unsupported: int = Field(ge=0)
-    invalid: int = Field(ge=0)
-    zero: int = Field(ge=0)
-
-
-class FeatureImportanceHistory(BaseModel):
-    status: Literal["ready", "pending"]
-    total_models: int = Field(ge=0)
-    used_reports: int = Field(ge=0)
-    excluded_reports: ExcludedReports
-    dataset_count: int = Field(ge=0)
+class ModelAverage(BaseModel):
+    status: Literal["ready", "incomplete"]
+    used_reports: int = Field(ge=0, le=5)
+    total_models: Literal[5]
     features: list[AverageFeatureInfluence]
-    models: list[SavedModelReport]
 
 
 FeatureImportanceReport.model_rebuild()

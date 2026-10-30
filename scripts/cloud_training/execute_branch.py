@@ -101,6 +101,7 @@ def run(job, dataset, output):
                     mlflow_tracking_uri=os.environ["MLFLOW_TRACKING_URI"], selected_models=selected,
                     shap_config=config.get("shap"),
                     feature_selection=config.get("feature_selection"),
+                    training_run_id=context["run_id"], explain_all_models=True,
                 )
                 info.update(model_family="legacy_sklearn", benchmark_only=False, inference_supported=True,
                             selection_metric="cross_validation_mean_MAE")

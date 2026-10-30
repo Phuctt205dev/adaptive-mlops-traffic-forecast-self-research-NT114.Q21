@@ -61,6 +61,9 @@ class TrainingTracker:
         report = (info.get("shap_report") or {}).get("source_report")
         if report:
             files["shap_report"] = Path(report)
+        for name, metadata in (info.get("shap_reports") or {}).items():
+            if metadata.get("source_report"):
+                files["shap_" + name] = Path(metadata["source_report"])
         for key, path in files.items():
             self.client.log_artifact(run_id, str(path), artifact_path=key)
         self.client.set_terminated(run_id, status="FINISHED")

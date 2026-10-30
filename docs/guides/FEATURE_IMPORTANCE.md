@@ -90,3 +90,27 @@ Thử sau triển khai: Ctrl+F5/đăng nhập admin, mở Feature Importance; xe
 biểu đồ và số report được dùng, đổi region, thử vùng chưa active/nếu có,
 Activate model khác tại Models rồi quay lại xem khu vực dưới đổi đúng.
 Refresh chỉ đọc báo cáo; không cần bắt đầu training để thử giao diện.
+
+Nếu history-v2 đã Apply dở và API bị Evicted vì `artifact-cache` vượt2Gi,
+**không chạy lại Apply cũ**. Dùng review phục hồi riêng đã chuẩn bị:
+
+```powershell
+& $py -B -X utf8 scripts/shap/recover_feature_importance_cache.py Check
+& $py -B -X utf8 scripts/shap/recover_feature_importance_cache.py Apply
+& $py -B -X utf8 scripts/shap/recover_feature_importance_cache.py Verify
+```
+
+Recovery mặc định `results/feature-importance/cache-recovery-v1`: chỉ nâng
+EmptyDir lên4Gi, requests đĩa API/init restore lên3Gi, limit đĩa API4Gi/
+init5Gi. Sidecar limit1Gi giữ nguyên nên tổng limit đĩa container thường
+là5Gi, đủ cho cache4Gi và overhead. Không tăng RAM, đổi image/source hoặc
+xóa model/MinIO. Check chỉ đọc metadata kích thước và dung lượng node,
+chặn nếu restore vượt80% cache mới hoặc node còn dưới6Gi. Guard giữ UID,
+full spec và review/journal cũ; không sửa gói history-v2 để vượt guard.
+
+Apply chỉ patch API đang dở, không rollout lại hai worker. Khi đủ hai API
+ready và toàn bộ nguồn/health/schema history hợp lệ, helper phục hồi trạng
+thái pause DAG theo journal ban đầu. Verify chỉ đọc; nếu Apply hồi phục
+đã bắt đầu nhưng dừng giữa chừng, không replay Apply: chẩn đoán rồi dùng
+`Resume` để kiểm và hoàn tất khi API đã ready. Dùng **Verify của recovery**
+sau bước này; Verify gói history-v2 cũ sẽ từ chối spec đã tăng cache.

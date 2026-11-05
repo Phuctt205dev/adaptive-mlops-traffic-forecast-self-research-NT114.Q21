@@ -4,10 +4,11 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import Mock
 import uuid
 
 from src.cloud_training.control import CONTROL_PREFIX
-from src.cloud_training.kaggle_execution import KaggleExecution, initial_ledger
+from src.cloud_training.kaggle_execution import KaggleExecution, TrainingCancelled, initial_ledger
 from src.cloud_training.kaggle_transport import ProviderError
 
 
@@ -171,6 +172,73 @@ class KaggleExecutionTests(unittest.TestCase):
         self.assertEqual(caught.exception.category, "file_not_ready")
         self.assertEqual(sum(op == "output_list" for op, _ in self.transport.calls), 12)
         self.assertEqual(sum(op == "kernel_push" for op, _ in self.transport.calls), 1)
+
+    def terminal_run(self, event_after=None):
+        self.transport.state = 'COMPLETE'
+        elapsed = [0]
+        self.provider.clock = lambda: elapsed[0]
+        self.provider.sleep = lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds)
+        self.provider.fetch = Mock(return_value={'verified': True})
+
+        class DelayedStream(FakeStream):
+            def drain(stream):
+                if event_after is not None and elapsed[0] >= event_after and not stream.events:
+                    stream.events = [{'control': 'child_completed'}]
+                return super().drain()
+
+        self.transport.stream = lambda *args: DelayedStream([])
+        return elapsed
+
+    def test_complete_status_waits_for_delayed_final_event_without_resubmitting(self):
+        elapsed = self.terminal_run(event_after=12)
+        result = self.provider.run(lambda event: None, lambda: False)
+        self.assertEqual(result, {'verified': True})
+        self.assertGreaterEqual(elapsed[0], 12)
+        self.assertEqual(sum(op == 'dataset_create' for op, _ in self.transport.calls), 1)
+        self.assertEqual(sum(op == 'kernel_push' and not value.get('no_run')
+                             for op, value in self.transport.calls), 1)
+
+    def test_complete_without_final_event_remains_failed_and_bounded(self):
+        elapsed = self.terminal_run()
+        with self.assertRaises(ProviderError) as caught:
+            self.provider.run(lambda event: None, lambda: False)
+        self.assertEqual(caught.exception.operation, 'terminal_events')
+        self.assertEqual(caught.exception.category, 'completion_unconfirmed')
+        self.assertLessEqual(elapsed[0], 90)
+        self.provider.fetch.assert_not_called()
+
+    def test_cancel_during_terminal_event_wait_never_fetches_output(self):
+        elapsed = self.terminal_run(event_after=12)
+        with self.assertRaises(TrainingCancelled):
+            self.provider.run(lambda event: None, lambda: elapsed[0] >= 5)
+        self.provider.fetch.assert_not_called()
+
+    def test_failed_child_is_rejected_even_with_complete_status_and_completion_event(self):
+        self.terminal_run()
+        self.transport.stream = lambda *args: FakeStream([
+            {'control': 'child_completed'}, {'control': 'failed'},
+        ])
+        with self.assertRaises(ProviderError):
+            self.provider.run(lambda event: None, lambda: False)
+        self.provider.fetch.assert_not_called()
+
+    def test_invalid_final_stream_is_not_accepted_as_completion(self):
+        self.terminal_run()
+        stream = FakeStream([{'control': 'child_completed'}])
+        stream.reader_failed = True
+        self.transport.stream = lambda *args: stream
+        with self.assertRaises(ProviderError):
+            self.provider.run(lambda event: None, lambda: False)
+        self.provider.fetch.assert_not_called()
+
+    def test_stream_exit_preserves_events_queued_during_reader_join(self):
+        class FinishingStream(FakeStream):
+            def returncode(stream):
+                stream.events.append({'control': 'child_completed'})
+                return 0
+        self.provider.stream = FinishingStream([])
+        self.provider.drain(lambda event: None)
+        self.assertTrue(self.provider.ledger.get('child_completed_observed'))
 
 
 if __name__ == "__main__":

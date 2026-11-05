@@ -18,6 +18,7 @@ from src.cloud_training.probe import canonical, sha256_file
 from src.cloud_training.errors import validate_failure
 
 TERMINAL = {"COMPLETE", "ERROR", "CANCEL_ACKNOWLEDGED"}
+TERMINAL_EVENT_WAIT_SECONDS = 90
 
 
 class TrainingCancelled(ProviderError):
@@ -225,7 +226,13 @@ class KaggleExecution:
     def drain(self, progress):
         if self.stream is None:
             self.stream = self.transport.stream(self.reference, self.ledger["snapshot"]["context"])
-        for event in self.stream.drain():
+        events = self.stream.drain()
+        # returncode() joins the stdout reader after process exit. That reader
+        # can enqueue the final acknowledgement AFTER the first queue drain.
+        ended = self.stream.returncode() is not None
+        if ended:
+            events.extend(self.stream.drain())
+        for event in events:
             if "control" in event:
                 stage = event["control"]
                 if stage not in {"control_ready", "child_running", "child_completed", "cancelled", "failed"}:
@@ -255,7 +262,7 @@ class KaggleExecution:
                     self.last_sequence = sequence
         if self.stream.reader_failed:
             raise ProviderError("Notebook progress stream could not be validated.")
-        if self.stream.returncode() is not None:
+        if ended:
             self.stream.stop()
             self.stream = None
 
@@ -272,16 +279,27 @@ class KaggleExecution:
                 self.drain(progress)
                 state = self.status()
                 if state in TERMINAL:
-                    # Final persisted stream is replayed to collect last events.
-                    for _ in range(3):
+                    # Provider status and persisted logs arrive independently.
+                    # Re-read the SAME version while awaiting its completion
+                    # acknowledgement; COMPLETE alone never permits output.
+                    wait = TERMINAL_EVENT_WAIT_SECONDS if state == 'COMPLETE' else 3
+                    event_deadline = min(deadline, self.clock() + wait)
+                    for _ in range(wait + 1):
+                        if cancelled():
+                            raise TrainingCancelled("The training run requested cancellation.")
                         self.drain(progress)
-                        if self.ledger.get("child_completed_observed"):
+                        if self.ledger.get("child_completed_observed") or self.ledger.get('failed_observed'):
                             break
-                        self.sleep(1)
-                    if state != "COMPLETE" or not self.ledger.get("child_completed_observed"):
+                        remaining = event_deadline - self.clock()
+                        if remaining <= 0:
+                            break
+                        self.sleep(min(1, remaining))
+                    if state != "COMPLETE" or not self.ledger.get("child_completed_observed") or self.ledger.get('failed_observed'):
                         category = ("ml_execution_failed" if self.ledger.get("failure_diagnostic") or self.ledger.get("supervisor_child_returncode") not in (None, 0) else
-                                    "supervisor_failed" if self.ledger.get("supervisor_failure") else "execution_validation")
-                        raise ProviderError("The notebook ended without successful ML output.", category=category)
+                                    "supervisor_failed" if self.ledger.get("supervisor_failure") else
+                                    "completion_unconfirmed" if state == 'COMPLETE' else "execution_validation")
+                        raise ProviderError("The notebook ended without successful ML output.",
+                                            operation='terminal_events', category=category)
                     return self.fetch()
                 self.sleep(3)
             raise ProviderError("Kaggle execution exceeded its monitoring deadline.")

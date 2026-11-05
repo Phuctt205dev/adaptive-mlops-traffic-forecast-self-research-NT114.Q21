@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import importlib
 import importlib.abc
+import importlib.machinery
 import importlib.util
 import inspect
 import json
@@ -29,6 +30,26 @@ class Overlay(importlib.abc.MetaPathFinder):
                 submodule_search_locations=[str(source.parent)] if source.name == "__init__.py" else None)
 
 
+class MissingPackages(importlib.abc.MetaPathFinder):
+    """Last-resort parents for reviewed modules absent from the base image."""
+    def __init__(self, document, root):
+        self.parents = {".".join(name.split(".")[:index])
+                        for name in document["modules"] for index in range(1, len(name.split(".")))}
+        self.files, self.root = document["files"], root
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname not in self.parents:
+            return None
+        directory = self.root / "project" / fullname.replace(".", "/")
+        initializer = directory / "__init__.py"
+        if initializer.relative_to(self.root).as_posix() in self.files:
+            return importlib.util.spec_from_file_location(fullname, initializer,
+                                                         submodule_search_locations=[str(directory)])
+        spec = importlib.machinery.ModuleSpec(fullname, loader=None, is_package=True)
+        spec.submodule_search_locations = [str(directory)]
+        return spec
+
+
 def verify(root=ROOT):
     document = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     content = {key: value for key, value in document.items() if key != "bundle_id"}
@@ -50,6 +71,19 @@ def install(document, root=ROOT):
     if any(name in sys.modules for name in sources):
         raise RuntimeError("Cloud overlay must be installed before application modules.")
     sys.meta_path.insert(0, Overlay(sources))
+    # Existing outer/image package loaders retain priority. New parent
+    # packages still need a spec before Python can ask for their leaf modules.
+    sys.meta_path.append(MissingPackages(document, root))
+
+
+def check_imports(root):
+    """Build-time import graph check; no app lifespan, worker, or DB query."""
+    document = verify(root)
+    sys.path.insert(0, "/app")
+    install(document, root)
+    importlib.import_module("backend.app.services.training_control")
+    importlib.import_module("backend.app.api.routes.training_monitor")
+    print(json.dumps({"application_imports_ready": True, "bundle_id": document["bundle_id"]}), flush=True)
 
 
 def gate_class(original, operation_lock):
@@ -325,5 +359,13 @@ def build_app(root=ROOT, *, dependency_root=None, dependency_target=None):
 
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(build_app(), host="0.0.0.0", port=8000, workers=1, access_log=False)
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check-imports", action="store_true")
+    parser.add_argument("--root", type=Path, default=ROOT)
+    args = parser.parse_args()
+    if args.check_imports:
+        check_imports(args.root)
+    else:
+        import uvicorn
+        uvicorn.run(build_app(root=args.root), host="0.0.0.0", port=8000, workers=1, access_log=False)

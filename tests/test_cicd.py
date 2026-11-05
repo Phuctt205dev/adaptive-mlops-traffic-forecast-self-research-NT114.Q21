@@ -141,6 +141,39 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn("backend.app.main", manifest["modules"])
         self.assertIn("app", manifest["modules"])
 
+    def test_overlay_loads_new_parent_package_without_replacing_existing_base_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = root / 'legacy'; (legacy / 'src').mkdir(parents=True)
+            (legacy / 'src/__init__.py').write_text("origin='legacy-package'\n")
+            (legacy / 'src/existing.py').write_text("origin='old-leaf'\n")
+            cloud = root / 'cloud'; package = cloud / 'project/src/cloud_training'; package.mkdir(parents=True)
+            (package / '__init__.py').write_text("origin='reviewed-new-package'\n")
+            (package / 'contracts.py').write_text("origin='reviewed-contracts'\n")
+            (cloud / 'project/src/existing.py').write_text("origin='reviewed-leaf'\n")
+            runtime = Path(__file__).resolve().parents[1] / 'deployment/rke2/runtime/cloud_training_runtime.py'
+            document = {'modules': {'src.cloud_training.contracts': 'project/src/cloud_training/contracts.py',
+                                    'src.existing': 'project/src/existing.py'},
+                        'files': {'project/src/cloud_training/__init__.py': 'checked'}}
+            script = """import importlib.util,json,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+import src
+spec=importlib.util.spec_from_file_location('runtime',sys.argv[2]);runtime=importlib.util.module_from_spec(spec);spec.loader.exec_module(runtime)
+runtime.install(json.loads(sys.argv[4]),Path(sys.argv[3]))
+from src.cloud_training import contracts
+import src.existing
+print(json.dumps({'package':src.origin,'new_package':sys.modules['src.cloud_training'].origin,'contracts':contracts.origin,'leaf':src.existing.origin}))
+try: import src.unreviewed
+except ModuleNotFoundError: pass
+else: raise AssertionError('Unknown module must not be synthesized')
+"""
+            result = subprocess.run([sys.executable, '-B', '-c', script, str(legacy), str(runtime), str(cloud), json.dumps(document)],
+                                    cwd=root, text=True, encoding='utf-8', capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), {'package': 'legacy-package', 'new_package': 'reviewed-new-package',
+                                                         'contracts': 'reviewed-contracts', 'leaf': 'reviewed-leaf'})
+
 
 class PatchTests(unittest.TestCase):
     def test_only_runtime_image_and_metadata_change_and_inverse_restores_exactly(self):

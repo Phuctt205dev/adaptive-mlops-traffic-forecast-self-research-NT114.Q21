@@ -49,7 +49,18 @@ Sau đó action lấy TokenRequest có thời hạn và ghi kubeconfig riêng v�
 ./scripts/cicd/setup.ps1 -Action StartRunner
 ```
 
-RegisterRunner tải Windows x64 runner chính thức, kiểm checksum, đăng ký label `rke2-deploy`, không tự chạy. StartRunner chạy nền ẩn dưới tài khoản Windows hiện tại, dùng `_work` riêng bên trong thư mục runner. Source đang mở không bị reset/clean. Khi cần, runner Node dùng bundle các CA public Windows đã tin cậy; không tắt xác minh TLS.
+RegisterRunner tải Windows x64 runner chính thức, kiểm checksum, đăng ký label `rke2-deploy`, không tự chạy. Work directory đặt ngắn tại `D:\traffic-cd-work` trên máy dự án hiện tại (tổng quát: `traffic-cd-work` ở root ổ chứa dự án), tách khỏi thư mục cài runner và source đang mở. GitHub còn lặp tên repo hai lần bên dưới work directory, nên đặt work trong đường dẫn dự án dài có thể khiến Git lỗi ngay khi tạo pack file.
+
+StartRunner chạy nền ẩn dưới tài khoản Windows hiện tại và bật `core.longpaths=true` qua biến môi trường chỉ cho tiến trình runner/con của nó. Không sửa Git config global/system hoặc Windows registry. Source đang mở không bị reset/clean. Khi cần, runner Node dùng bundle các CA public Windows đã tin cậy; không tắt xác minh TLS.
+
+Với runner cũ còn dùng `_work` sâu trong dự án và bị `Filename too long`, chỉ khi runner idle và không có Worker đang chạy:
+
+```powershell
+./scripts/cicd/setup.ps1 -Action RepairRunner
+./scripts/cicd/setup.ps1 -Action StartRunner
+```
+
+RepairRunner dùng công cụ cấu hình runner chính thức để đăng ký lại cùng repo với work directory ngắn, giữ nguyên checkout lỗi cũ và workspace dự án. Nó từ chối nếu runner đang bận, đã dùng work directory ngắn hoặc đích mới không rỗng; không chạy lại tùy tiện trên runner đã được sửa.
 
 Máy cần bật, Tailscale và runner hoạt động khi deploy. Bản đầu chưa cài service/Task Scheduler tự khởi động sau đăng nhập hoặc reboot; chạy StartRunner lại khi mở phiên Windows mới. GitHub có thể giữ job chờ khi runner offline.
 

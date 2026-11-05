@@ -1,7 +1,7 @@
 # One-time operator setup. Check is read-only; other actions are explicit.
 [CmdletBinding()]
 param(
-    [ValidateSet('Check', 'ConfigureGitHub', 'CreateAccess', 'RegisterRunner', 'StartRunner', 'EnableCD')]
+    [ValidateSet('Check', 'ConfigureGitHub', 'CreateAccess', 'RegisterRunner', 'RepairRunner', 'StartRunner', 'EnableCD')]
     [string]$Action = 'Check',
     [string]$PullSecretName = '',
     [switch]$PublicImageConfirmed
@@ -10,6 +10,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $privateDirectory = Join-Path $projectRoot 'results\cicd\private'
 $runnerDirectory = Join-Path $projectRoot 'results\cicd\actions-runner'
+$runnerWorkDirectory = Join-Path ([IO.Path]::GetPathRoot($projectRoot)) 'traffic-cd-work'
 $deliveryConfig = Join-Path $privateDirectory 'kubeconfig.json'
 $repository = 'Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21'
 $apiRoot = 'https://api.github.com/repos/' + $repository
@@ -81,6 +82,24 @@ function New-PrivateDirectory([string]$Directory) {
     Set-Acl -LiteralPath $Directory -AclObject $acl
 }
 
+function Initialize-RunnerWorkDirectory {
+    $repoName = ($repository -split '/')[-1]
+    $workspace = Join-Path (Join-Path $runnerWorkDirectory $repoName) $repoName
+    $packFile = Join-Path $workspace ('.git\objects\pack\pack-' + ('a' * 40) + '.keep')
+    if ($packFile.Length -gt 220) { throw 'Runner work directory is still too long; choose a shorter drive-root location.' }
+    if (-not (Test-Path -LiteralPath $runnerWorkDirectory)) { New-PrivateDirectory $runnerWorkDirectory }
+}
+
+function Configure-LocalRunner([string]$RunnerName) {
+    Initialize-RunnerWorkDirectory
+    $registration = Invoke-GitHub POST ($apiRoot + '/actions/runners/registration-token')
+    Push-Location $runnerDirectory
+    try {
+        $setupOutput = & ./config.cmd --unattended --url ('https://github.com/' + $repository) --token $registration.token --name $RunnerName --labels 'rke2-deploy' --work $runnerWorkDirectory 2>&1
+        if ($LASTEXITCODE -ne 0) { throw 'Runner registration failed; raw setup output omitted.' }
+    } finally { Pop-Location; $registration = $null; $setupOutput = $null }
+}
+
 try {
     if ($Action -eq 'Check') {
         $runners = Invoke-GitHub GET ($apiRoot + '/actions/runners')
@@ -138,13 +157,36 @@ try {
         Invoke-WebRequest -Uri $asset.download_url -OutFile $archive -UseBasicParsing -TimeoutSec 180
         if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $asset.sha256_checksum.ToLowerInvariant()) { throw 'Runner archive checksum differs.' }
         Expand-Archive -LiteralPath $archive -DestinationPath $runnerDirectory -Force
-        $registration = Invoke-GitHub POST ($apiRoot + '/actions/runners/registration-token')
+        Configure-LocalRunner ('rke2-' + $env:COMPUTERNAME)
+        Write-Output 'Windows runner registered with a short work directory; it has not been started.'
+    }
+    elseif ($Action -eq 'RepairRunner') {
+        $configurationPath = Join-Path $runnerDirectory '.runner'
+        $configuration = Get-Content -LiteralPath $configurationPath -Raw | ConvertFrom-Json
+        if ($configuration.gitHubUrl.TrimEnd('/') -ne ('https://github.com/' + $repository)) { throw 'The registered runner belongs to another repository.' }
+        if ($configuration.workFolder -eq $runnerWorkDirectory) { throw 'The runner already has the short work directory; inspect before reconfiguring.' }
+        if ((Test-Path -LiteralPath $runnerWorkDirectory) -and @(Get-ChildItem -LiteralPath $runnerWorkDirectory -Force).Count) {
+            throw 'The new work directory is not empty; preserve it and inspect before repair.'
+        }
+        $runners = Invoke-GitHub GET ($apiRoot + '/actions/runners')
+        $registered = $runners.runners | Where-Object { $_.id -eq $configuration.agentId }
+        if (-not $registered -or $registered.busy) { throw 'The runner is missing or busy; do not interrupt an active delivery.' }
+        $workers = @(Get-Process -Name 'Runner.Worker' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ($runnerDirectory + '\*') })
+        if ($workers.Count) { throw 'A runner worker process is active; do not reconfigure it.' }
+        Initialize-RunnerWorkDirectory
+        $listeners = @(Get-Process -Name 'Runner.Listener' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ($runnerDirectory + '\*') })
+        foreach ($listener in $listeners) {
+            Stop-Process -Id $listener.Id -ErrorAction Stop
+            $listener.WaitForExit(10000) | Out-Null
+        }
+        $removal = Invoke-GitHub POST ($apiRoot + '/actions/runners/remove-token')
         Push-Location $runnerDirectory
         try {
-            $setupOutput = & ./config.cmd --unattended --url ('https://github.com/' + $repository) --token $registration.token --name ('rke2-' + $env:COMPUTERNAME) --labels 'rke2-deploy' --work '_work' 2>&1
-            if ($LASTEXITCODE -ne 0) { throw 'Runner registration failed; raw setup output omitted.' }
-        } finally { Pop-Location; $registration = $null; $setupOutput = $null }
-        Write-Output 'Windows runner registered; it has not been started.'
+            $setupOutput = & ./config.cmd remove --token $removal.token 2>&1
+            if ($LASTEXITCODE -ne 0) { throw 'Runner removal failed; old workspace was not removed.' }
+        } finally { Pop-Location; $removal = $null; $setupOutput = $null }
+        Configure-LocalRunner $configuration.agentName
+        Write-Output 'Runner reconfigured with a short work directory. The old checkout and project workspace were preserved; start the runner again.'
     }
     elseif ($Action -eq 'StartRunner') {
         if (-not (Test-Path -LiteralPath $deliveryConfig)) { throw 'Create dedicated Kubernetes access before starting the runner.' }
@@ -160,8 +202,25 @@ try {
             [IO.File]::WriteAllText($pemPath, $pemText, (New-Object Text.UTF8Encoding($false)))
             $env:NODE_EXTRA_CA_CERTS = $pemPath
         }
+        # Child Git processes need long-path support before checkout begins.
+        # Scope this to the runner process, preserving the user's Git config.
+        $oldGitCount = [Environment]::GetEnvironmentVariable('GIT_CONFIG_COUNT', 'Process')
+        $gitCount = 0
+        if ($oldGitCount -and -not [int]::TryParse($oldGitCount, [ref]$gitCount)) { throw 'Invalid inherited GIT_CONFIG_COUNT.' }
+        $gitKeyName = 'GIT_CONFIG_KEY_' + $gitCount
+        $gitValueName = 'GIT_CONFIG_VALUE_' + $gitCount
+        $oldGitKey = [Environment]::GetEnvironmentVariable($gitKeyName, 'Process')
+        $oldGitValue = [Environment]::GetEnvironmentVariable($gitValueName, 'Process')
+        [Environment]::SetEnvironmentVariable('GIT_CONFIG_COUNT', [string]($gitCount + 1), 'Process')
+        [Environment]::SetEnvironmentVariable($gitKeyName, 'core.longpaths', 'Process')
+        [Environment]::SetEnvironmentVariable($gitValueName, 'true', 'Process')
         try { Start-Process -FilePath $env:ComSpec -ArgumentList @('/c', 'run.cmd') -WorkingDirectory $runnerDirectory -WindowStyle Hidden }
-        finally { $env:NODE_EXTRA_CA_CERTS = $previousCaBundle }
+        finally {
+            $env:NODE_EXTRA_CA_CERTS = $previousCaBundle
+            [Environment]::SetEnvironmentVariable('GIT_CONFIG_COUNT', $oldGitCount, 'Process')
+            [Environment]::SetEnvironmentVariable($gitKeyName, $oldGitKey, 'Process')
+            [Environment]::SetEnvironmentVariable($gitValueName, $oldGitValue, 'Process')
+        }
         Write-Output 'Runner started in the background under the current Windows account.'
     }
     elseif ($Action -eq 'EnableCD') {

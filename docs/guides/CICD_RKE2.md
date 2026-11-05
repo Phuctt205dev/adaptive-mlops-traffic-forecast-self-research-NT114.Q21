@@ -93,6 +93,8 @@ Push vào nhánh mặc định → Backend CI tạo image/artifact → Deploy Ba
 
 Runner xác minh artifact đúng commit và image digest. Preflight kiểm namespace UID, trạng thái training, migration head, cache API 4Gi, dung lượng restore dưới 80%, disk headroom và entrypoint. Runner giữ khóa bảo trì từ Job độc lập, pause DAG theo trạng thái đã ghi rồi cập nhật hai worker/API. Trong cửa sổ giữ khóa, các request ứng dụng chịu barrier có thể tạm trả busy; không cam kết zero downtime. Auth/health và một số route đọc vùng không bị barrier này chặn.
 
+Script Windows chọn **một** executable Python/kubectl theo thứ tự PATH; `Get-Command` có thể trả nhiều Application và không được truyền cả mảng vào toán tử `&`. Khi đã nạp các biến RKE2_* cần thiết, có thể kiểm chính wrapper bằng `deliver.ps1 -ArtifactDirectory <artifact> -ExpectedCommit <sha> -Action Plan`: kiểm file và server dry-run, không Apply. Workflow thông thường giữ mặc định Apply, sau đó tự Verify.
+
 Verify kiểm mọi replica đang hoạt động, release thực chạy, API readiness và import/graph/hash DAG; pod Failed/Completed lịch sử không tính là replica ready. Cuối cùng khôi phục pause state, xác nhận fingerprint active model/dataset không đổi và thả khóa. Chạy lại đúng release đã có chỉ Verify, không tạo rollout hoặc Job bảo trì mới.
 
 ## Lỗi, log và phục hồi

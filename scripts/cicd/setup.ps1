@@ -57,7 +57,7 @@ function Set-VariableValue([string]$Name, [string]$Value) {
 function Get-Cli {
     $cli = Join-Path $env:LOCALAPPDATA 'Programs\kubectl\kubectl.exe'
     if (Test-Path -LiteralPath $cli -PathType Leaf) { return $cli }
-    return (Get-Command kubectl -CommandType Application -ErrorAction Stop).Source
+    return (Get-Command kubectl -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 }
 
 function Invoke-Kube([string[]]$Arguments) {

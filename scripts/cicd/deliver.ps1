@@ -1,16 +1,17 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$ArtifactDirectory,
-    [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-f]{40}$')][string]$ExpectedCommit
+    [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-f]{40}$')][string]$ExpectedCommit,
+    [ValidateSet('Plan', 'Apply', 'Verify')][string]$Action = 'Apply'
 )
 $ErrorActionPreference = 'Stop'
 if (-not $env:RKE2_CONTEXT -or -not $env:RKE2_NAMESPACE_UID -or -not $env:RKE2_KUBECONFIG) {
     throw 'Set RKE2_CONTEXT, RKE2_NAMESPACE_UID and the dedicated RKE2_KUBECONFIG path.'
 }
-$python = (Get-Command python -CommandType Application -ErrorAction Stop).Source
+$python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 $kubectl = Join-Path $env:LOCALAPPDATA 'Programs\kubectl\kubectl.exe'
 if (-not (Test-Path -LiteralPath $kubectl -PathType Leaf)) {
-    $kubectl = (Get-Command kubectl -CommandType Application -ErrorAction Stop).Source
+    $kubectl = (Get-Command kubectl -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 }
 $artifactRoot = (Resolve-Path -LiteralPath $ArtifactDirectory).Path
 $delivery = Get-Content -LiteralPath (Join-Path $artifactRoot 'delivery.json') -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -33,7 +34,9 @@ $deliveryArgs = @('--directory', $checkedRoot, '--image', $delivery.image, '--co
     '--journal', $journal, '--kubectl', $kubectl, '--context', $env:RKE2_CONTEXT, '--namespace-uid', $env:RKE2_NAMESPACE_UID,
     '--kubeconfig', $env:RKE2_KUBECONFIG)
 if ($env:RKE2_IMAGE_PULL_SECRET) { $deliveryArgs += @('--pull-secret', $env:RKE2_IMAGE_PULL_SECRET) }
-& $python -B scripts/cicd/deploy.py Apply @deliveryArgs
-if ($LASTEXITCODE -ne 0) { throw 'Delivery failed. Inspect its receipt before starting another release.' }
-& $python -B scripts/cicd/deploy.py Verify @deliveryArgs
-if ($LASTEXITCODE -ne 0) { throw 'Post-delivery verification failed.' }
+& $python -B scripts/cicd/deploy.py $Action @deliveryArgs
+if ($LASTEXITCODE -ne 0) { throw 'Delivery operation failed. Inspect its receipt before starting another release.' }
+if ($Action -eq 'Apply') {
+    & $python -B scripts/cicd/deploy.py Verify @deliveryArgs
+    if ($LASTEXITCODE -ne 0) { throw 'Post-delivery verification failed.' }
+}

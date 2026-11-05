@@ -29,8 +29,10 @@ class NeuralModelTests(unittest.TestCase):
         self.assertIsInstance(model.get_layer("gru_layer"), keras.layers.GRU)
 
     def test_reject_unsupported_model(self):
-        with self.assertRaisesRegex(ValueError, "không được hỗ trợ"):
+        with self.assertRaisesRegex(ValueError, r"Unsupported model: RNN") as error:
             build_recurrent_model("RNN", (168, 30))
+        self.assertIn("LSTM", str(error.exception))
+        self.assertIn("GRU", str(error.exception))
 
     def test_inverse_target_scaling(self):
         scaler = StandardScaler().fit(

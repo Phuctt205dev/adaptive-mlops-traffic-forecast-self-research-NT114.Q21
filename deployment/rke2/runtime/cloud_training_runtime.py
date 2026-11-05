@@ -311,7 +311,8 @@ def install_neural_shap_dependencies(root=Path("/opt/traffic-shap"), target=Path
     sys.path.insert(0, str(target))
 
 
-def build_app(root=ROOT, *, dependency_root=None, dependency_target=None):
+def build_app(root=ROOT, *, dependency_root=None, dependency_target=None,
+              release_file=Path("/opt/traffic-release/release.json")):
     document = verify(root)
     mode = os.environ.get("TRAFFIC_CLOUD_MODE")
     if mode not in {"worker", "api"}:
@@ -378,7 +379,6 @@ def build_app(root=ROOT, *, dependency_root=None, dependency_target=None):
     @app.get(health_path, include_in_schema=False)
     def outer_health():
         return {"status": "ok", "revision": outer.REVISION, "bundle_id": outer_manifest["bundle_id"], "role": role}
-    release_file = Path("/opt/traffic-release/release.json")
     if release_file.is_file():
         release = json.loads(release_file.read_text(encoding="utf-8"))
         if release.get("cloud_bundle_id") != document["bundle_id"]:

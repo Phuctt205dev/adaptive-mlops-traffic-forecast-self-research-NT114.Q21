@@ -10,7 +10,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
-from scripts.cicd import deploy, github_gate, maintenance, release
+from scripts.cicd import deploy, github_gate, maintenance, release, startup
 
 COMMIT = "a" * 40
 IMAGE = "ghcr.io/example/traffic/backend@sha256:" + "b" * 64
@@ -258,6 +258,25 @@ class GateTests(unittest.TestCase):
                 github_gate.validate("owner/repo", "1", fetch=Mock(side_effect=values))
 
 
+class StartupTests(unittest.TestCase):
+    def test_only_complete_identity_and_gate_proof_can_allow_rollout(self):
+        release_document = {"cloud_bundle_id": "checked-bundle", "commit": COMMIT, "release_id": "checked-release"}
+        proof = {"source_startup_verified": True, "execution_gate_verified": True, "release_health_verified": True,
+                 "lifespan_not_started": True, "fit_called": False, "deployment_changed": False,
+                 "bundle_id": "checked-bundle", "commit": COMMIT, "release_id": "checked-release"}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'payload/cloud').mkdir(parents=True)
+            cluster = Mock(); cluster.pod.return_value = 'existing-pod'
+            cluster.call.return_value = 'startup log\nTRAFFIC_DELIVERY_STARTUP ' + json.dumps(proof)
+            accepted = startup.check(cluster, root, release_document, 'traffic-api', deployment(), {'name': 'traffic-api'})
+            self.assertTrue(accepted['execution_gate_verified'])
+            for key, value in (('execution_gate_verified', False), ('bundle_id', 'different-source'), ('fit_called', True)):
+                with self.subTest(key=key):
+                    cluster.call.return_value = 'TRAFFIC_DELIVERY_STARTUP ' + json.dumps({**proof, key: value})
+                    with self.assertRaisesRegex(RuntimeError, 'before rollout'):
+                        startup.check(cluster, root, release_document, 'traffic-api', deployment(), {'name': 'traffic-api'})
+
+
 class DeliveryTests(unittest.TestCase):
     def operator(self):
         temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
@@ -267,6 +286,7 @@ class DeliveryTests(unittest.TestCase):
         operator = deploy.Delivery(cluster, root / "package", IMAGE, root / "journal.json", commit=COMMIT)
         values = {name: deployment(name) for name in operator.names}
         operator.inventory = Mock(return_value=(values, {"dag_paused": False}))
+        operator.check_startup = Mock(return_value=[])
         plans = {}
         for name, before in values.items():
             forward, inverse = deploy.release_patch(before, IMAGE, operator.release["release_id"])
@@ -316,6 +336,16 @@ class DeliveryTests(unittest.TestCase):
             operator.apply()
         operator.start_guard.assert_not_called()
         operator.cluster.patch.assert_not_called()
+
+    def test_candidate_startup_failure_stops_before_guard_pause_and_patch(self):
+        operator, _ = self.operator()
+        operator.check_startup.side_effect = RuntimeError("Candidate startup/gates failed before rollout")
+        with self.assertRaisesRegex(RuntimeError, "Candidate startup"):
+            operator.apply()
+        operator.start_guard.assert_not_called()
+        operator.pause.assert_not_called()
+        operator.cluster.patch.assert_not_called()
+        self.assertFalse(operator.state.get("started"))
 
     def test_external_change_stops_instead_of_overwriting_it(self):
         operator, values = self.operator()

@@ -19,6 +19,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from scripts.cicd.release import DIGEST_IMAGE, canonical, digest, read_json, verify
+from scripts.cicd import startup
 from scripts.cloud_training.manage_rollout import READINESS
 from scripts.shap.recover_feature_importance_cache import INVENTORY, CACHE_BYTES
 
@@ -196,6 +197,16 @@ class Delivery:
         temporary = self.path.with_suffix(".tmp")
         temporary.write_text(json.dumps(self.state, indent=2), encoding="utf-8")
         temporary.replace(self.path)
+
+    def check_startup(self):
+        proofs = []
+        for name in self.release["baseline"]["application_deployments"]:
+            print(json.dumps({"phase": "candidate_startup", "deployment": name}), flush=True)
+            deployment = self.cluster.deployment(name)
+            proof = startup.check(self.cluster, self.directory, self.release, name, deployment, container(deployment)[1])
+            proofs.append(proof)
+            self.save(startup_proofs=proofs)
+        return proofs
 
     def inventory(self):
         namespace = self.cluster.call("get", "namespace", "traffic-mlops", "-o", "json")
@@ -399,6 +410,7 @@ class Delivery:
             self.save(completed=True, up_to_date=True)
             return {"up_to_date": True}
         _, _, plans = self.plan()
+        self.check_startup()
         self.save(started=True, completed=False, rolled_back=False, patched=[], plans=plans, dag_was_paused=readiness["dag_paused"])
         try:
             self.start_guard(values["traffic-api"])
@@ -413,6 +425,7 @@ class Delivery:
                 if plan["before"] == plan["after"]:
                     continue
                 self.save(patched=[*self.state["patched"], name])
+                print(json.dumps({"phase": "rollout", "deployment": name}), flush=True)
                 self.cluster.patch(current, plan["patch"])
                 self.cluster.wait(name)
                 if spec_hash(self.cluster.deployment(name)) != plan["after"]:

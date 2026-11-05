@@ -86,6 +86,40 @@ def check_imports(root):
     print(json.dumps({"application_imports_ready": True, "bundle_id": document["bundle_id"]}), flush=True)
 
 
+def build_serving_app(shap):
+    """Compose verified serving guards with features already in tracked API."""
+    manifest = shap.verify_bundle(shap.ROOT, "api")
+    shap.install_modules(manifest, "api", shap.ROOT)
+    quality_root = Path("/opt/traffic-quality")
+    spec = importlib.util.spec_from_file_location("release_quality_contract", quality_root / "model_quality_runtime.py")
+    quality = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(quality)
+    quality.verify_bundle(quality_root, Path("/opt/traffic-runtime"), Path("/app"))
+    sys.path.insert(0, "/opt/traffic-runtime")
+    serving = importlib.import_module("prediction_serving_runtime")
+    app = serving.build_app()
+    if not getattr(app.state, "training_execution_disabled", False) or not hasattr(app.state, "prediction_runtime"):
+        raise RuntimeError("The original serving guards are required.")
+    expected = {quality.QUALITY_PATH, "/api/v1/admin/regions/{region_id}/feature-importance"}
+    if not expected.issubset(app.openapi()["paths"]):
+        raise RuntimeError("The tracked API must provide the reviewed quality and feature routes.")
+
+    @app.get(quality.HEALTH_PATH, include_in_schema=False)
+    def quality_health():
+        return {"status": "ok", "revision": quality.REVISION, "quality_window": "recent",
+                "reference_source": "dataset_traffic_volume", "supported_hours": [24, 168, 336],
+                "default_hours": 168, "refresh_policy": "hour_boundary", "training_execution_disabled": True}
+
+    @app.get("/api/v1/health/shap", include_in_schema=False)
+    def shap_health():
+        return {"status": "ok", "revision": shap.REVISION, "bundle_id": manifest["bundle_id"],
+                "mode": "api", "profile": "trees-first", "feature_importance_ready": True}
+
+    app.state.model_quality_revision = quality.REVISION
+    app.openapi_schema = None
+    return app
+
+
 def gate_class(original, operation_lock):
     class ControlGate(original):
         def __init__(self, *args, **kwargs):
@@ -318,7 +352,7 @@ def build_app(root=ROOT, *, dependency_root=None, dependency_target=None):
             install(document, root)
             return finder
         shap.install_modules = combined
-        app = shap.build_app(mode=mode)
+        app = build_serving_app(shap) if mode == "api" else shap.build_app(mode=mode)
     else:
         install(document, root)
         app = base.build_app()
@@ -327,7 +361,7 @@ def build_app(root=ROOT, *, dependency_root=None, dependency_target=None):
         add_control(app, base, operation_lock, project, captured_routes.get("finalizer"))
     else:
         monitor = importlib.import_module("backend.app.api.routes.training_monitor")
-        if not any(getattr(route, "path", "") == "/api/v1/admin/training-monitor/capabilities" for route in app.routes):
+        if "/api/v1/admin/training-monitor/capabilities" not in app.openapi()["paths"]:
             app.include_router(monitor.router, prefix="/api/v1/admin", tags=["training-monitor"])
         app.openapi_schema = None
         @app.get("/api/v1/health/cloud-training", include_in_schema=False)

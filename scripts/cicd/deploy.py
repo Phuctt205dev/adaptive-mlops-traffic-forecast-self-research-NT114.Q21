@@ -295,6 +295,26 @@ class Delivery:
             self.cluster.call("exec", self.state["guard_pod"], "--", "python", "-B", "-c", "from pathlib import Path;Path('/tmp/delivery-release').touch()")
         return self.cluster.call("exec", self.state["guard_pod"], "--", "python", "-B", "-c", GUARD_STATUS)
 
+    def guard_start_failure(self):
+        details = {"phase": "startup", "error_type": "UnknownError"}
+        try:
+            logs = self.cluster.call("logs", self.state["guard_pod"], json_output=False)
+            for line in reversed(logs.splitlines()[-20:]):
+                try:
+                    event = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(event, dict) and event.get("maintenance") == "failed":
+                    for key in details:
+                        value = event.get(key)
+                        if isinstance(value, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,59}", value):
+                            details[key] = value
+                    break
+        except RuntimeError:
+            pass
+        self.save(guard_failure=details)
+        return RuntimeError("Maintenance guard failed (phase=" + details["phase"] + ", type=" + details["error_type"] + ").")
+
     def start_guard(self, api):
         _, main = container(api)
         env = copy.deepcopy(main.get("env", []))
@@ -319,16 +339,24 @@ class Delivery:
         self.cluster.call("create", "-f", "-", "-o", "json", value=job)
         for _ in range(90):
             pods = self.cluster.call("get", "pods", "-l", "job-name=" + name, "-o", "json")["items"]
-            if pods and pods[0].get("status", {}).get("phase") == "Running":
+            if pods:
                 self.save(guard_pod=pods[0]["metadata"]["name"])
-                status = self.guard_status()
+            running = pods and pods[0].get("status", {}).get("phase") == "Running" and any(
+                c.get("name") == "guard" and c.get("state", {}).get("running") for c in pods[0].get("status", {}).get("containerStatuses", []))
+            if running:
+                try:
+                    status = self.guard_status()
+                except RuntimeError:
+                    # The container may exit after the Running snapshot. Read
+                    # its terminal state/logs on the next poll, not an exec race.
+                    status = {"state": "starting"}
                 if status["state"] == "held":
                     self.save(guard_held=True)
                     return
                 if status["state"] == "failed":
-                    raise RuntimeError("Maintenance guard could not be acquired.")
+                    raise self.guard_start_failure()
             if any(p.get("status", {}).get("phase") in {"Failed", "Succeeded"} for p in pods):
-                raise RuntimeError("Maintenance guard terminated before acquiring its lock.")
+                raise self.guard_start_failure()
             time.sleep(2)
         raise RuntimeError("Maintenance guard did not become ready.")
 

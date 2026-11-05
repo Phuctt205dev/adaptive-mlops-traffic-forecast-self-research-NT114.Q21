@@ -103,6 +103,7 @@ def build(root, output, commit, *, tracked=None):
     payload["Dockerfile"] = ("FROM " + baseline["application_base_image"] + "\n"
         "COPY payload/ /opt/traffic-release/\n"
         "COPY release.json /opt/traffic-release/release.json\n"
+        'RUN ["python", "-B", "/opt/traffic-release/maintenance.py", "--check-imports"]\n'
         "LABEL org.opencontainers.image.revision=" + commit + "\n").encode()
     payload[".dockerignore"] = b"**\n!Dockerfile\n!release.json\n!payload/\n!payload/**\n"
     document = {"schema": SCHEMA, "commit": commit, "baseline": baseline,

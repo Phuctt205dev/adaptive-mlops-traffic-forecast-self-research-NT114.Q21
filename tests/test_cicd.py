@@ -1,7 +1,10 @@
 """Delivery safety and immutable packaging; no live services or credentials."""
 import copy
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -86,6 +89,8 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn("payload/maintenance.py", document["files"])
         self.assertIn("payload/cloud/project/docs/index.html", document["files"])
         self.assertIn("FROM example.com/base@sha256:", (self.output / "Dockerfile").read_text())
+        self.assertIn('RUN ["python", "-B", "/opt/traffic-release/maintenance.py", "--check-imports"]',
+                      (self.output / "Dockerfile").read_text())
 
     def test_missing_tracked_runtime_fails_clean_checkout(self):
         self.files.pop("deployment/rke2/runtime/cloud_training_runtime.py")
@@ -321,6 +326,21 @@ class DeliveryTests(unittest.TestCase):
             operator.apply()
         operator.inventory.assert_not_called()
 
+    def test_guard_exit_between_running_and_exec_reports_safe_startup_cause(self):
+        operator, _ = self.operator()
+        running = {"metadata": {"name": "guard-pod"}, "status": {"phase": "Running", "containerStatuses": [
+            {"name": "guard", "state": {"running": {"startedAt": "now"}}}]}}
+        failed = copy.deepcopy(running)
+        failed["status"].update(phase="Failed", containerStatuses=[{"name": "guard", "state": {"terminated": {"exitCode": 1}}}])
+        operator.cluster.call.side_effect = [{}, {"items": [running]}, {"items": [failed]},
+            json.dumps({"maintenance": "failed", "phase": "imports", "error_type": "ModuleNotFoundError", "private": "must-not-log"})]
+        operator.guard_status.side_effect = RuntimeError("container already exited")
+        with patch.object(deploy.time, "sleep"), self.assertRaisesRegex(RuntimeError, "phase=imports, type=ModuleNotFoundError"):
+            deploy.Delivery.start_guard(operator, deployment())
+        self.assertEqual(operator.state['guard_failure'], {'phase': 'imports', 'error_type': 'ModuleNotFoundError'})
+        self.assertNotIn('must-not-log', json.dumps(operator.state))
+        operator.cluster.patch.assert_not_called()
+
 
 class MaintenanceTests(unittest.TestCase):
     def run_guard(self, *, pending=0, acquired=True, fingerprints=None):
@@ -335,6 +355,7 @@ class MaintenanceTests(unittest.TestCase):
             return result
         connection.execute.side_effect = execute
         with patch('sqlalchemy.create_engine', return_value=engine), \
+             patch.object(maintenance, 'APP_ROOT', Path(__file__).resolve().parents[1]), \
              patch('backend.app.core.config.get_settings', return_value=SimpleNamespace(database_url='fixture')), \
              patch.object(maintenance, 'fingerprint', side_effect=fingerprints or [{'same': 'identity'}, {'same': 'identity'}]), \
              patch.object(maintenance, 'write_status') as status, \
@@ -365,6 +386,39 @@ class MaintenanceTests(unittest.TestCase):
         outcome, _, status, _ = self.run_guard(fingerprints=[{'active': 'before'}, {'active': 'after'}])
         self.assertEqual(outcome, 1)
         self.assertEqual(status.call_args.kwargs['state'], 'failed')
+
+    def test_import_failure_is_recorded_before_engine_creation(self):
+        with patch.object(maintenance, 'load_runtime', side_effect=ModuleNotFoundError('private-import-detail')), \
+             patch.object(maintenance, 'write_status') as status, patch('builtins.print') as output:
+            self.assertEqual(maintenance.main(), 1)
+        self.assertEqual(status.call_args.kwargs, {'state': 'failed', 'phase': 'imports', 'error_type': 'ModuleNotFoundError'})
+        self.assertNotIn('private-import-detail', str(output.call_args_list))
+
+    def test_image_import_smoke_never_evaluates_settings_or_opens_database(self):
+        factory, settings = Mock(), Mock()
+        with patch.object(maintenance, 'load_runtime', return_value=(factory, Mock(), settings)), patch('builtins.print'):
+            self.assertEqual(maintenance.check_imports(), 0)
+        factory.assert_not_called()
+        settings.assert_not_called()
+
+    def test_guard_outside_app_imports_explicit_app_root_in_fresh_process(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            application = root / 'application'
+            configuration = application / 'backend/app/core/config.py'
+            configuration.parent.mkdir(parents=True)
+            for folder in (application / 'backend', application / 'backend/app', configuration.parent):
+                (folder / '__init__.py').write_text('')
+            configuration.write_text("def get_settings(): return 'isolated-application'\n")
+            other_cwd = root / 'unrelated-working-directory'; other_cwd.mkdir()
+            script = "import json,runpy,sys; m=runpy.run_path(sys.argv[1],run_name='guard_probe'); _,_,settings=m['load_runtime'](sys.argv[2]); print(json.dumps({'settings':settings(),'source':settings.__code__.co_filename}))"
+            environment = {key: value for key, value in os.environ.items() if key not in {'PYTHONPATH', 'PYTHONHOME'}}
+            result = subprocess.run([sys.executable, '-B', '-c', script, str(Path(maintenance.__file__).resolve()), str(application)],
+                                    cwd=other_cwd, env=environment, text=True, encoding='utf-8', capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            proof = json.loads(result.stdout)
+            self.assertEqual(proof['settings'], 'isolated-application')
+            self.assertEqual(Path(proof['source']).resolve(), configuration.resolve())
 
 
 if __name__ == "__main__":

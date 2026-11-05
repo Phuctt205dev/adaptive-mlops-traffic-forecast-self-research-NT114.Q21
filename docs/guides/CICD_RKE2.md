@@ -99,6 +99,8 @@ Verify kiểm mọi replica đang hoạt động, release thực chạy, API rea
 
 ## Lỗi, log và phục hồi
 
+Image build chạy `maintenance.py --check-imports` trong chính base image trước khi publish. Guard nạp ứng dụng từ `/app` rõ ràng dù script nằm ở `/opt/traffic-release`; phép thử import không đọc cấu hình runtime hay mở kết nối DB. Nếu guard dừng lúc khởi động, controller đọc trạng thái kết thúc và chỉ ghi phase/loại lỗi đã lọc vào receipt, tránh lỗi exec che mất nguyên nhân.
+
 - Test không đạt: không publish release production và không giao job lên máy local.
 - Chưa có reviewer thật hoặc CD false: không có job triển khai được chạy.
 - Preflight không đạt: dừng trước mutation.
@@ -115,6 +117,6 @@ Kế hoạch ca thử chi tiết ở mục 6 của [đề xuất](CICD_RKE2_PROP
 
 Đã kiểm local trong đợt tích hợp: unit test điều khiển/đóng gói/cổng duyệt, core regression trên checkout riêng, build frontend, actionlint, parser PowerShell và server dry-run.
 
-Mốc kích hoạt 05/11/2026: [Backend CI 41994774008](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/41994774008) đạt **407/407 test**, không skip, và publish image thành công. Artifact đã được đối chiếu file/commit/digest; registry manifest truy cập ẩn danh được. Plan bằng quyền riêng đạt server dry-run. Runner online, CD đã bật; [lượt phát hành đầu 41996335165](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/41996335165) đã qua inspect và đang chờ reviewer ở thời điểm ghi nhận.
+Mốc kích hoạt 05/11/2026: Backend CI cho hai bản đầu đạt **407/407 test**, không skip, image publish và Windows Plan đạt. Hai lỗi bootstrap Windows đã được sửa. [Lượt 42001709239](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/42001709239) đã được duyệt nhưng guard lỗi import trước khi giữ khóa; kiểm tra receipt và hiện trạng xác nhận chưa patch Deployment hoặc đổi pause DAG. CD tạm tắt trong lúc sửa guard; tiến độ mới nhất nằm trong [handoff](../../My-worklog/hand-offs/2026-11-05-system-optimization.md).
 
 Đây là bằng chứng pipeline đã sẵn sàng phát hành, **chưa là nghiệm thu startup/rollout backend mới hoặc rollback end-to-end trên cụm**. Các bước đó diễn ra sau khi chủ repo duyệt đúng release trên GitHub. Không đánh dấu đạt chỉ từ CI/mock/server dry-run; đối chiếu receipt và ứng dụng sau triển khai.

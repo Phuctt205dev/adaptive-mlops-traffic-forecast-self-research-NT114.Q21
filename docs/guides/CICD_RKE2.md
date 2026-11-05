@@ -55,6 +55,8 @@ Máy cần bật, Tailscale và runner hoạt động khi deploy. Bản đầu c
 
 Repo hiện là public: chỉ giao job phát hành từ nhánh tin cậy cho runner có quyền cụm; không chạy mã PR chưa tin cậy trên máy này. Cổng duyệt bảo vệ workflow deploy đã cấu hình, không biến máy Windows thành môi trường cách ly cho mọi workflow khác trong repo.
 
+Khi dựng lại, kiểm Settings → Actions để workflow từ **mọi cộng tác viên ngoài repo** phải được maintainer duyệt (`all_external_contributors`), kể cả người đã từng có PR được merge. Thiết lập này đã được cấu hình trong đợt kích hoạt; không ảnh hưởng luồng push/duyệt release của chủ repo.
+
 ## Publish source, image và bật CD
 
 1. Review/commit/push source theo quyền Git của nhiệm vụ; không force-add runtime lịch sử, results hoặc nhật ký. CI cần file runtime mới được theo dõi trong Git.
@@ -98,4 +100,8 @@ Guard Job có deadline một giờ và TTL sau kết thúc. Nếu runner mất k
 
 Kế hoạch ca thử chi tiết ở mục 6 của [đề xuất](CICD_RKE2_PROPOSAL.md). Kiểm lỗi có chủ đích/rollback end-to-end trong môi trường thử tách dữ liệu trước; lần nghiệm thu production dùng một bản hợp lệ đã được duyệt.
 
-Đã kiểm local trong đợt tích hợp: unit test điều khiển/đóng gói/cổng duyệt, core regression trên checkout riêng, build frontend, actionlint, parser PowerShell và server dry-run. Chưa có bằng chứng build/pull/startup của image phát hành hoặc một lượt deploy qua Actions cho đến khi source được publish, CI đạt và người dùng duyệt. Không đánh dấu phần này hoàn tất chỉ từ test mock.
+Đã kiểm local trong đợt tích hợp: unit test điều khiển/đóng gói/cổng duyệt, core regression trên checkout riêng, build frontend, actionlint, parser PowerShell và server dry-run.
+
+Mốc kích hoạt 05/11/2026: [Backend CI 41994774008](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/41994774008) đạt **407/407 test**, không skip, và publish image thành công. Artifact đã được đối chiếu file/commit/digest; registry manifest truy cập ẩn danh được. Plan bằng quyền riêng đạt server dry-run. Runner online, CD đã bật; [lượt phát hành đầu 41996335165](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/41996335165) đã qua inspect và đang chờ reviewer ở thời điểm ghi nhận.
+
+Đây là bằng chứng pipeline đã sẵn sàng phát hành, **chưa là nghiệm thu startup/rollout backend mới hoặc rollback end-to-end trên cụm**. Các bước đó diễn ra sau khi chủ repo duyệt đúng release trên GitHub. Không đánh dấu đạt chỉ từ CI/mock/server dry-run; đối chiếu receipt và ứng dụng sau triển khai.

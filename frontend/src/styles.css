@@ -83,13 +83,6 @@
 .feature-show-all { margin-bottom: 24px; }
 
 .training-header-actions { display: flex; align-items: center; gap: 18px; }
-.cloud-training-switch { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; white-space: nowrap; }
-.cloud-training-switch input[type="checkbox"] { appearance: none; width: 44px; height: 26px; padding: 0; margin: 0; flex-shrink: 0; border: 1px solid #b7c4d4; border-radius: 20px; background: #cbd5e1; cursor: pointer; transition: background .15s; }
-.cloud-training-switch input::before { content: ""; display: block; width: 20px; height: 20px; margin: 2px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #0003; transition: transform .15s; }
-.cloud-training-switch input:checked { background: #0284c7; border-color: #0284c7; }
-.cloud-training-switch input:checked::before { transform: translateX(18px); }
-.cloud-training-switch input:focus-visible { outline: 3px solid #7dd3fc; outline-offset: 3px; }
-.cloud-training-switch input:disabled { opacity: .5; cursor: not-allowed; }
 .training-monitor { display: grid; gap: 24px; }
 .training-monitor-card { background: #fff; border: 1px solid #dce5ef; border-radius: 14px; padding: 24px; min-width: 0; }
 .training-monitor-has-error { border-color: #fca5a5; }

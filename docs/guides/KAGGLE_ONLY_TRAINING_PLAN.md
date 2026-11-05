@@ -79,7 +79,7 @@ Smoke train Kaggle thật có dùng quota/GPU hoặc tạo tài nguyên cloud ch
 
 ## 7. Ranh giới quyền ở mốc hiện tại
 
-Người dùng đã giao thực hiện source và kiểm thử; tiến độ/bằng chứng hiện tại ở mục 26 của `My-worklog/hand-offs/2026-11-05-system-optimization.md`. Chưa có quyền chạy training thật để nghiệm thu. Chuẩn bị source và kết quả kiểm thử cụ thể trước; quyền commit/push/phát hành thực hiện theo `My-worklog/ai_rule.md` và cổng duyệt đã chốt.
+Người dùng đã giao thực hiện theo kế hoạch, bao gồm phát hành backend trước rồi frontend; tiến độ/bằng chứng nằm trong `My-worklog/hand-offs/2026-11-05-system-optimization.md`. Backend đã qua cổng duyệt của người dùng và triển khai thành công. Chưa có quyền chạy training thật để nghiệm thu; không dùng thành công triển khai làm bằng chứng đã kiểm Kaggle provider/quota thật.
 
 ## 8. Phần source đã làm và bằng chứng trước publish
 
@@ -87,7 +87,14 @@ Người dùng đã giao thực hiện source và kiểm thử; tiến độ/b�
 - API không còn đăng ký hoặc import internal_training/executor. Vẫn giữ inference/Model Quality và dependency load model; gói đầu giữ pinned base đã kiểm chứng, chưa tuyên bố image đã được làm nhỏ hoàn toàn.
 - Uploader tăng dần: chỉ đánh dấu file ổn định đã upload thành công, retry khi lỗi/thay đổi và đối soát định kỳ; skip file không đổi trước DB barrier, giữ cleanup fence. Entrypoint release riêng đưa thay đổi vào sidecar thực chạy; patch image/command/probe có inverse để rollback.
 - API thêm startupProbe khoảng180s, timeout readiness5s/liveness3s, giữ nguyên CPU/RAM/replicas. Không đổi cấu trúc data/model/schema.
-- Core suite local: **422 ca chạy, 421 đạt/1 skip do môi trường TensorFlow**, không failure/error. Full CI Linux có TensorFlow vẫn bắt buộc trước phát hành.
+- Core suite local: **422 ca chạy, 421 đạt/1 skip do môi trường TensorFlow**, không failure/error. Full CI Linux **42039874320** có TensorFlow đạt **427/427, không skip**, cùng kiểm import maintenance/application trong image.
 - Vite build đạt. Browser với API giả kiểm desktop/mobile, cloud không cấu hình và provider trả lỗi: không switch, đủ năm lựa chọn, payload chỉ Kaggle, không có local fallback; không gửi request thật tới backend/provider.
 - Source ứng viên tạm với commit placeholder (không phải artifact phát hành) đã qua startup tree/neural/API, sidecar import, gate và release health; API không có executor routes/import. Airflow import/graph/skipped receipt/local-dispatch checks và server dry-run đạt. Phải kiểm lại artifact/digest thật sau CI; không dùng candidate local để Apply.
-- Bằng chứng trong `results/cicd/`: `kaggle-only-core-tests-v2.log`, `kaggle-only-browser-proof.json`, screenshot desktop/mobile, `api-optimization-proof-v1/`, `api-optimization-plan-proof.json`. Handoff giữ trạng thái cập nhật; chưa có kết quả rollout production của gói này.
+- Bằng chứng trong `results/cicd/`: `kaggle-only-core-tests-v2.log`, `kaggle-only-browser-proof.json`, screenshot desktop/mobile, `api-optimization-startup-v2.json`, các log CI và Windows Plan. Artifact thật đã được đối chiếu nguồn/hash với snapshot đã kiểm trước khi triển khai.
+
+## 9. Kết quả phát hành backend — 05/11/2026
+
+- [Deploy 42040407576](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/42040407576) thành công sau người dùng duyệt. Backend commit `3cbd0fe`, release `1996277cfb7a6fa6dbe113dec0ee2407a8d8a52901fc9e5be351dbeda227e4a9`; receipt completed=true, guard_held=false, recovery_required=false. API2, worker cây/neural và Airflow2 đều Verify đạt, không restart ở mốc kiểm sau rollout.
+- GET trực tiếp trên cả hai API xác nhận readiness ready, OpenAPI không còn executor training, backend mới chỉ Kaggle và mặc định Kaggle. DAG đã về unpaused, không có lượt controlled/Airflow đang hoạt động. Không đổi model/dataset hoặc chạy training để thử.
+- Hai sidecar mỗi bên upload141 file một lần đầu; các vòng sau uploaded0/unchanged141. Đã thấy cơ chế bỏ qua file không đổi hoạt động thật; chưa coi đây là benchmark giảm CPU/RAM dài hạn.
+- Frontend bỏ công tắc được phát hành thành gói riêng sau backend Verify; theo dõi kết quả Pages và bản đang phục vụ trong handoff. Mô hình/lịch sử local cũ vẫn được giữ để đọc và phục vụ dự báo.

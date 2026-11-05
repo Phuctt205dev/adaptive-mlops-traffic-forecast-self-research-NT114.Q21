@@ -1110,7 +1110,6 @@ function TrainModelModal({
   const [selectedModels, setSelectedModels] = useState(initialSelectedModels);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const [cloudTraining, setCloudTraining] = useState(true);
   const [cloudAvailable, setCloudAvailable] = useState(null);
 
   useEffect(() => {
@@ -1136,15 +1135,15 @@ function TrainModelModal({
       setError("Select at least one model.");
       return;
     }
-    if (cloudTraining && cloudAvailable !== true) {
-      setError("Kaggle is not available. Turn off Cloud Training to train on this system.");
+    if (cloudAvailable !== true) {
+      setError("Kaggle training is not available. Please try again later or contact an administrator.");
       return;
     }
     setSubmitting(true);
     try {
       await onSubmit(dataset, selectedModels, {
         ...trainForm,
-        training_backend: cloudTraining ? "kaggle" : "local",
+        training_backend: "kaggle",
       });
     } catch (err) {
       setError(err.message);
@@ -1165,20 +1164,14 @@ function TrainModelModal({
             <h2>{title}</h2>
           </div>
           <div className="training-header-actions">
-            <label className="cloud-training-switch" title="On: train on Kaggle. Off: train on this system.">
-              <span>Cloud Training</span>
-              <input type="checkbox" role="switch" aria-label="Cloud Training" checked={cloudTraining}
-                disabled={submitting} onChange={(event) => setCloudTraining(event.target.checked)} />
-            </label>
             <button className="secondary" type="button" disabled={submitting} onClick={onClose}>Close</button>
           </div>
         </div>
 
-        <p className={`training-location-note ${cloudTraining && cloudAvailable === false ? "is-unavailable" : ""}`} role="status">
-          {!cloudTraining ? "Models will train on this system."
-            : cloudAvailable === null ? "Checking Kaggle availability…"
+        <p className={`training-location-note ${cloudAvailable === false ? "is-unavailable" : ""}`} role="status">
+          {cloudAvailable === null ? "Checking cloud training configuration…"
               : cloudAvailable ? "Models will train on Kaggle. Your system receives the results."
-                : "Kaggle is unavailable. Turn off Cloud Training to train on this system."}
+                : "Kaggle training is unavailable. Please try again later or contact an administrator."}
         </p>
 
         <div className="train-modal-dataset">
@@ -1222,7 +1215,7 @@ function TrainModelModal({
         </p>
 
         {error && <div className="alert alert-error">{error}</div>}
-        <button disabled={submitting || !selectedModels.length || (cloudTraining && cloudAvailable !== true)}>
+        <button disabled={submitting || !selectedModels.length || cloudAvailable !== true}>
           {submitting ? "Triggering..." : `${submitVerb} ${selectedModels.length} model${selectedModels.length > 1 ? "s" : ""}`}
         </button>
       </form>

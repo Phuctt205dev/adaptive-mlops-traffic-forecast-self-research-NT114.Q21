@@ -59,9 +59,10 @@ def add_event(record, code, *, level="info", model=None, branch=None, details=No
 
 def create_execution(db, run):
     config = run.configuration_json or {}
-    backend = config.get("training_backend", "local")
+    from backend.app.services.training_policy import cloud_configuration
+    backend = cloud_configuration(config)["training_backend"]
     selected = config.get("selected_models", list(MODEL_NAMES))
-    if backend not in {"local", "kaggle"} or not selected or any(key not in MODEL_NAMES for key in selected):
+    if not selected or any(key not in MODEL_NAMES for key in selected):
         raise ApplicationError("training_configuration_invalid", "Invalid training backend or model selection.", 422)
     record = TrainingExecution(training_run_id=run.id, backend=backend, state="queued",
                                cancel_requested=False, dismissed=False, sequence=0,

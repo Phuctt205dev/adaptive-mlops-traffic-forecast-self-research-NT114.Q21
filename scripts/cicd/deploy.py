@@ -66,7 +66,7 @@ def container(deployment):
     return matches[0]
 
 
-def release_patch(deployment, image, release_id, *, pull_secret=None):
+def release_patch(deployment, image, release_id, *, pull_secret=None, cache_sync=False):
     """Narrow patches; inverse contains references only, never raw env/specs."""
     name = deployment["metadata"]["name"]
     pod = deployment["spec"]["template"]["spec"]
@@ -128,6 +128,33 @@ def release_patch(deployment, image, release_id, *, pull_secret=None):
             path = "/spec/template/spec/imagePullSecrets"
             forward.append({"op": "add", "path": path, "value": [{"name": pull_secret}]})
             inverse.insert(0, {"op": "remove", "path": path})
+    if name == 'traffic-api' and cache_sync:
+        matches = [(i, c) for i, c in enumerate(pod['containers']) if c['name'] == 'artifact-cache-sync']
+        if len(matches) != 1:
+            raise RuntimeError('Expected exactly one API cache sidecar.')
+        sidecar_index, sidecar = matches[0]
+        allowed = (['python', '-B', '/opt/region-cleanup/region_cleanup_entrypoint.py'],
+                   ['python', '-B', '/opt/traffic-release/cache_sync.py'])
+        if sidecar.get('command') not in allowed or sidecar.get('args'):
+            raise RuntimeError('API cache entrypoint differs from the reviewed contract.')
+        for field, value in (('image', image), ('command', allowed[1])):
+            path = f'/spec/template/spec/containers/{sidecar_index}/{field}'
+            forward.append({'op': 'replace', 'path': path, 'value': value})
+            inverse.insert(0, {'op': 'replace', 'path': path, 'value': sidecar[field]})
+        # Tune only health timing; preserve resources and the existing paths.
+        path = f'/spec/template/spec/containers/{index}'
+        startup_probe = {'httpGet': {'path': '/api/v1/health/live', 'port': 8000},
+                         'periodSeconds': 5, 'timeoutSeconds': 3, 'failureThreshold': 36}
+        for field, value in (('startupProbe', startup_probe),):
+            forward.append({'op': 'add', 'path': path + '/' + field, 'value': value})
+            inverse.insert(0, {'op': 'add', 'path': path + '/' + field, 'value': main[field]} if field in main
+                           else {'op': 'remove', 'path': path + '/' + field})
+        for field, seconds in (('readinessProbe', 5), ('livenessProbe', 3)):
+            if field not in main:
+                raise RuntimeError('Expected API health probes are missing.')
+            probe = copy.deepcopy(main[field]); probe['timeoutSeconds'] = seconds
+            forward.append({'op': 'replace', 'path': path + '/' + field, 'value': probe})
+            inverse.insert(0, {'op': 'replace', 'path': path + '/' + field, 'value': main[field]})
     return forward, inverse
 
 
@@ -205,7 +232,14 @@ class Delivery:
             deployment = self.cluster.deployment(name)
             proof = startup.check(self.cluster, self.directory, self.release, name, deployment, container(deployment)[1])
             proofs.append(proof)
+            if name == 'traffic-api' and 'sidecar_sha256' in self.release:
+                pods = ready_pods(deployment, self.cluster.call('get', 'pods', '-o', 'json')['items'])
+                for pod in pods:
+                    proofs.append(startup.check_sidecar(self.cluster, self.directory, self.release, pod['metadata']['name']))
             self.save(startup_proofs=proofs)
+        airflow = self.cluster.deployment('airflow-scheduler')
+        proofs.append(startup.check_airflow(self.cluster, self.directory, self.release, airflow, container(airflow)[1]))
+        self.save(startup_proofs=proofs)
         return proofs
 
     def inventory(self):
@@ -254,7 +288,8 @@ class Delivery:
                 plans[name] = {"uid": deployment["metadata"]["uid"], "before": spec_hash(deployment),
                                "after": spec_hash(deployment), "patch": [], "inverse": []}
                 continue
-            patch, inverse = release_patch(deployment, self.image, self.release["release_id"], pull_secret=self.pull_secret)
+            patch, inverse = release_patch(deployment, self.image, self.release["release_id"], pull_secret=self.pull_secret,
+                                           cache_sync='sidecar_sha256' in self.release)
             after = self.cluster.patch(deployment, patch, dry_run=True)
             plans[name] = {"uid": deployment["metadata"]["uid"], "before": spec_hash(deployment),
                            "after": spec_hash(after), "patch": patch, "inverse": inverse}
@@ -285,6 +320,14 @@ class Delivery:
                     if any(actual.get(k) != self.release[v] for k, v in (("commit", "commit"), ("release_id", "release_id"), ("bundle_id", "cloud_bundle_id"))):
                         raise RuntimeError("Running application release differs.")
                     if name == "traffic-api":
+                        if 'sidecar_sha256' in self.release:
+                            sidecars = [c for c in pod['spec']['containers'] if c['name'] == 'artifact-cache-sync']
+                            if len(sidecars) != 1 or sidecars[0]['image'] != self.image:
+                                raise RuntimeError('Running sidecar image differs from the release.')
+                            source = "import hashlib,json;from pathlib import Path;print(json.dumps({'sha256':hashlib.sha256(Path('/opt/traffic-release/sidecar/region_cleanup_uploader.py').read_bytes()).hexdigest()}))"
+                            actual_sidecar = self.cluster.call('exec', pod['metadata']['name'], '-c', 'artifact-cache-sync', '--', 'python', '-B', '-c', source)
+                            if actual_sidecar.get('sha256') != self.release['sidecar_sha256']:
+                                raise RuntimeError('Running sidecar source differs from the release.')
                         script = ("import json;from urllib.request import urlopen,Request;from urllib.error import HTTPError;"
                                   "ready=json.load(urlopen('http://127.0.0.1:8000/api/v1/health/ready',timeout=20));"
                                   "print(json.dumps({'ready':ready.get('status')=='ready'}))")

@@ -352,6 +352,8 @@ def create_queued_training_run(
     configuration: dict,
     dag_run_id: str,
 ) -> TrainingRun:
+    from backend.app.services.training_policy import cloud_configuration
+    configuration = cloud_configuration(configuration)
     dataset = db.get(Dataset, dataset_id)
     if dataset is None:
         raise ApplicationError("dataset_not_found", "Dataset was not found.", 404)

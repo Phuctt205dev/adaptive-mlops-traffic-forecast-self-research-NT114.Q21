@@ -195,7 +195,7 @@ def _training_configuration(training_run: TrainingRun, current_end_at: pd.Timest
     selected_models = _selected_models_from_previous(previous)
     return {
         "train_start_date": str(train_start.date()),
-        "training_backend": previous.get("training_backend", "local"),
+        "training_backend": "kaggle",
         "train_end_date": str(train_end.date()),
         "artifact_root": previous.get("artifact_root", "models/regions"),
         "model_role": "candidate",

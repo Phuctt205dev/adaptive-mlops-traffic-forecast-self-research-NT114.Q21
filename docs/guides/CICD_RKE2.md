@@ -12,6 +12,7 @@ Phương án đã được người dùng chốt ngày 05/11/2026: **CI kiểm c
 | `scripts/cicd/release.py` | Build/Verify gói source, hash từng file, ràng buộc commit/base image/schema. |
 | `scripts/cicd/deploy.py` | Plan/Apply/Verify/Rollback; patch có kiểm UID/resourceVersion/spec, không apply manifest nền. |
 | `scripts/cicd/maintenance.py` | Giữ khóa PostgreSQL trong Job riêng xuyên suốt thay pod để chặn yêu cầu công việc mới lọt giữa bước kiểm idle và rollout. |
+| `scripts/cicd/cache_sync.py` | Nạp uploader của release sau kiểm hash và compatibility contract; sidecar dùng cùng image digest với release. |
 | `scripts/cicd/setup.ps1` | Thiết lập một lần theo các action tường minh; mặc định Check chỉ đọc. |
 | `deployment/rke2/` | Baseline không chứa bí mật, RBAC và ba file runtime/DAG được theo dõi trong Git. |
 
@@ -98,6 +99,10 @@ Script Windows chọn **một** executable Python/kubectl theo thứ tự PATH; 
 Verify kiểm mọi replica đang hoạt động, release thực chạy, API readiness và import/graph/hash DAG; pod Failed/Completed lịch sử không tính là replica ready. Cuối cùng khôi phục pause state, xác nhận fingerprint active model/dataset không đổi và thả khóa. Chạy lại đúng release đã có chỉ Verify, không tạo rollout hoặc Job bảo trì mới.
 
 ## Lỗi, log và phục hồi
+
+Gói tối ưu API/Kaggle-only bổ sung startup probe API, timeout readiness5s/liveness3s và cập nhật uploader tăng dần trong **đúng sidecar**, có inverse patch. Nguồn uploader được bind vào release metadata và kiểm khi Verify. Không giảm resource/replicas hoặc tự bỏ guard bảo trì. Startup preflight kiểm API không còn route/import executor training, thử import sidecar mới trên từng API, và kiểm DAG Kaggle-only/receipt trong tiến trình Airflow riêng trước mutation.
+
+Uploader chỉ bỏ qua file đã upload thành công và không đổi; đối soát mặc định mỗi giờ, có retry và vẫn tôn trọng tombstone/barrier. Bộ nhớ theo dõi chỉ nằm trong sidecar, restart sẽ upload lại để thiết lập trạng thái; không xóa artifact trên MinIO. Env tùy chọn `TRAFFIC_API_ARTIFACT_RECONCILE_SECONDS` tối thiểu300s, mặc định3600s; chu kỳ nghỉ upload vẫn theo `TRAFFIC_API_ARTIFACT_SYNC_SECONDS` hiện hữu.
 
 Image build chạy `maintenance.py --check-imports` trong chính base image trước khi publish. Guard nạp ứng dụng từ `/app` rõ ràng dù script nằm ở `/opt/traffic-release`; phép thử import không đọc cấu hình runtime hay mở kết nối DB. Nếu guard dừng lúc khởi động, controller đọc trạng thái kết thúc và chỉ ghi phase/loại lỗi đã lọc vào receipt, tránh lỗi exec che mất nguyên nhân.
 

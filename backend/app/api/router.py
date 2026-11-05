@@ -6,7 +6,6 @@ from backend.app.api.routes import (
     drift,
     health,
     internal_drift,
-    internal_training,
     model_versions,
     training_monitor,
     model_quality,
@@ -21,11 +20,6 @@ from backend.app.api.routes import (
 
 api_router = APIRouter()
 api_router.include_router(health.router, tags=["health"])
-api_router.include_router(
-    internal_training.router,
-    prefix="/internal",
-    tags=["internal"],
-)
 api_router.include_router(
     internal_drift.router,
     prefix="/internal",

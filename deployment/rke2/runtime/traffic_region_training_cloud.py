@@ -28,22 +28,32 @@ def complete_or_skip(response, conf, branch, context):
     return response
 
 
-def tree(**context):
+def cloud_configuration(context):
     conf = legacy.configuration(context)
-    response = control.train(conf, "tree") if conf.get("_execution_protocol") == 2 else legacy.execute_tree_training(**context)
+    if conf.get("training_backend") != "kaggle" or conf.get("_execution_protocol") != 2:
+        raise ValueError("This DAG accepts controlled Kaggle training only.")
+    return conf
+
+
+def validate_cloud(**context):
+    legacy.validate_conf(**context)
+    cloud_configuration(context)
+
+
+def tree(**context):
+    conf = cloud_configuration(context)
+    response = control.train(conf, "tree")
     return complete_or_skip(response, conf, "tree", context)
 
 
 def recurrent(model_name, **context):
-    conf = legacy.configuration(context)
-    response = control.train(conf, model_name.lower()) if conf.get("_execution_protocol") == 2 else legacy.execute_recurrent_training(model_name, **context)
+    conf = cloud_configuration(context)
+    response = control.train(conf, model_name.lower())
     return complete_or_skip(response, conf, model_name.lower(), context)
 
 
 def finalize(**context):
-    conf = legacy.configuration(context)
-    if conf.get("_execution_protocol") != 2:
-        return legacy.finalize_training(**context)
+    conf = cloud_configuration(context)
     receipts = {branch: legacy.receipt(context["ti"].xcom_pull(task_ids=task), conf, branch)
                 for branch, task in legacy.TASKS.items()}
     return control.finalize(conf, receipts)
@@ -51,11 +61,12 @@ def finalize(**context):
 
 def failed(context):
     conf = legacy.configuration(context)
-    if conf.get("_execution_protocol") == 2:
+    if conf.get("_execution_protocol") == 2 and conf.get('training_backend') == 'kaggle':
         control.request_stop(conf)
 
 
 dag = legacy.dag
+dag.get_task("validate_training_conf").python_callable = validate_cloud
 # Airflow exposes description as read-only in the deployed version.
 # Keep the existing DAG metadata while replacing only the task callables.
 dag.get_task("train_tree_models").python_callable = tree

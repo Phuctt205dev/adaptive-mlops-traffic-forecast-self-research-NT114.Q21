@@ -182,14 +182,11 @@ def intercept_legacy_routes():
         for route in router.routes:
             if route.path.endswith("/finalize"):
                 captured["finalizer"] = route.endpoint
-            if "/execute/" in route.path:
+            if "/execute" in route.path:
                 original = route.endpoint
                 @functools.wraps(original)
                 def guard(*args, _endpoint=original, **kwargs):
-                    run, _, _ = training._get_training_context(kwargs["db"], kwargs["training_run_id"])
-                    if (run.configuration_json or {}).get("_execution_protocol") == 2:
-                        raise training.ApplicationError("training_control_required", "Use controlled execution for this run.", 409)
-                    return _endpoint(*args, **kwargs)
+                    raise training.ApplicationError("local_training_removed", "Training runs on Kaggle through the controlled worker endpoints.", 409)
                 route.endpoint = guard
         return router
     integrated.configure_routes = controlled_routes
@@ -263,6 +260,8 @@ def add_control(app, base, operation_lock, project, finalizer):
                     return {"training_run_id": str(run.id), "training_run_status": "completed",
                             "model_version_id": str(version.id), "model_version": version.version,
                             "execution_worker": {**identity, "control_revision": "cloud-training-v1"}}
+                if record.backend != 'kaggle':
+                    raise training.ApplicationError('local_training_removed', 'This worker finalizes Kaggle training only.', 422)
                 state.publication_gate(db, run_id)
                 expected = {branch: item.get("receipt") for branch, item in record.branches_json.items()}
                 if payload["artifact_receipts"] != expected:

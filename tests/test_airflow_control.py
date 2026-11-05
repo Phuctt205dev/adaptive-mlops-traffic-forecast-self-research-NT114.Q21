@@ -1,11 +1,19 @@
 import copy
 import unittest
 import uuid
+from unittest.mock import Mock
 
 from src.cloud_training.airflow_control import WorkerUnavailable, finalize, train
 
 
 class AirflowControlTests(unittest.TestCase):
+    def test_local_or_legacy_conf_is_rejected_before_dispatch(self):
+        for configuration in ({**self.conf, 'training_backend': 'local'}, {**self.conf, '_execution_protocol': 1}):
+            with self.subTest(configuration=configuration):
+                send = Mock()
+                with self.assertRaises(ValueError): train(configuration, 'tree', send=send)
+                with self.assertRaises(ValueError): finalize(configuration, {}, send=send)
+                send.assert_not_called()
     def test_transient_status_reply_failure_keeps_same_attempt_and_does_not_stop_siblings(self):
         polls = [0]
         def send(role, path, payload=None):
@@ -25,6 +33,7 @@ class AirflowControlTests(unittest.TestCase):
     def setUp(self):
         self.conf = {name: str(uuid.uuid4()) for name in ("training_run_id", "region_id", "dataset_id")}
         self.conf["training_backend"] = "kaggle"
+        self.conf['_execution_protocol'] = 2
         self.attempt, self.calls, self.logs = str(uuid.uuid4()), [], []
     def response(self):
         return {**self.conf, "backend": "kaggle", "attempt_id": self.attempt, "state": "running", "branch_state": "running",

@@ -43,22 +43,15 @@ class FakeBridge:
                 "bundle_id": str(uuid.uuid4()), "manifest_sha256": "a" * 64}
 
 
-class FakeChild:
-    """No ML fit. Tree emits a valid skipped bundle; LSTM simulates failure."""
-    def __init__(self, command, context, **kwargs):
-        self.context = context
-        self.process = SimpleNamespace(pid=12345)
-        self.reader_failed = False
-        self.code = 0 if context["branch"] == "tree" else 2
-        if self.code == 0:
-            output = Path(command[command.index("--output") + 1])
-            output.mkdir()
-            write_bundle({"branch": "tree", "status": "skipped", "candidates": []}, context, output)
-    def drain(self):
-        return []
-    def returncode(self):
-        return self.code
+class FakeCloud:
+    """Synthetic provider failure; no SDK, process, or actual training."""
+    def __init__(self, transport, directory, ledger, save):
+        self.ledger = ledger
+    def run(self, progress, cancelled):
+        raise RuntimeError('Synthetic cloud execution failure')
     def stop(self):
+        return True
+    def cleanup(self):
         return True
 
 
@@ -87,22 +80,22 @@ class TrainingControlTests(unittest.TestCase):
                 row_count=5000, status=DatasetStatus.VALID, uploaded_by=user.id)
             db.add(dataset); db.flush()
             run = create_queued_training_run(db, dataset.id, user.id,
-                {"training_backend": "local", "_execution_protocol": 2, "selected_models": ["lstm", "gru"]}, "synthetic-dag")
+                {"training_backend": "kaggle", "_execution_protocol": 2, "selected_models": ["lstm", "gru"]}, "synthetic-dag")
             self.run_id = run.id
         def context(db, run_id):
             run = db.get(TrainingRun, run_id)
             return run, db.get(Dataset, run.dataset_id), None
         self.training = SimpleNamespace(_get_training_context=context,
             _ensure_dataset_downloaded=lambda dataset, run: self.dataset_path,
-            get_settings=lambda: SimpleNamespace(cloud_training_enabled=False))
+            get_settings=lambda: SimpleNamespace(cloud_training_enabled=True))
         self.bridge = FakeBridge()
         self.controllers = {}
         for role in ("tree", "recurrent"):
             controller = WorkerController(self.sessions, self.training, self.bridge, role=role,
                 identity={"pod": "synthetic-" + role}, root=self.root / role,
-                project=Path(__file__).resolve().parents[1])
+                project=Path(__file__).resolve().parents[1], username='synthetic-user')
             self.controllers[role] = controller
-        self.child_patch = patch("backend.app.services.training_control.ExecutionProcess", FakeChild)
+        self.child_patch = patch("backend.app.services.training_control.KaggleExecution", FakeCloud)
         self.child_patch.start(); self.addCleanup(self.child_patch.stop)
         self.tracking_patch = patch("backend.app.services.training_tracking.TrainingTracker")
         tracker = self.tracking_patch.start(); tracker.return_value.cleanup.return_value = True
@@ -130,7 +123,7 @@ class TrainingControlTests(unittest.TestCase):
             self.assertEqual(record.state, "failed")
             self.assertTrue(all(item["cleanup_confirmed"] for item in record.branches_json.values()))
             self.assertEqual(record.models_json["gru"]["state"], "cancelled")
-            self.assertEqual(record.backend, "local")
+            self.assertEqual(record.backend, "kaggle")
         self.assertEqual(self.bridge.store.objects, {"models/active/preserve.pkl": b"preserve"})
         self.assertTrue(self.dataset_path.is_file())
         self.assertTrue(tree.operation_lock.acquire(blocking=False)); tree.operation_lock.release()
@@ -174,6 +167,20 @@ class TrainingControlTests(unittest.TestCase):
             record = state.execution(db, run_id)
             self.assertEqual(record.backend, "kaggle")
             self.assertEqual(record.branches_json["tree"]["state"], "skipped")
+
+    def test_historical_local_record_cannot_start_a_new_attempt(self):
+        controller = self.controllers['tree']
+        with self.sessions() as db:
+            run = db.get(TrainingRun, self.run_id)
+            run.configuration_json = {**run.configuration_json, 'training_backend': 'local'}
+            state.execution(db, self.run_id).backend = 'local'
+            db.commit()
+        with patch('backend.app.services.training_control.ExecutionProcess') as child:
+            with self.assertRaisesRegex(Exception, 'Local training'):
+                controller.start(self.run_id, 'tree')
+            child.assert_not_called()
+        with self.sessions() as db:
+            self.assertIsNone(state.execution(db, self.run_id).branches_json['tree']['attempt_id'])
 
 
 if __name__ == "__main__":

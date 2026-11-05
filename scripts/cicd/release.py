@@ -47,7 +47,7 @@ def source_files(root, *, tracked=None):
     tracked = tracked_sources(root) if tracked is None else set(tracked)
     names = sorted(name for name in tracked if name.startswith(("backend/", "src/")) and name.endswith(".py"))
     names += ["app.py", "scripts/cloud_training/execute_branch.py", "scripts/cloud_training/verify_execution.py"]
-    names += ["scripts/cicd/maintenance.py", "docs/index.html"]
+    names += ["scripts/cicd/maintenance.py", "scripts/cicd/cache_sync.py", "docs/index.html"]
     names += ["deployment/rke2/runtime/" + name for name in RUNTIME_FILES]
     files = {}
     for name in names:
@@ -99,6 +99,8 @@ def build(root, output, commit, *, tracked=None):
     payload = {**{"payload/cloud/" + n: v for n, v in cloud.items()},
                **{"payload/airflow/" + n: v for n, v in airflow.items()}}
     payload["payload/maintenance.py"] = sources["scripts/cicd/maintenance.py"]
+    payload["payload/cache_sync.py"] = sources["scripts/cicd/cache_sync.py"]
+    payload["payload/sidecar/region_cleanup_uploader.py"] = sources["backend/app/services/region_cleanup_uploader.py"]
     # Only these files enter the image context. Never COPY the developer repo.
     payload["Dockerfile"] = ("FROM " + baseline["application_base_image"] + "\n"
         "COPY payload/ /opt/traffic-release/\n"
@@ -109,6 +111,7 @@ def build(root, output, commit, *, tracked=None):
     payload[".dockerignore"] = b"**\n!Dockerfile\n!release.json\n!payload/\n!payload/**\n"
     document = {"schema": SCHEMA, "commit": commit, "baseline": baseline,
                 "cloud_bundle_id": manifest["bundle_id"], "airflow_sha256": digest(canonical({n: digest(v) for n, v in airflow.items()})),
+                "sidecar_sha256": digest(sources["backend/app/services/region_cleanup_uploader.py"]),
                 "files": {n: digest(v) for n, v in sorted(payload.items())},
                 "source_hashes": {n: digest(v) for n, v in sorted(sources.items())}}
     document["release_id"] = digest(canonical(document))

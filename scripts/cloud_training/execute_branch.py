@@ -37,9 +37,8 @@ PREFIX = "TRAFFIC_EXECUTION_EVENT "
 def prepare_runtime(job):
     """Resolve only the reviewed dependency location/profile, before ML imports."""
     config = job["configuration"]
-    dependencies = Path("/opt/traffic-shap-deps")
-    if config.get("training_backend", "local") == "local" and dependencies.is_dir():
-        sys.path.insert(0, str(dependencies))
+    if config.get('training_backend') != 'kaggle':
+        raise ValueError('This execution entrypoint accepts Kaggle training only.')
     if config.get("training_backend") == "kaggle" and job.get("runtime_profile"):
         import importlib.metadata
         import re
@@ -70,6 +69,8 @@ def run(job, dataset, output):
     import time
     started = time.perf_counter()
     context, config = job["context"], job["configuration"]
+    if config.get('training_backend') != 'kaggle':
+        raise ValueError('This execution entrypoint accepts Kaggle training only.')
     if (sha256_file(dataset) != job["dataset_sha256"]
             or configuration_digest(config) != context["configuration_sha256"]):
         raise ValueError("Dataset/configuration hash differs from the execution contract.")

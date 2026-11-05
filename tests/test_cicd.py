@@ -23,7 +23,8 @@ def fixture(root):
     files = {"backend/app/main.py": b"value = 1\n", "src/cloud_training/airflow_control.py": b"value = 2\n",
              "src/feature_selection.py": b"value = 3\n", "app.py": b"value = 4\n",
              "scripts/cloud_training/execute_branch.py": b"value = 5\n", "scripts/cloud_training/verify_execution.py": b"value = 6\n",
-             "scripts/cicd/maintenance.py": b"value = 7\n", "docs/index.html": b"<html>fixture</html>"}
+             "scripts/cicd/maintenance.py": b"value = 7\n", "scripts/cicd/cache_sync.py": b"value = 7\n",
+             "backend/app/services/region_cleanup_uploader.py": b"value = 9\n", "docs/index.html": b"<html>fixture</html>"}
     for name in release.RUNTIME_FILES:
         files["deployment/rke2/runtime/" + name] = b"value = 8\n"
     for name, data in files.items():
@@ -176,6 +177,22 @@ else: raise AssertionError('Unknown module must not be synthesized')
 
 
 class PatchTests(unittest.TestCase):
+    def test_api_sidecar_and_probes_update_and_inverse_restores_exactly(self):
+        before = deployment()
+        main = before['spec']['template']['spec']['containers'][0]
+        main['readinessProbe'] = {'httpGet': {'path': '/api/v1/health/ready', 'port': 8000}, 'timeoutSeconds': 1}
+        main['livenessProbe'] = {'httpGet': {'path': '/api/v1/health/live', 'port': 8000}, 'timeoutSeconds': 1}
+        sidecar = before['spec']['template']['spec']['containers'][1]
+        sidecar.update(name='artifact-cache-sync', command=['python', '-B', '/opt/region-cleanup/region_cleanup_entrypoint.py'])
+        forward, inverse = deploy.release_patch(before, IMAGE, 'checked-release', cache_sync=True)
+        after = apply_patch(before, forward)
+        updated = after['spec']['template']['spec']['containers']
+        self.assertEqual(updated[1]['image'], IMAGE)
+        self.assertEqual(updated[1]['command'], ['python', '-B', '/opt/traffic-release/cache_sync.py'])
+        self.assertEqual(updated[0]['readinessProbe']['timeoutSeconds'], 5)
+        self.assertEqual(updated[0]['startupProbe']['failureThreshold'], 36)
+        self.assertEqual(apply_patch(after, inverse), before)
+
     def test_only_runtime_image_and_metadata_change_and_inverse_restores_exactly(self):
         before = deployment()
         forward, inverse = deploy.release_patch(before, IMAGE, "r" * 64)
@@ -262,6 +279,7 @@ class StartupTests(unittest.TestCase):
     def test_only_complete_identity_and_gate_proof_can_allow_rollout(self):
         release_document = {"cloud_bundle_id": "checked-bundle", "commit": COMMIT, "release_id": "checked-release"}
         proof = {"source_startup_verified": True, "execution_gate_verified": True, "release_health_verified": True,
+                 "training_routes_absent": True, "training_imports_absent": True,
                  "lifespan_not_started": True, "fit_called": False, "deployment_changed": False,
                  "bundle_id": "checked-bundle", "commit": COMMIT, "release_id": "checked-release"}
         with tempfile.TemporaryDirectory() as directory:

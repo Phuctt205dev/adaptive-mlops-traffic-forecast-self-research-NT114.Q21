@@ -58,9 +58,10 @@ thresholds, running-run checks and cooldown still control automatic dispatch.
 
 Cloud requests run training, selection SHAP, comparison and final explanation
 on Kaggle. The internal workers receive/validate artifacts and record metadata.
-Local requests use the same pure runner internally. Automatic retrain inherits
-the active source run's backend (`local` for legacy runs without a backend);
-Kaggle unavailable is an explicit failure, never a local fallback. Controlled
+New training and retraining requests use Kaggle only, including retraining
+from a model originally trained locally or from legacy metadata without a backend.
+Existing local runs and their saved models remain readable. Kaggle unavailable
+is an explicit failure, never a local fallback. Controlled
 dispatch failures close the execution state instead of leaving it queued.
 
 Store `feature_profiles`, `feature_selection_result` and `execution_cost` with
@@ -147,7 +148,7 @@ serving code until those models are retired; rollback does not delete them.
 1. Existing active model: verify Prediction and Feature Importance still work.
 2. Initial training, when intentionally requested: verify no selection profiles
    and a normal SHAP report; do not launch it just to check deployment health.
-3. On an intentional drift retrain, choose local/cloud and selected algorithms.
+3. On an intentional drift retrain, select algorithms; execution uses Kaggle.
    Inspect `feature_selection.decision`, per-model `feature_profiles` and cost
    metadata in the resulting training configuration; confirm all selected model
    branches finished and only the normal candidate was registered.

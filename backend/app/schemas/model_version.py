@@ -61,7 +61,7 @@ class ModelActivationResponse(BaseModel):
 
 
 class TrainingRunCreate(BaseModel):
-    training_backend: Literal["local", "kaggle"] = "local"
+    training_backend: Literal["kaggle"] = "kaggle"
     train_start_date: str
     train_end_date: str
     artifact_root: str = "models/regions"

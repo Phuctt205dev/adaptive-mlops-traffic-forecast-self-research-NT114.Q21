@@ -86,6 +86,10 @@ class WorkerController:
                 raise ApplicationError("training_protocol_mismatch", "This endpoint requires a controlled training run.", 409)
             record = state.execution(db, run_id)
             state.assert_open(record)
+            from backend.app.services.training_policy import cloud_configuration
+            cloud_configuration(run.configuration_json or {})
+            if record.backend != "kaggle":
+                raise ApplicationError("local_training_removed", "This worker accepts Kaggle training only.", 422)
             current = record.branches_json[branch]
             if current.get("attempt_id"):
                 if current["state"] not in {"ready", "skipped"} and key not in self.handles:
@@ -173,6 +177,8 @@ class WorkerController:
                            "branch": branch, "attempt_id": attempt,
                            "configuration_sha256": configuration_digest(configuration)}
                 backend = state.execution(db, run_id).backend
+                if backend != "kaggle":
+                    raise ApplicationError("local_training_removed", "This worker accepts Kaggle training only.", 422)
                 skip = not any(state.MODEL_BRANCH.get(name) == branch for name in configuration["selected_models"])
                 profile = None
                 if backend == "kaggle" and not skip:
@@ -207,34 +213,6 @@ class WorkerController:
                 handle["stopped"] = True
                 if not provider.cleanup():
                     raise RuntimeError("Cloud staging cleanup was not confirmed.")
-            else:
-                self.save_provider(run_id, branch, attempt, {"backend": "local", "started": False})
-                child = ExecutionProcess([sys.executable, "-u", "-B", str(self.project / "scripts/cloud_training/execute_branch.py"),
-                    "--job", str(directory / "input/job.json"), "--dataset", str(directory / "input/dataset.csv"),
-                    "--output", str(directory / "output")], context, cwd=self.project)
-                handle["process"] = child
-                self.save_provider(run_id, branch, attempt, {"backend": "local", "started": True,
-                    "pid": child.process.pid, "owner": self.worker, "directory": str(directory)})
-                deadline = time.monotonic() + 8 * 3600
-                while True:
-                    if cancelled():
-                        raise TrainingCancelled("Training cancellation requested.")
-                    for event in child.drain():
-                        progress(event)
-                    if child.reader_failed or time.monotonic() >= deadline:
-                        raise RuntimeError("Local execution monitoring failed.")
-                    code = child.returncode()
-                    if code is not None:
-                        for event in child.drain():
-                            progress(event)
-                        if code != 0:
-                            raise RuntimeError("The ML child exited without a valid result.")
-                        child.stop()
-                        handle["stopped"] = True
-                        break
-                    self.shutdown.wait(.5)
-                result = read_bundle(directory / "output", context)
-                self.save_provider(run_id, branch, attempt, {"backend": "local", "started": True, "stopped": True})
             if cancelled():
                 raise TrainingCancelled("Training stopped before result publication.")
             self.verify_serving(directory, context, result, handle, cancelled)

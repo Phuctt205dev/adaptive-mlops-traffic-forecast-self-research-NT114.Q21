@@ -1,6 +1,7 @@
 """Cache upload cycle coordinated with region deletion (also used by RKE2)."""
 from pathlib import Path
 from functools import lru_cache
+import json
 import os
 import time
 
@@ -43,15 +44,52 @@ class YieldToCleanup:
                 raise UploadPaused()
 
 
-def upload_cycle(root='/cache'):
+class UploadState:
+    """Remember only acknowledged, stable files; restart safely reuploads."""
+    def __init__(self, reconcile_seconds=3600, clock=time.monotonic):
+        self.reconcile_seconds, self.clock = reconcile_seconds, clock
+        self.acknowledged = {}
+        self.unchanged = 0
+
+    def needs_upload(self, key, fingerprint):
+        previous = self.acknowledged.get(key)
+        return previous is None or previous[0] != fingerprint or self.clock() - previous[1] >= self.reconcile_seconds
+
+    def remember(self, key, fingerprint):
+        self.acknowledged[key] = (fingerprint, self.clock())
+
+
+def file_fingerprint(path):
+    info = path.stat(follow_symlinks=False)
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def upload_cycle(root='/cache', *, state=None):
+    state = state if state is not None else UploadState()
+    state.unchanged = 0
     bucket = os.environ['TRAFFIC_API_RUNTIME_BUCKET']
     client = get_upload_client()
-    count = 0
+    count, seen = 0, set()
     for directory in ('models', 'results', 'monitoring', 'mlruns', 'data_versions', 'data'):
         parent = Path(root) / directory
         if not parent.exists():
             continue
         for path in parent.rglob('*'):
+            if not path.is_file() or path.is_symlink() or path.name.endswith('.tmp'):
+                continue
+            if any(p.is_symlink() for p in path.parents if p != Path(root)):
+                continue
+            key = path.relative_to(root).as_posix()
+            seen.add(key)
+            try:
+                fingerprint = file_fingerprint(path)
+            except FileNotFoundError:
+                continue
+            # Skipping an unchanged file performs no writes, so it needs no
+            # DB barrier. Reconciliation still rechecks cleanup before upload.
+            if not state.needs_upload(key, fingerprint):
+                state.unchanged += 1
+                continue
             # Each object is protected until success or multipart abort, but a
             # whole 1+ GiB cache cycle can no longer starve an admin deletion.
             with database_barrier(engine) as connection:
@@ -66,17 +104,34 @@ def upload_cycle(root='/cache'):
                     continue
                 key = path.relative_to(root).as_posix()
                 if owns_key(key, prefixes):
+                    state.acknowledged.pop(key, None)
                     continue  # A replacement pod must never resurrect deleted files.
+                try:
+                    fingerprint = file_fingerprint(path)
+                except FileNotFoundError:
+                    continue
                 client.upload_file(str(path), bucket, key,
                     Config=TransferConfig(max_concurrency=1, use_threads=False), Callback=YieldToCleanup(connection))
                 count += 1
+                try:
+                    stable = file_fingerprint(path) == fingerprint
+                except FileNotFoundError:
+                    stable = False
+                if stable:
+                    state.remember(key, fingerprint)
+                else:
+                    state.acknowledged.pop(key, None)
+    for key in state.acknowledged.keys() - seen:
+        del state.acknowledged[key]
     return count
 
 
 def main():
+    state = UploadState(reconcile_seconds=max(300, int(os.environ.get('TRAFFIC_API_ARTIFACT_RECONCILE_SECONDS', '3600'))))
     while True:
         try:
-            upload_cycle()
+            uploaded = upload_cycle(state=state)
+            print(json.dumps({'artifact_sync': {'uploaded': uploaded, 'unchanged': state.unchanged}}), flush=True)
         except UploadPaused:
             pass
         except Exception:

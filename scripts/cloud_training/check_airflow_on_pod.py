@@ -26,14 +26,21 @@ try:
   proposed.legacy.configuration=lambda context:context["conf"]
   proposed.legacy.execute_tree_training=lambda **context:{"status":"completed","route":"legacy"}
   proposed.control.train=lambda conf,branch:{"status":"ready","route":"controlled:"+branch}
-  if proposed.tree(conf={})["route"]!="legacy" or proposed.tree(conf={"_execution_protocol":2})["route"]!="controlled:tree":raise RuntimeError("Protocol routing differs")
+  stop_requests=[];proposed.control.request_stop=lambda conf:stop_requests.append(conf)
+  for invalid in ({},{'_execution_protocol':2,'training_backend':'local'},{'_execution_protocol':1,'training_backend':'kaggle'}):
+   try:proposed.tree(conf=invalid)
+   except ValueError:pass
+   else:raise RuntimeError('Local/legacy dispatch is still available')
+   proposed.failed({'conf':invalid})
+  if stop_requests:raise RuntimeError('Invalid local conf attempted to stop an execution')
+  if proposed.tree(conf={'_execution_protocol':2,'training_backend':'kaggle'})['route']!='controlled:tree':raise RuntimeError('Cloud dispatch differs')
   skip_contract=False
   if hasattr(proposed,'complete_or_skip'):
    import uuid
    from airflow.exceptions import AirflowSkipException
    if proposed.dag.get_task('train_gru').trigger_rule!='none_failed' or proposed.dag.get_task('finalize_region_training').trigger_rule!='none_failed':raise RuntimeError('Skipped tasks would block downstream work')
    for selected in [['random_forest_lag'],['gru'],['lstm','gru']]:
-    conf={name:str(uuid.uuid4()) for name in ['region_id','dataset_id','training_run_id']};conf.update(_execution_protocol=2,selected_models=selected)
+    conf={name:str(uuid.uuid4()) for name in ['region_id','dataset_id','training_run_id']};conf.update(_execution_protocol=2,training_backend='kaggle',selected_models=selected)
     stored={};expected={}
     class TI:
      def __init__(self,task):self.task=task
@@ -56,7 +63,7 @@ try:
     proposed.control.finalize=lambda conf,receipts:receipts
     if proposed.finalize(conf=conf,ti=TI('finalize'))!=expected:raise RuntimeError('Finalize lost a skipped receipt')
    skip_contract=True
-  proof={"airflow_source_verified":True,"dag_id":proposed.dag.dag_id,"task_graph":graph(proposed.dag),"legacy_dispatch_preserved":True,"task_executed":False,"deployment_changed":False,"configmaps_sha256":request["configmaps_sha256"]}
+  proof={"airflow_source_verified":True,"dag_id":proposed.dag.dag_id,"task_graph":graph(proposed.dag),"local_dispatch_blocked":True,"task_executed":False,"deployment_changed":False,"configmaps_sha256":request["configmaps_sha256"]}
   proof['skipped_receipts_verified']=skip_contract
  print("TRAFFIC_AIRFLOW_CHECK "+json.dumps(proof))
 except Exception as error:

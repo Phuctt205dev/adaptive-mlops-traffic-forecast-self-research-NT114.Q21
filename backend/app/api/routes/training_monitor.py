@@ -18,7 +18,8 @@ def capabilities():
     settings = get_settings()
     return {"execution_control": settings.training_control_enabled,
             "cloud_training": settings.training_control_enabled and settings.cloud_training_enabled,
-            "default_backend": "local", "automatic_fallback": False}
+            "default_backend": "kaggle", "supported_backends": ["kaggle"],
+            "local_training": False, "automatic_fallback": False}
 
 
 @router.get("/regions/{region_id}/training-monitor")

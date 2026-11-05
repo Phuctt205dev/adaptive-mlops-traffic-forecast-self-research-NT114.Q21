@@ -56,7 +56,7 @@ class TrainingExecutionTests(unittest.TestCase):
         return {"sequence": seq, "model": model, "stage": stage, **details}
 
     def test_backend_is_manual_and_validated(self):
-        self.assertEqual(TrainingRunCreate(train_start_date="2026-01-01", train_end_date="2026-02-01").training_backend, "local")
+        self.assertEqual(TrainingRunCreate(train_start_date="2026-01-01", train_end_date="2026-02-01").training_backend, "kaggle")
         with self.assertRaises(ValueError):
             TrainingRunCreate(train_start_date="a", train_end_date="b", training_backend="automatic")
 

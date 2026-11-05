@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "namespace": "traffic-mlops",
+  "application_base_image": "docker.io/tannampham23/traffic-api:v34@sha256:ef62508ba6452821e022b0ce701e7dcf08bf2a2e3b19c26bec0f8fb6cd5476b8",
+  "airflow_image": "docker.io/tannampham23/traffic-airflow@sha256:a91c595f54931477ac7493ed6c660aab61d957bd944355057e3a9d32af5d9a81",
+  "migration_heads": [
+    "20261028_01"
+  ],
+  "application_deployments": [
+    "traffic-training-tree",
+    "traffic-training-worker",
+    "traffic-api"
+  ],
+  "airflow_deployments": [
+    "airflow-scheduler",
+    "airflow-webserver"
+  ],
+  "runtime_root": "/opt/traffic-cloud",
+  "training_lock_key": 73918046215,
+  "dependency_contract": {
+    "requirements/backend.txt": "1cb7a9d9d7bf9b94f5a4dc2c170e3200dd9d8a7f57a847b163bb914cd2b3e445",
+    "alembic/versions/20260611_01_initial_management_schema.py": "f5cf2264f8741bbc8db5020559198e49c88f66e0c1271be393a7ac83ae88fdb8",
+    "alembic/versions/20260620_01_add_user_display_name.py": "b92b1c8aed41dd8db93f1630dad677b214d26e7a6be3eacd42d157e3c38faf9d",
+    "alembic/versions/20260624_01_add_drift_checks.py": "eae80a648e5fcabd118120c7c0f7fbf5dbe4ffe9d137aed4f9177e28796ae5de",
+    "alembic/versions/20260625_01_add_dataset_dvc_rev.py": "7bd71d096d3793c834d4cbb1f274c0f50c106f31d8e4066de49ec97dd8da08e3",
+    "alembic/versions/20261028_01_training_executions.py": "93c11abad7c8bef22f5a63bd57809a15a5a612674eb5f51fcea7767259422881"
+  }
+}

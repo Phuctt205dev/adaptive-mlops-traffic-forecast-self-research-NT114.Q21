@@ -1,0 +1,80 @@
+name: Deploy Backend RKE2
+
+on:
+  workflow_run:
+    workflows: ['Backend CI']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: Successful default-branch Backend CI push run to deliver
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+# Never cancel a deployment halfway through a maintenance transaction.
+concurrency:
+  group: rke2-production
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    if: >-
+      vars.RKE2_CD_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.provenance.outputs.sha }}
+      run_id: ${{ steps.provenance.outputs.run_id }}
+      artifact: ${{ steps.provenance.outputs.artifact }}
+    steps:
+      # The validation code comes from the protected default branch, never a PR.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Verify source run and configured approval protection
+        id: provenance
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI_RUN_ID: ${{ inputs.ci_run_id || github.event.workflow_run.id }}
+        run: python -B scripts/cicd/github_gate.py --run-id "$CI_RUN_ID"
+
+  deploy:
+    needs: inspect
+    environment: rke2-production
+    runs-on: [self-hosted, Windows, X64, rke2-deploy]
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.inspect.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.inspect.outputs.artifact }}
+          run-id: ${{ needs.inspect.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: delivery-artifact
+      - name: Deliver the approved immutable release
+        shell: powershell
+        env:
+          EXPECTED_COMMIT: ${{ needs.inspect.outputs.sha }}
+          RKE2_CONTEXT: ${{ vars.RKE2_CONTEXT }}
+          RKE2_NAMESPACE_UID: ${{ vars.RKE2_NAMESPACE_UID }}
+          RKE2_KUBECONFIG: ${{ vars.RKE2_KUBECONFIG }}
+          RKE2_IMAGE_PULL_SECRET: ${{ vars.RKE2_IMAGE_PULL_SECRET }}
+        run: ./scripts/cicd/deliver.ps1 -ArtifactDirectory ./delivery-artifact -ExpectedCommit $env:EXPECTED_COMMIT
+      - name: Preserve sanitized deployment receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: delivery-receipt-${{ needs.inspect.outputs.sha }}-${{ github.run_attempt }}
+          path: results/cicd/*.json
+          if-no-files-found: ignore
+          retention-days: 30

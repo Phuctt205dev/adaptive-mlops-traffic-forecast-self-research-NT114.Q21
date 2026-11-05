@@ -1,0 +1,4 @@
+# CI has no production credentials. The release image inherits dependencies
+# from deployment/rke2/baseline.json; this file is only the isolated test suite.
+-r backend.txt
+matplotlib

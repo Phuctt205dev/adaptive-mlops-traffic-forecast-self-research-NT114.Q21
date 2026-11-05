@@ -235,7 +235,7 @@ class CloudRolloutTests(unittest.TestCase):
         self.assertNotIn("backend.app.api.router", manifest["modules"])
         self.assertNotIn("backend.app.services.regions", manifest["modules"])
         self.assertIn("src.cloud_training.kaggle_rpc", manifest["modules"])
-        spec = importlib.util.spec_from_file_location("cloud_runtime_contract_test", ROOT / "Deployment_test_on_rke2/runtime/cloud_training_runtime.py")
+        spec = importlib.util.spec_from_file_location("cloud_runtime_contract_test", ROOT / "deployment/rke2/runtime/cloud_training_runtime.py")
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

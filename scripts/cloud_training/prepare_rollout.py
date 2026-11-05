@@ -71,7 +71,7 @@ def sources():
         files["project/backend/app/" + name] = (ROOT / "backend/app" / name).read_bytes()
     for name in ("execute_branch.py", "verify_execution.py"):
         files["project/scripts/cloud_training/" + name] = (ROOT / "scripts/cloud_training" / name).read_bytes()
-    files["cloud_training_runtime.py"] = (ROOT / "Deployment_test_on_rke2/runtime/cloud_training_runtime.py").read_bytes()
+    files["cloud_training_runtime.py"] = (ROOT / "deployment/rke2/runtime/cloud_training_runtime.py").read_bytes()
     files["migration.py"] = (ROOT / "alembic/versions/20261028_01_training_executions.py").read_bytes()
     files["run_migration.py"] = (ROOT / "scripts/cloud_training/run_migration.py").read_bytes()
     files["sdk-requirements.txt"] = SDK_LOCK.encode()
@@ -167,8 +167,8 @@ def prepare(snapshot, directory):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=False)
     code, items, manifest = code_map(sources())
-    airflow_data = {"dag.py": (ROOT / "Deployment_test_on_rke2/runtime/traffic_region_training_cloud.py").read_text(encoding="utf-8"),
-                    "legacy.py": (ROOT / "Deployment_test_on_rke2/runtime/traffic_region_training_worker.py").read_text(encoding="utf-8"),
+    airflow_data = {"dag.py": (ROOT / "deployment/rke2/runtime/traffic_region_training_cloud.py").read_text(encoding="utf-8"),
+                    "legacy.py": (ROOT / "deployment/rke2/runtime/traffic_region_training_worker.py").read_text(encoding="utf-8"),
                     "airflow_control.py": (ROOT / "src/cloud_training/airflow_control.py").read_text(encoding="utf-8")}
     airflow = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "traffic-cloud-airflow-" +
         hashlib.sha256(canonical(airflow_data)).hexdigest()[:12], "namespace": "traffic-mlops"}, "immutable": True, "data": airflow_data}

@@ -92,6 +92,12 @@ def report(directory, commit, run_id, attempt, outcome):
     lines = ['## Backend deployment: ' + ('DEFERRED: waiting for idle training; not deployed' if receipt.get('deferred') else 'SUCCEEDED' if success else 'SKIPPED' if outcome == 'skipped' else 'FAILED'),
              '', '- Commit: `' + commit + '`', '- Recovery: **' + recovery + '**',
              '- Evidence retention: 30 days (sanitized receipt/diagnostics artifact).']
+    failure=receipt.get('probe_failure',{})
+    if failure:
+        line='- Read-only check: **'+identifier(failure.get('target'))+' / '+identifier(failure.get('endpoint'))+'**'
+        status=failure.get('http_status')
+        if type(status) is int and 100<=status<=599:line+=' (HTTP '+str(status)+')'
+        lines.append(line+'; '+identifier(failure.get('error_type')))
     image = receipt.get('image', '')
     if isinstance(image, str) and re.fullmatch(r'ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}', image):
         lines.append('- Image: `' + image + '`')

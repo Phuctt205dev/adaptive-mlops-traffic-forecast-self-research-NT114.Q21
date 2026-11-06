@@ -72,8 +72,17 @@ external tunnel. The user verifies authenticated frontend flows separately.
 Write-ahead inverses stay in `role-transactions/` beside the private delivery
 kubeconfig, outside the runner checkout and uploaded artifact paths. Each
 mutation tests UID/resourceVersion; rollback also requires the exact recorded
-after hash. External drift or a lost lease retains the recovery latch.
+after hash. Before writing that hash, CD server-dry-runs the exact patch and
+records its defaulted spec (including ConfigMap volume defaultMode). Dry-run
+and mutation use the same resourceVersion, so a concurrent edit is rejected.
+External drift or a lost lease retains the recovery latch.
 Rollback restores resource specifications, never user data or model activation.
+
+Read-only business probes preserve allowlisted endpoint/status/error facts in
+the receipt when an exec process would otherwise hide them. The availability
+observer and full business probe share a lock: they must not compete for the
+prediction runtime while a quality report is checked. User traffic continues;
+an actual failed HTTP check still fails the release without retrying it away.
 
 For an interrupted v2 transaction, use the original checked release, binding,
 journal and kubeconfig with `roles_deploy.py Rollback`; inspect its result before

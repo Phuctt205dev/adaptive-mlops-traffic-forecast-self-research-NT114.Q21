@@ -3,6 +3,12 @@ import json
 import time
 
 
+class ProbeFailure(RuntimeError):
+    def __init__(self,endpoint,status):
+        self.endpoint,self.status=endpoint,status
+        super().__init__('Read-only HTTP verification failed')
+
+
 def check(base, *, light=False):
     import requests
     from sqlalchemy import select
@@ -31,11 +37,24 @@ def check(base, *, light=False):
             started = time.monotonic()
             response = client.get(base.rstrip('/') + path, timeout=(3, 10 if light else 90))
             if response.status_code != 200:
-                raise RuntimeError('Read-only business verification failed: '+path.rsplit('/',1)[-1]+' (HTTP '+str(response.status_code)+')')
+                label=path.rsplit('/',1)[-1].split('?',1)[0]
+                if path=='/admin/regions':label='regions'
+                raise ProbeFailure(label,response.status_code)
             response.json()
             durations.append(round(time.monotonic()-started, 3))
     return {'read_only': True, 'requests':len(paths), 'active_regions':len(regions),
             'max_seconds':max(durations, default=0), 'errors':0}
+
+
+def run_check(base, *, light=False):
+    """Keep exec successful so the controller receives sanitized failure facts."""
+    try:
+        return check(base,light=light)
+    except Exception as error:
+        result={'probe_failed':True,'errors':1,'error_type':type(error).__name__}
+        if isinstance(error,ProbeFailure):
+            result.update(endpoint=error.endpoint,http_status=error.status)
+        return result
 
 
 if __name__ == '__main__':

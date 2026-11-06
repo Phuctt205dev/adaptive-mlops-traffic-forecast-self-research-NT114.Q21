@@ -62,7 +62,10 @@ class DeliveryOrdering(unittest.TestCase):
             op=self.operator(directory)
             before={'replicas':2,'private_reference':'only-private-file'}
             op.get=Mock(return_value={'metadata':{'uid':'u','resourceVersion':'v'},'spec':before})
-            def mutation(*args):
+            def mutation(*args,**kwargs):
+                if kwargs.get('dry'):
+                    self.assertFalse(op.private_path.exists())
+                    return {'spec':{'replicas':0}}
                 self.assertTrue(op.private_path.exists())
                 self.assertNotIn('only-private-file',op.path.read_text())
                 return {}
@@ -70,6 +73,67 @@ class DeliveryOrdering(unittest.TestCase):
             op.change('deployment','api',{'replicas':0})
             self.assertEqual(json.loads(op.private_path.read_text())[0]['before'],before)
             self.assertEqual(op.state['patched'],['api'])
+
+    def test_server_defaulted_spec_is_recorded_and_can_be_rolled_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            op=self.operator(directory)
+            before={'replicas':0,'template':{'spec':{'volumes':[]}}}
+            submitted={'replicas':1,'template':{'spec':{'volumes':[{'name':'source','configMap':{'name':'new'}}]}}}
+            admitted=copy.deepcopy(submitted)
+            admitted['template']['spec']['volumes'][0]['configMap']['defaultMode']=420
+            current={'metadata':{'uid':'u','resourceVersion':'v'},'spec':before}
+            op.get=Mock(side_effect=lambda *args:copy.deepcopy(current))
+            def patch_resource(kind,value,operations,**kwargs):
+                self.assertEqual(value['metadata'],current['metadata'])
+                spec=copy.deepcopy(operations[0]['value'])
+                if spec==submitted:spec=copy.deepcopy(admitted)
+                if not kwargs.get('dry'):
+                    self.assertTrue(op.private_path.exists())
+                    current['spec']=spec
+                return {'spec':spec}
+            op.patch=Mock(side_effect=patch_resource)
+            op.cluster=Mock();op.pause=Mock();op.resource_proof=Mock()
+            op.state.update(dag_was_paused=False,drift_was_paused=False)
+            op.change('deployment','airflow-scheduler',submitted)
+            self.assertEqual(op.inverses[0]['after'],digest(canonical(admitted)))
+            self.assertEqual(current['spec'],admitted)
+            op.rollback()
+            self.assertEqual(current['spec'],before)
+            self.assertTrue(op.state['rolled_back'])
+
+    def test_server_rejection_cannot_create_an_inverse_or_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            op=self.operator(directory)
+            op.get=Mock(return_value={'metadata':{'uid':'u','resourceVersion':'v'},'spec':{'replicas':0}})
+            op.patch=Mock(side_effect=RuntimeError('Server validation failed'))
+            with self.assertRaises(RuntimeError):op.change('deployment','api',{'replicas':2})
+            self.assertFalse(op.private_path.exists());self.assertEqual(op.inverses,[])
+            self.assertEqual(op.patch.call_args.kwargs,{'dry':True})
+
+    def test_remote_probe_failure_is_preserved_without_private_error_details(self):
+        from scripts.cicd.role_probe import run_check,ProbeFailure
+        with patch('scripts.cicd.role_probe.check',side_effect=ProbeFailure('model-quality',503)):
+            result=run_check('http://internal/api/v1')
+        self.assertEqual(result,{'probe_failed':True,'errors':1,'error_type':'ProbeFailure','endpoint':'model-quality','http_status':503})
+        with patch('scripts.cicd.role_probe.check',side_effect=RuntimeError('private-token-response-body')):
+            generic=run_check('http://internal/api/v1')
+        self.assertNotIn('private',json.dumps(generic))
+        with tempfile.TemporaryDirectory() as directory:
+            op=self.operator(directory)
+            with self.assertRaisesRegex(RuntimeError,'model-quality'):
+                op.require_probe(result,'api-preview')
+            self.assertEqual(op.state['probe_failure']['http_status'],503)
+
+    def test_full_business_check_uses_the_observer_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            op=self.operator(directory);op.api=Mock();op.cluster=Mock()
+            lock=op.probe_lock()
+            def check(*args):
+                self.assertTrue(lock.locked())
+                return {'read_only':True,'requests':14,'errors':0}
+            op.cluster.remote.side_effect=check
+            op.business('api-preview')
+            self.assertFalse(lock.locked())
 
     def test_rollback_does_not_overwrite_external_resource_change(self):
         with tempfile.TemporaryDirectory() as directory:

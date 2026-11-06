@@ -372,6 +372,17 @@ class DiagnosticTests(unittest.TestCase):
             self.assertIn('Backend deployment: FAILED', report)
             self.assertIn('SUCCEEDED: previous specification restored', report)
 
+    def test_summary_preserves_sanitized_business_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            item=transaction();value=receipt(item,rollback=True)
+            value['probe_failure']={'target':'api','endpoint':'model-quality','http_status':503,
+                                    'error_type':'ProbeFailure','raw':'PRIVATE-CREDENTIAL'}
+            path=Path(directory)/('delivery-'+item['commit']+'-10-1.json')
+            path.write_text(json.dumps(value))
+            report=diagnostics.report(directory,item['commit'],'10',1,'failure')
+            self.assertIn('model-quality',report);self.assertIn('HTTP 503',report)
+            self.assertNotIn('PRIVATE-CREDENTIAL',report)
+
 
 class RecoveryTests(unittest.TestCase):
     def setup_recovered(self):

@@ -95,6 +95,11 @@ class RolesDelivery:
     def change(self, kind, name, spec):
         """Write-ahead inverse + exact after hash, then version-checked replace."""
         current = self.get(kind,name)
+        # Hash the server-defaulted spec, not merely the submitted JSON. For
+        # example a ConfigMap volume gains defaultMode=420 on admission. The
+        # same UID/version tests cover dry-run and mutation; concurrent edits
+        # still fail rather than being accepted as part of this transaction.
+        spec = self.patch(kind,current,[{'op':'replace','path':'/spec','value':spec}],dry=True)['spec']
         if current['spec'] == spec:
             return current
         plan = {'kind':kind,'name':name,'uid':current['metadata']['uid'],
@@ -176,10 +181,32 @@ class RolesDelivery:
 
     def business(self, host='traffic-api'):
         script = (Path(__file__).with_name('role_probe.py')).read_text(encoding='utf-8')
-        script = script.split("if __name__ == '__main__':")[0] + '\nprint(json.dumps(check('+repr('http://'+host+':8000/api/v1')+')))'
-        result = self.cluster.remote(self.api(),script)
+        script = script.split("if __name__ == '__main__':")[0] + '\nprint(json.dumps(run_check('+repr('http://'+host+':8000/api/v1')+')))'
+        # A quality report takes the prediction runtime lock without waiting.
+        # The observer must not compete with our own full report and create
+        # a false busy response. Full checks themselves continue observing HTTP.
+        with self.probe_lock():
+            result = self.cluster.remote(self.api(),script)
+        self.require_probe(result,host)
         self.save(business_proofs=[*self.state.get('business_proofs',[]),{'target':host,**result}])
         return result
+
+    def probe_lock(self):
+        if not hasattr(self,'_probe_lock'):
+            self._probe_lock=threading.Lock()
+        return self._probe_lock
+
+    def require_probe(self,result,target):
+        if result.get('probe_failed') or result.get('errors') != 0:
+            # Remote probes return allowlisted facts, never raw exception text,
+            # URLs, JWTs, region IDs or response bodies.
+            fact={'target':target,'error_type':diagnostics.identifier(result.get('error_type'))}
+            if result.get('endpoint') in {'regions','capabilities','prediction-window','forecast-dashboard','model-quality','feature-importance'}:
+                fact['endpoint']=result['endpoint']
+            if type(result.get('http_status')) is int and 100<=result['http_status']<=599:
+                fact['http_status']=result['http_status']
+            self.save(probe_failure=fact)
+            raise RuntimeError('Read-only business verification failed: '+json.dumps(fact,sort_keys=True))
 
     def public_base(self):
         base=os.environ.get('PUBLIC_API_BASE_URL','')
@@ -199,15 +226,19 @@ class RolesDelivery:
     def monitor_start(self):
         stop=threading.Event(); result={'samples':0,'requests':0,'errors':0,'started_at':now()}
         script=Path(__file__).with_name('role_probe.py').read_text(encoding='utf-8').split("if __name__ == '__main__':")[0]
-        script+='\nprint(json.dumps(check(\'http://traffic-api:8000/api/v1\',light=True)))'
+        script+='\nprint(json.dumps(run_check(\'http://traffic-api:8000/api/v1\',light=True)))'
         public_script=Path(__file__).with_name('public_probe.py').read_text(encoding='utf-8')
         public_script+='\nprint(json.dumps(check('+repr(self.public_base())+')))'
         result['targets']=['internal_service','public_ingress']
         def observe():
             while not stop.is_set():
                 try:
-                    proof=self.cluster.remote(self.api(),script)
-                    public=self.cluster.remote(self.api(),public_script)
+                    with self.probe_lock():
+                        proof=self.cluster.remote(self.api(),script)
+                        public=self.cluster.remote(self.api(),public_script)
+                    if proof.get('probe_failed') or proof.get('errors')!=0:
+                        result['last_probe_failure']={k:proof[k] for k in ('error_type','endpoint','http_status') if k in proof}
+                        raise RuntimeError('Availability business probe failed')
                     result['samples']+=1; result['requests']+=proof['requests']+public['requests']
                 except Exception as error:
                     result['errors']+=1

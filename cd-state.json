@@ -3,7 +3,9 @@
   "mode": "auto",
   "epoch": 1,
   "blocked": false,
-  "active": {
+  "active": null,
+  "failure": null,
+  "last_success": {
     "run_id": "42171022387",
     "attempt": 1,
     "commit": "d4302c94d9d17edef2a52573fc0d49039efa5cfc",
@@ -11,15 +13,6 @@
     "mode": "auto",
     "epoch": 1
   },
-  "failure": null,
-  "last_success": {
-    "run_id": "42170721748",
-    "attempt": 1,
-    "commit": "d4302c94d9d17edef2a52573fc0d49039efa5cfc",
-    "ci_number": 10,
-    "mode": "auto",
-    "epoch": 1
-  },
   "last_control": 42170462424,
-  "updated_by": "delivery"
+  "updated_by": "delivery-result"
 }

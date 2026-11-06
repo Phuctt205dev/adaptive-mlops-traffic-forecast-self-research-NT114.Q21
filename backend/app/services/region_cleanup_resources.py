@@ -1,6 +1,7 @@
 """Resource adapters for the region cleanup journal. No broad bucket deletion."""
 import os
 from pathlib import PurePosixPath
+from contextlib import contextmanager
 import socket
 import uuid
 from urllib.parse import quote, urlsplit
@@ -15,6 +16,7 @@ from backend.app.db.models import ModelVersion, Region, TrainingRun
 from backend.app.services.region_cleanup import canonical_id, database_barrier, local_prefixes
 from backend.app.services.storage import get_s3_client
 from src.mlflow_regions import region_experiment_name, legacy_region_experiment_name
+from backend.app.services.artifact_paths import owns_key
 
 
 INSTALLED = False
@@ -26,10 +28,6 @@ def fail(message, code='region_cleanup_preflight_failed'):
     raise ApplicationError(code, message, 409)
 
 
-def owns_key(key, prefixes):
-    return isinstance(key, str) and any(key.startswith(prefix) for prefix in prefixes)
-
-
 class CleanupResources:
     def __init__(self):
         self.settings = get_settings()
@@ -39,11 +37,20 @@ class CleanupResources:
         self.runtime_bucket = os.environ.get('TRAFFIC_API_RUNTIME_BUCKET', '')
         self.mlflow_bucket = os.environ.get('REGION_CLEANUP_MLFLOW_BUCKET', '')
 
+    @contextmanager
     def barrier(self, db):
         if not INSTALLED or not self.runtime_bucket or not self.mlflow_bucket:
             raise ApplicationError('region_cleanup_unconfigured', 'Region cleanup is not deployed yet. No data was deleted.', 503)
-        self.check_idle({})  # Reject active Airflow work before requesting priority.
-        return database_barrier(db.get_bind(), exclusive=True)
+        from contextlib import nullcontext
+        if os.environ.get('TRAFFIC_ROLE_PEERS') in {'dual', 'routed'}:
+            from backend.app.services.deployment_fence import peer_membership
+            membership = peer_membership(db.get_bind())
+        else:
+            membership = nullcontext()
+        with membership:
+            self.check_idle({})  # Reject active Airflow work before requesting priority.
+            with database_barrier(db.get_bind(), exclusive=True) as connection:
+                yield connection
 
     def airflow(self, method, dag, run=None):
         path = '/dags/' + quote(dag, safe='') + '/dagRuns'
@@ -75,7 +82,17 @@ class CleanupResources:
                 fail('Airflow history is too large for a safe cleanup.')
 
     def peers(self):
-        addresses = sorted({r[4][0] for r in socket.getaddrinfo(PEER_HOST, 8000, family=socket.AF_INET, type=socket.SOCK_STREAM)})
+        dual = os.environ.get('TRAFFIC_ROLE_PEERS') == 'dual'
+        routed = os.environ.get('TRAFFIC_ROLE_PEERS') == 'routed'
+        hosts = ('api-peers', 'traffic-training-tree', 'traffic-training-worker') if routed else ((PEER_HOST, 'role-peers') if dual else (PEER_HOST,))
+        found = set()
+        for host in hosts:
+            try:
+                found.update(r[4][0] for r in socket.getaddrinfo(host, 8000, family=socket.AF_INET, type=socket.SOCK_STREAM))
+            except socket.gaierror:
+                if not dual:
+                    raise
+        addresses = sorted(found)
         peers = []
         for address in addresses:
             base = f'http://{address}:8000/ops/region-cleanup'
@@ -87,7 +104,10 @@ class CleanupResources:
                 fail('A worker is busy or cleanup deployment is incomplete.')
             peers.append({'url': base, 'pod': data['pod'], 'role': data['role']})
         roles = sorted(p['role'] for p in peers)
-        if roles != ['api', 'api', 'recurrent', 'tree'] or len({p['pod'] for p in peers}) != 4:
+        valid = (2 <= roles.count('api') <= 4 and 1 <= roles.count('tree') <= 2 and 1 <= roles.count('recurrent') <= 2
+                 and set(roles) == {'api','tree','recurrent'} and len({p['pod'] for p in peers}) == len(peers)) if dual else (
+                 roles == ['api', 'api', 'recurrent', 'tree'] and len({p['pod'] for p in peers}) == 4)
+        if not valid:
             fail('All two APIs and two workers must be available before deleting a region.')
         return peers
 

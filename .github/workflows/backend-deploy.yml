@@ -90,6 +90,7 @@ jobs:
           RKE2_NAMESPACE_UID: ${{ vars.RKE2_NAMESPACE_UID }}
           RKE2_KUBECONFIG: ${{ vars.RKE2_KUBECONFIG }}
           RKE2_IMAGE_PULL_SECRET: ${{ vars.RKE2_IMAGE_PULL_SECRET }}
+          CI_RUN_ID: ${{ needs.inspect.outputs.run_id }}
         run: ./scripts/cicd/deliver.ps1 -ArtifactDirectory ./delivery-artifact -ExpectedCommit $env:EXPECTED_COMMIT
       - name: Summarize deployment and recovery separately
         if: always()

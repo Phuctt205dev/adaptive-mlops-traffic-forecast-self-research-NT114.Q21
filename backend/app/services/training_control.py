@@ -56,13 +56,15 @@ def delete_prefix(store, prefix):
 
 class WorkerController:
     def __init__(self, sessions, training, bridge, *, role, identity, root, project,
-                 username="", transport=None, operation_lock=None, barrier_factory=None, status_state=None):
+                 username="", transport=None, operation_lock=None, barrier_factory=None, status_state=None,
+                 producer_profile=None):
         self.sessions, self.training, self.bridge = sessions, training, bridge
         self.role, self.identity, self.root = role, identity, Path(root)
         self.project, self.username = Path(project), username
         self.transport = transport or SDKTransport(username, repository=self.project)
         self.barrier_factory = barrier_factory
         self.status_state = status_state
+        self.producer_profile = producer_profile
         self.worker = identity["pod"] + ":" + str(uuid.uuid4())
         self.operation_lock = operation_lock or threading.Lock()
         self.handles, self.handles_lock = {}, threading.RLock()
@@ -187,8 +189,15 @@ class WorkerController:
                         packages.append("xgboost")
                     if branch == "tree" and "lightgbm_lag" in configuration["selected_models"]:
                         packages.append("lightgbm")
-                    profile = {name: importlib.metadata.version(name) for name in packages}
-                    if configuration.get("shap", {}).get("enabled", True):
+                    profile = {name: importlib.metadata.version(
+                        'xgboost-cpu' if name == 'xgboost' and self.producer_profile is not None else name)
+                        for name in packages}
+                    if self.producer_profile is not None:
+                        if any(self.producer_profile.get(name) != value for name, value in profile.items()):
+                            raise RuntimeError('Worker and producer dependency contracts differ')
+                        if configuration.get("shap", {}).get("enabled", True):
+                            profile['shap'] = self.producer_profile['shap']
+                    elif configuration.get("shap", {}).get("enabled", True):
                         profile["shap"] = importlib.metadata.version("shap")
                 if not skip:
                     source = self.training._ensure_dataset_downloaded(dataset, run)

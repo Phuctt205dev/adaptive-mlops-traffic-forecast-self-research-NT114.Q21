@@ -20,6 +20,8 @@ NAMES = {'traffic-api', 'traffic-training-tree', 'traffic-training-worker', 'air
 def confirm(cluster, receipt, active):
     if receipt.get('commit') != active['commit']:
         raise ValueError('The original receipt belongs to another transaction.')
+    if receipt.get('schema') == 'traffic-role-delivery/v2':
+        return confirm_roles(cluster,receipt)
     plans = receipt.get('plans', {})
     if set(plans) != NAMES:
         raise ValueError('Recovery requires the original five deployment plans.')
@@ -51,6 +53,39 @@ def confirm(cluster, receipt, active):
     if readiness['dag_paused'] != receipt.get('dag_was_paused') or readiness['active_controlled_runs'] or readiness['active_airflow_runs']:
         raise ValueError('DAG/training state is not the recorded recovered state.')
     return {'recovery_verified': True, 'deployments_ready': 5}
+
+
+def confirm_roles(cluster,receipt):
+    from scripts.cicd.roles_deploy import IDLE
+    from scripts.cicd.release import digest,canonical
+    allowed=NAMES | {'api','api-next','train-tree','tree-next','train-neural','neural-next'}
+    services={'traffic-api','traffic-api-training','api-peers','api-preview','traffic-training-tree','traffic-training-worker'}
+    if (not receipt.get('resources') or not (receipt.get('completed') or receipt.get('rolled_back'))
+            or receipt.get('guard_held') or receipt.get('recovery_required')):
+        raise ValueError('Complete the original role transaction recovery before releasing ownership.')
+    if cluster.call('get','namespace','traffic-mlops','-o','json')['metadata']['uid']!=cluster.namespace_uid:
+        raise ValueError('Wrong namespace identity.')
+    pods=cluster.call('get','pods','-o','json')['items']
+    for plan in receipt['resources']:
+        if (plan.get('kind')=='deployment' and plan.get('name') in allowed or
+                plan.get('kind')=='service' and plan.get('name') in services):
+            value=cluster.call('get',plan['kind'],plan['name'],'-o','json')
+        else:
+            raise ValueError('Role recovery resource scope differs.')
+        if value['metadata']['uid']!=plan['uid'] or digest(canonical(value['spec']))!=plan['spec_sha256']:
+            raise ValueError('Role resource differs from the recovered receipt.')
+        if plan['kind']=='deployment' and len(ready_pods(value,pods))!=value['spec'].get('replicas',1):
+            raise ValueError('A recovered role cohort is not fully ready.')
+    if receipt.get('guard_job'):
+        job=cluster.call('get','job',receipt['guard_job'],'--ignore-not-found','-o','json')
+        if job and not any(c['type'] in {'Complete','Failed'} and c['status']=='True' for c in job.get('status',{}).get('conditions',[])):
+            raise ValueError('Original admission job is still active.')
+    app=cluster.call('get','service','traffic-api','-o','json')['spec']['selector']['app']
+    idle=cluster.remote(cluster.deployment(app),IDLE)
+    if (idle['active'] or idle['running'] or idle['paused']!=receipt.get('dag_was_paused')
+            or idle['drift_paused']!=receipt.get('drift_was_paused')):
+        raise ValueError('Recovered training dispatch state differs.')
+    return {'recovery_verified':True,'deployments_ready':5,'role_resources_verified':True}
 
 
 def release_ownership(store, active, proof):

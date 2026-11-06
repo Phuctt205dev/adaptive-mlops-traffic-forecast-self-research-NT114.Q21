@@ -13,7 +13,7 @@ from sqlalchemy import select
 from backend.app.db.models import AuditLog
 from backend.app.db.session import engine, SessionLocal
 from backend.app.services.region_cleanup import COMPLETED, cleanup_requested, database_barrier, pending_cleanup
-from backend.app.services.region_cleanup_resources import owns_key
+from backend.app.services.artifact_paths import owns_key
 
 
 @lru_cache(maxsize=1)
@@ -127,8 +127,13 @@ def upload_cycle(root='/cache', *, state=None):
 
 
 def main():
+    import signal
+    import threading
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
     state = UploadState(reconcile_seconds=max(300, int(os.environ.get('TRAFFIC_API_ARTIFACT_RECONCILE_SECONDS', '3600'))))
-    while True:
+    while not stop.is_set():
         try:
             uploaded = upload_cycle(state=state)
             print(json.dumps({'artifact_sync': {'uploaded': uploaded, 'unchanged': state.unchanged}}), flush=True)
@@ -136,4 +141,10 @@ def main():
             pass
         except Exception:
             print('Artifact upload cycle deferred; no cleanup bypass.', flush=True)
-        time.sleep(max(5, int(os.environ.get('TRAFFIC_API_ARTIFACT_SYNC_SECONDS', '30'))))
+        stop.wait(max(5, int(os.environ.get('TRAFFIC_API_ARTIFACT_SYNC_SECONDS', '30'))))
+    try:
+        uploaded = upload_cycle(state=state)
+        print(json.dumps({'artifact_sync_stopped': True, 'final_uploaded': uploaded}), flush=True)
+    except Exception:
+        print(json.dumps({'artifact_sync_stopped': True, 'final_upload_confirmed': False}), flush=True)
+        raise

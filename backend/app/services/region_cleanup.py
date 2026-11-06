@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from sqlalchemy import delete, or_, select, update
 from sqlalchemy.orm import Session
 
-from backend.app.core.errors import ApplicationError
+from backend.app.core.application_error import ApplicationError
 from backend.app.db.models import (
     AuditLog, Dataset, DriftCheck, ModelVersion, Prediction, Region, TrainingRun,
 )

@@ -30,11 +30,11 @@ def post(role, path, payload=None):
                     raise WorkerUnavailable(response.status_code)
                 document = response.json()
         worker = document.get("execution_worker", {})
-        prefix = "traffic-training-tree-" if role == "tree" else "traffic-training-worker-"
+        prefixes = ("traffic-training-tree-", "train-tree-", "tree-next-") if role == "tree" else ("traffic-training-worker-", "train-neural-", "neural-next-")
         if (worker.get("role") != role or worker.get("node") != NODES[role]
                 or worker.get("runtime_revision") != "branch-execution-v1"
                 or worker.get("control_revision") != "cloud-training-v1"
-                or not isinstance(worker.get("pod"), str) or not worker["pod"].startswith(prefix)):
+                or not isinstance(worker.get("pod"), str) or not worker["pod"].startswith(prefixes)):
             raise WorkerUnavailable()
         return document
     except (requests.RequestException, ValueError, TypeError):

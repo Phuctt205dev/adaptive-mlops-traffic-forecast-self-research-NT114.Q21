@@ -1,0 +1,35 @@
+{
+  "schema": "traffic-role-baseline/v1",
+  "python_base": "docker.io/library/python:3.11-slim-bookworm@sha256:e8c69d86735f6df3efa06b324694fe51f0422785f83a3bd463052636c2421944",
+  "producer_profile": {
+    "scikit-learn": "1.9.0",
+    "joblib": "1.5.3",
+    "pandas": "2.3.3",
+    "xgboost": "3.2.0",
+    "lightgbm": "4.6.0",
+    "shap": "0.50.0"
+  },
+  "roles": {
+    "api": {
+      "deployment": "api",
+      "legacy": "traffic-api"
+    },
+    "tree": {
+      "deployment": "train-tree",
+      "legacy": "traffic-training-tree"
+    },
+    "neural": {
+      "deployment": "train-neural",
+      "legacy": "traffic-training-worker"
+    },
+    "sync": {
+      "container": "artifact-sync"
+    }
+  },
+  "migration_heads": [
+    "20261028_01"
+  ],
+  "airflow_image": "docker.io/tannampham23/traffic-airflow@sha256:a91c595f54931477ac7493ed6c660aab61d957bd944355057e3a9d32af5d9a81",
+  "legacy_application_image": "ghcr.io/phuctt205dev/adaptive-mlops-traffic-forecast-self-research-nt114.q21/backend@sha256:6ef8e1a3fb80c8e98c38b32a3050db083e3c37925d530d3e27614dda10fed033",
+  "api_standby": "api-next"
+}

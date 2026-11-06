@@ -69,6 +69,19 @@ class QualityReportTests(unittest.TestCase):
         self.assertTrue(all(point["reference"] is None for point in report["points"]))
         self.assertEqual(report["coverage"]["predicted_points"], 4)
 
+    def test_dst_wall_time_ambiguity_is_a_controlled_error_not_http_500(self):
+        self.region.timezone='America/New_York'
+        self.training.configuration_json['train_end_date']='2026-01-01'
+        for start in ('2026-11-01 01:00:00','2026-03-08 02:00:00'):
+            with self.subTest(start=start):
+                frame=self.frame.copy()
+                frame['date_time']=pd.date_range(start,periods=4,freq='h')
+                with patch.object(quality,'_predict_points',return_value={}):
+                    with self.assertRaises(ApplicationError) as raised:
+                        quality._build_report(self.region,self.model,self.training,self.dataset,frame,'reference',start,4)
+                self.assertEqual(raised.exception.code,'quality_timeline_invalid')
+                self.assertEqual(raised.exception.status_code,409)
+
     def test_imputed_and_unknown_rows_are_excluded_from_observed_score(self):
         self.frame["target_observed"] = [True, False, None, True]
         self.frame["target_is_imputed"] = [False, True, None, True]

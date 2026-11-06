@@ -33,10 +33,17 @@ $journal = Join-Path $receiptDirectory ('delivery-' + $ExpectedCommit + '-' + $e
 $deliveryArgs = @('--directory', $checkedRoot, '--image', $delivery.image, '--commit', $ExpectedCommit,
     '--journal', $journal, '--kubectl', $kubectl, '--context', $env:RKE2_CONTEXT, '--namespace-uid', $env:RKE2_NAMESPACE_UID,
     '--kubeconfig', $env:RKE2_KUBECONFIG)
-if ($env:RKE2_IMAGE_PULL_SECRET) { $deliveryArgs += @('--pull-secret', $env:RKE2_IMAGE_PULL_SECRET) }
-& $python -B scripts/cicd/deploy.py $Action @deliveryArgs
+$deliveryScript = 'scripts/cicd/deploy.py'
+if ($manifest.schema -eq 'traffic-release/v2') {
+    if ($delivery.schema -ne 'traffic-delivery/v2') { throw 'Role image binding is required.' }
+    $deliveryScript = 'scripts/cicd/roles_deploy.py'
+    $deliveryArgs = @('--directory', $checkedRoot, '--binding', (Join-Path $artifactRoot 'delivery.json'),
+        '--commit', $ExpectedCommit, '--journal', $journal, '--kubectl', $kubectl,
+        '--context', $env:RKE2_CONTEXT, '--namespace-uid', $env:RKE2_NAMESPACE_UID, '--kubeconfig', $env:RKE2_KUBECONFIG)
+} elseif ($env:RKE2_IMAGE_PULL_SECRET) { $deliveryArgs += @('--pull-secret', $env:RKE2_IMAGE_PULL_SECRET) }
+& $python -B $deliveryScript $Action @deliveryArgs
 if ($LASTEXITCODE -ne 0) { throw 'Delivery operation failed. Inspect its receipt before starting another release.' }
 if ($Action -eq 'Apply') {
-    & $python -B scripts/cicd/deploy.py Verify @deliveryArgs
+    & $python -B $deliveryScript Verify @deliveryArgs
     if ($LASTEXITCODE -ne 0) { throw 'Post-delivery verification failed.' }
 }

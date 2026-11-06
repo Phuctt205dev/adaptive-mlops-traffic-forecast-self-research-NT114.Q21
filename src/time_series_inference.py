@@ -19,7 +19,7 @@ from src.time_series_preprocess import (
     TARGET_COLUMN,
     TIME_COLUMN,
 )
-from src.time_series_training import calculate_regression_metrics
+from src.regression_metrics import calculate_regression_metrics
 
 
 DEFAULT_MODEL_PATH = "models/time_series/best_time_series_model.pkl"

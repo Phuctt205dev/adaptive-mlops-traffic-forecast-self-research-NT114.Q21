@@ -56,10 +56,10 @@ def post_worker(role, path, payload=None):
         finally:
             response.close()
     identity = document.get("execution_worker", {}) if isinstance(document, dict) else {}
-    prefix = "traffic-training-tree-" if role == "tree" else "traffic-training-worker-"
+    prefixes = ("traffic-training-tree-", "train-tree-", "tree-next-") if role == "tree" else ("traffic-training-worker-", "train-neural-", "neural-next-")
     if (identity.get("role") != role or identity.get("node") != NODES[role]
             or identity.get("runtime_revision") != "branch-execution-v1"
-            or not isinstance(identity.get("pod"), str) or not identity["pod"].startswith(prefix)):
+            or not isinstance(identity.get("pod"), str) or not identity["pod"].startswith(prefixes)):
         raise RuntimeError("Training response did not identify the expected worker/node.")
     return document
 

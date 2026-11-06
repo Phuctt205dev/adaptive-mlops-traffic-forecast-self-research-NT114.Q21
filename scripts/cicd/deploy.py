@@ -61,7 +61,7 @@ def container(deployment):
     entries = deployment["spec"]["template"]["spec"]["containers"]
     name = deployment["metadata"]["name"]
     matches = [(i, c) for i, c in enumerate(entries) if c["name"] == name or
-               (name.startswith("traffic-") and any(p.get("containerPort") == 8000 for p in c.get("ports", [])))]
+               (not name.startswith("airflow-") and any(p.get("containerPort") == 8000 for p in c.get("ports", [])))]
     if len(matches) != 1:
         raise RuntimeError("Main container identity is ambiguous: " + name)
     return matches[0]

@@ -24,7 +24,7 @@ from backend.app.db.models import (
 from backend.app.schemas.prediction import PredictionCreate
 from backend.app.services.storage import get_s3_client
 from src.inference import prepare_input
-from src.lstm_sequences import transform_sequence_source, prepare_sequence_source
+from src.sequence_serving import transform_sequence_source, prepare_sequence_source
 from src.preprocess import preprocess
 from src.time_series_inference import TrafficHistory, predict_next_hour
 from src.time_series_preprocess import prepare_hourly_time_series

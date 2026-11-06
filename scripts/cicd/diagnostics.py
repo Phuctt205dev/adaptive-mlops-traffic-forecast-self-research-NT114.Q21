@@ -89,7 +89,7 @@ def report(directory, commit, run_id, attempt, outcome):
         recovery = 'No recorded cluster mutation; inspect the failed step'
     else:
         recovery = 'OPERATOR CHECK REQUIRED'
-    lines = ['## Backend deployment: ' + ('SUCCEEDED' if success else 'SKIPPED' if outcome == 'skipped' else 'FAILED'),
+    lines = ['## Backend deployment: ' + ('DEFERRED: waiting for idle training; not deployed' if receipt.get('deferred') else 'SUCCEEDED' if success else 'SKIPPED' if outcome == 'skipped' else 'FAILED'),
              '', '- Commit: `' + commit + '`', '- Recovery: **' + recovery + '**',
              '- Evidence retention: 30 days (sanitized receipt/diagnostics artifact).']
     image = receipt.get('image', '')

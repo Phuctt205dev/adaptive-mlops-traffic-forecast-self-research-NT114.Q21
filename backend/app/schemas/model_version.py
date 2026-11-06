@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.app.db.models import ModelVersionStatus, TrainingRunStatus
-from src.shap_reporting import resolve_shap_config
+from src.shap_config import resolve_shap_config
 
 
 class TrainingRunRead(BaseModel):

@@ -1,0 +1,7 @@
+-c constraints.txt
+boto3==1.43.36
+SQLAlchemy==2.0.51
+pydantic==2.13.4
+pydantic-settings==2.14.2
+requests==2.34.2
+psycopg[binary]==3.3.4

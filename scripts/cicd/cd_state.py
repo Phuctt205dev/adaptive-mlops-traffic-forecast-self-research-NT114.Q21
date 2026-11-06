@@ -201,6 +201,17 @@ def finish(store, transaction, outcome, receipt=None, *, began=False):
         if outcome == 'success' and not began and not owned:
             return state, {'outcome': 'skipped', 'blocked': state['blocked']}
         safe = closed_receipt(receipt, transaction)
+        deferred = (owned and safe and receipt.get('deferred') is True
+                    and receipt.get('preflight_only') is True and receipt.get('started') is False
+                    and receipt.get('patched') == [] and outcome == 'success')
+        if deferred:
+            from scripts.cicd.cd_pending import save as save_pending
+            source_run = str(receipt.get('retry_ci_run_id') or '')
+            if not source_run.isdigit():
+                raise ValueError('Deferred deployment requires its immutable source CI run.')
+            save_pending(store.api, {'commit':transaction['commit'],'ci_number':transaction['ci_number'],'ci_run_id':source_run})
+            state.update(active=None,updated_by='delivery-deferred')
+            return state, {'outcome':'deferred: waiting for training to finish','blocked':state['blocked'],'recovery_required':False}
         successful = outcome == 'success' and safe and receipt.get('completed') is True
         if owned and safe:
             state['active'] = None

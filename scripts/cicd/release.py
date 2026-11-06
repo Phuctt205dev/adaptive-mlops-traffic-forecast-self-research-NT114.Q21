@@ -127,6 +127,9 @@ def build(root, output, commit, *, tracked=None):
 def verify(directory, *, expected_commit=None):
     root = Path(directory).resolve(strict=True)
     document = read_json(root / "release.json")
+    if document.get('schema') == 'traffic-release/v2':
+        from scripts.cicd.roles_release import verify as verify_roles
+        return verify_roles(directory, expected_commit=expected_commit)
     if document.get("schema") != SCHEMA or not SHA.fullmatch(document.get("commit", "")):
         raise ValueError("Unsupported release metadata.")
     if expected_commit is not None and document["commit"] != expected_commit:
@@ -152,8 +155,13 @@ def main():
     parser.add_argument("action", choices=("Build", "Verify"))
     parser.add_argument("--directory", required=True)
     parser.add_argument("--commit", required=True)
+    parser.add_argument('--roles', action='store_true')
     args = parser.parse_args()
-    document = build(ROOT, args.directory, args.commit) if args.action == "Build" else verify(args.directory, expected_commit=args.commit)
+    if args.action == 'Build' and args.roles:
+        from scripts.cicd.roles_release import build as build_roles
+        document = build_roles(ROOT, args.directory, args.commit)
+    else:
+        document = build(ROOT, args.directory, args.commit) if args.action == "Build" else verify(args.directory, expected_commit=args.commit)
     print(json.dumps({k: document[k] for k in ("commit", "release_id", "cloud_bundle_id")}))
 
 

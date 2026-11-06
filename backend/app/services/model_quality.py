@@ -203,7 +203,10 @@ def _build_report(region, model, training, dataset, frame, mode, start_at, hours
     def as_iso(value):
         # Preserve dataset wall time and its region offset, independent of browser timezone.
         try:
-            return pd.Timestamp(value).tz_localize(timezone).isoformat()
+            localized = pd.Timestamp(value).tz_localize(timezone, ambiguous='NaT', nonexistent='NaT')
+            if pd.isna(localized):
+                raise ValueError('CSV wall time has no unique timezone offset')
+            return localized.isoformat()
         except ValueError as error:
             raise ApplicationError("quality_timeline_invalid", "Replay includes an ambiguous or nonexistent local hour.", 409) from error
 

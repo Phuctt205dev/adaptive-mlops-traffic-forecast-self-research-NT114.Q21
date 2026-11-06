@@ -3,6 +3,9 @@ import copy
 import json
 from pathlib import Path
 import tempfile
+import os
+import subprocess
+import sys
 import unittest
 from unittest.mock import Mock, patch
 
@@ -116,6 +119,49 @@ class DeliveryOrdering(unittest.TestCase):
 
 
 class DeferredPolicy(unittest.TestCase):
+    def test_cli_deferral_works_without_repository_pythonpath_and_with_missing_pending_file(self):
+        item=transaction(mode='auto'); state=cd_state.initial(); state.update(mode='auto',active=item)
+        receipt={'commit':item['commit'],'guard_held':False,'recovery_required':False,'preflight_only':True,
+                 'started':False,'patched':[],'completed':False,'deferred':True,'retry_ci_run_id':'123'}
+        with tempfile.TemporaryDirectory() as directory:
+            name='delivery-'+item['commit']+'-'+item['run_id']+'-1.json'
+            (Path(directory)/name).write_text(json.dumps(receipt))
+            script=Path(__file__).resolve().parents[1]/'scripts/cicd/cd_state.py'
+            wrapper='''import base64,json,runpy,sys,urllib.request,urllib.error
+from unittest.mock import patch
+state=STATE
+pending=None
+class Response:
+ def __init__(self,value): self.value=value
+ def __enter__(self): return self
+ def __exit__(self,*args): pass
+ def read(self,*args): return json.dumps(self.value).encode()
+def request(req,**kwargs):
+ global state,pending
+ is_pending='cd-pending.json' in req.full_url
+ if req.get_method()=='GET':
+  value=pending if is_pending else state
+  if value is None: raise urllib.error.HTTPError(req.full_url,404,'missing',{},None)
+  return Response({'type':'file','sha':'1'*40,'encoding':'base64','content':base64.b64encode(json.dumps(value).encode()).decode()})
+ body=json.loads(req.data);value=json.loads(base64.b64decode(body['content']))
+ if is_pending: pending=value
+ else: state=value
+ return Response({})
+sys.argv=[SCRIPT,'finish','--receipt-directory',DIRECTORY]
+with patch.object(urllib.request,'urlopen',request):
+ try: runpy.run_path(SCRIPT,run_name='__main__')
+ except SystemExit as e:
+  assert e.code==0,e.code
+assert state['active'] is None and not state['blocked'] and state['last_success'] is None
+assert pending['ci_run_id']=='123'
+'''.replace('STATE',repr(state)).replace('SCRIPT',repr(str(script))).replace('DIRECTORY',repr(directory))
+            env={**os.environ,'GH_TOKEN':'offline','GITHUB_REPOSITORY':'owner/repo','GITHUB_RUN_ID':item['run_id'],
+                 'GITHUB_RUN_ATTEMPT':'1','EXPECTED_COMMIT':item['commit'],'CI_NUMBER':'1','DELIVERY_MODE':'auto',
+                 'CONTROL_EPOCH':'0','DELIVERY_RESULT':'success','DELIVERY_BEGAN':'true'}
+            env.pop('GITHUB_OUTPUT',None); env.pop('GITHUB_STEP_SUMMARY',None)
+            result=subprocess.run([sys.executable,'-I','-B','-c',wrapper],env=env,cwd=directory,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
     def test_safe_deferral_releases_ownership_without_success_or_failure_latch(self):
         state=cd_state.initial(); state['mode']='auto'
         api=MemoryAPI(state); store=cd_state.Store(api); item=transaction(mode='auto')

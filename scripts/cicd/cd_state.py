@@ -11,8 +11,11 @@ import os
 from pathlib import Path
 import re
 import ssl
+import sys
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 BRANCH = 'cd-settings'
 FILE = 'cd-state.json'
@@ -308,6 +311,9 @@ def main():
 
 
 if __name__ == '__main__':
+    # Deferred-queue helpers import this module. Keep ApiError/Store identities
+    # identical when this file is launched as a script by the runner.
+    sys.modules['scripts.cicd.cd_state'] = sys.modules[__name__]
     try:
         raise SystemExit(main())
     except Exception as error:

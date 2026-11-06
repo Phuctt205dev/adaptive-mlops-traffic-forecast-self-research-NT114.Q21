@@ -32,7 +32,7 @@ def fixtures(directory):
         model.fit(frame, y)  # Tiny offline fixture; never a product training run.
         joblib.dump(model, directory / (name + '.joblib'))
         expected=model.predict(frame)
-        np.savez(directory/(name+'.npz'),X=x[:4],expected=expected[:4],columns=np.array(frame.columns))
+        np.savez(directory/(name+'.npz'),X=x[:4],expected=expected[:4],columns=np.array(frame.columns,dtype=str))
         result['models'][name] = {'family': 'tree', 'file': name + '.joblib', 'expected': expected.tolist(), 'compatibility':name+'.npz'}
     scaler=StandardScaler().fit(y.reshape(-1, 1))
     joblib.dump({'target_scaler':scaler}, directory / 'preprocessor.joblib')
@@ -48,6 +48,10 @@ def fixtures(directory):
         np.savez(directory/(name+'.npz'),X=x_neural,expected=np.array(expected),raw_expected=scaler.inverse_transform(np.array(expected).reshape(-1,1)))
         result['models'][name] = {'family': 'neural', 'file': name + '.keras', 'expected': expected, 'compatibility':name+'.npz'}
         tf.keras.backend.clear_session()
+    for path in directory.glob('*.npz'):
+        with np.load(path,allow_pickle=False) as arrays:
+            for key in arrays.files:
+                assert arrays[key].dtype.kind!='O', 'Compatibility fixtures must not need pickle'
     result['files'] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in directory.iterdir() if p.is_file()}
     (directory / 'expected.json').write_text(json.dumps(result), encoding='utf-8')
     print(json.dumps({'synthetic_artifacts_created': True, 'model_count': len(result['models']), 'provider_called': False}))

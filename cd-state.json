@@ -3,7 +3,9 @@
   "mode": "manual",
   "epoch": 0,
   "blocked": false,
-  "active": {
+  "active": null,
+  "failure": null,
+  "last_success": {
     "run_id": "42169054932",
     "attempt": 1,
     "commit": "d4302c94d9d17edef2a52573fc0d49039efa5cfc",
@@ -11,8 +13,6 @@
     "mode": "manual",
     "epoch": 0
   },
-  "failure": null,
-  "last_success": null,
   "last_control": 42168169162,
-  "updated_by": "delivery"
+  "updated_by": "delivery-result"
 }

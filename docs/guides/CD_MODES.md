@@ -5,7 +5,7 @@ chọn có cần duyệt deployment trước khi giao việc cho runner.
 
 ## Bật/tắt bằng GitHub Actions
 
-1. Mở **Actions → CD Control → Run workflow**, chọn nhánh `master`.
+1. Mở [Actions → CD Control](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/workflows/cd-control.yml) → **Run workflow**, chọn nhánh `master`.
 2. Ô **Desired mode**: đánh dấu chọn **Auto**, bỏ đánh dấu chọn **Manual**.
 3. Bấm **Run workflow**, chờ bước lưu thành công.
 4. Xem **Summary → mode** và **blocked** để biết kết quả đã lưu.
@@ -28,6 +28,10 @@ state chưa khởi tạo hoặc không hợp lệ phải chặn triển khai.
 Cùng namespace, chỉ nhánh master, cùng startup/guard/rollout/Verify/rollback.
 Windows/Tailscale/runner vẫn cần online. Gói này chưa cài autostart hoặc tự đợi
 training: đang training thì preflight từ chối release trước khi sửa Deployment.
+
+Công tắc áp dụng cho backend. Frontend vẫn dùng workflow riêng; khi thay cả
+hai phía, phát hành backend và xác nhận Verify trước rồi mới push phần frontend
+phụ thuộc vào API mới. Công tắc không tự sắp thứ tự hai workflow này.
 
 ## Job cũ khi đổi chế độ
 
@@ -92,3 +96,26 @@ Khôi phục ứng dụng bằng rollback có kiểm chứng, không replay mộ
 Có thể bật thông báo workflow lỗi trong [cài đặt GitHub Actions cá nhân](https://docs.github.com/en/subscriptions-and-notifications/how-tos/managing-github-actions-notifications).
 Gói này không tự bật email/Slack thay user. Lỗi pod sau khi workflow hoàn tất
 vẫn cần giám sát riêng; không hứa rollback mọi lỗi muộn hoặc zero downtime.
+
+## Nghiệm thu ngày 06/11/2026
+
+- Backend CI đạt **469/469 test**, build image, kiểm startup Linux và Windows Plan.
+- [Manual triển khai thật](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/42169054932)
+  đạt Apply, Verify và ghi kết quả; guard đã nhả.
+- Bật Auto một lần rồi chạy liên tiếp ba lượt cùng release:
+  [lượt 1](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/42170721748),
+  [lượt 2](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/42171022387),
+  [lượt 3](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/42171414721).
+  Cả ba không có approval, đều Verify/ghi kết quả thành công và không patch
+  Deployment hoặc tạo lại pod. Đây là kiểm tra no-op, không phải ba rollout mới.
+- Chuyển Auto → Manual → Auto thành công, không đổi UID/spec năm Deployment
+  và UID sáu pod. Trạng thái cuối Auto, không bị chặn, không transaction dở;
+  public readiness đạt và release đúng bản đã nghiệm thu.
+
+Các ca lỗi/CrashLoop, rollback và chốt chặn Auto được kiểm bằng fixture/mock;
+không cố gây lỗi pod production hoặc chạy training để nghiệm thu công tắc.
+
+Runner dùng bundle CA công khai riêng cho Node/Python và vẫn kiểm TLS/hostname.
+Nếu Python báo lỗi chuỗi chứng thư, kiểm CA/chuỗi issuer mà Windows xác thực
+và làm mới bundle riêng trước khi chạy tiếp; không tắt TLS hoặc sửa state để
+bỏ qua kiểm tra. Bundle không chứa khóa riêng và không đưa vào Git.

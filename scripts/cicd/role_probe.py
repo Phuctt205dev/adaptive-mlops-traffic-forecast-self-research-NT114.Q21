@@ -26,6 +26,7 @@ def check(base, *, light=False):
     with requests.Session() as client:
         client.trust_env = False
         client.headers['Authorization'] = 'Bearer ' + token
+        client.headers['ngrok-skip-browser-warning'] = 'true'
         for path in paths:
             started = time.monotonic()
             response = client.get(base.rstrip('/') + path, timeout=(3, 10 if light else 90))

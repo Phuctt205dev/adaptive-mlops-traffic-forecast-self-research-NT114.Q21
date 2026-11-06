@@ -91,6 +91,7 @@ jobs:
           RKE2_KUBECONFIG: ${{ vars.RKE2_KUBECONFIG }}
           RKE2_IMAGE_PULL_SECRET: ${{ vars.RKE2_IMAGE_PULL_SECRET }}
           CI_RUN_ID: ${{ needs.inspect.outputs.run_id }}
+          PUBLIC_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
         run: ./scripts/cicd/deliver.ps1 -ArtifactDirectory ./delivery-artifact -ExpectedCommit $env:EXPECTED_COMMIT
       - name: Summarize deployment and recovery separately
         if: always()

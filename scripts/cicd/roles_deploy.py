@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.cicd.deploy import Cluster, container, ready_pods, now, spec_hash, AIRFLOW_FILES, DAG_CHECK
@@ -180,15 +181,34 @@ class RolesDelivery:
         self.save(business_proofs=[*self.state.get('business_proofs',[]),{'target':host,**result}])
         return result
 
+    def public_base(self):
+        base=os.environ.get('PUBLIC_API_BASE_URL','')
+        parsed=urlsplit(base)
+        if (parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password
+                or parsed.query or parsed.fragment or parsed.path.rstrip('/')!='/api/v1'):
+            raise ValueError('Set the reviewed frontend HTTPS PUBLIC_API_BASE_URL ending in /api/v1')
+        return base.rstrip('/')
+
+    def public_health(self):
+        script=Path(__file__).with_name('public_probe.py').read_text(encoding='utf-8')
+        script+='\nprint(json.dumps(check('+repr(self.public_base())+')))'
+        proof=self.cluster.remote(self.api(),script)
+        self.save(business_proofs=[*self.state.get('business_proofs',[]),{'target':'public_ingress',**proof}])
+        return proof
+
     def monitor_start(self):
         stop=threading.Event(); result={'samples':0,'requests':0,'errors':0,'started_at':now()}
         script=Path(__file__).with_name('role_probe.py').read_text(encoding='utf-8').split("if __name__ == '__main__':")[0]
         script+='\nprint(json.dumps(check(\'http://traffic-api:8000/api/v1\',light=True)))'
+        public_script=Path(__file__).with_name('public_probe.py').read_text(encoding='utf-8')
+        public_script+='\nprint(json.dumps(check('+repr(self.public_base())+')))'
+        result['targets']=['internal_service','public_ingress']
         def observe():
             while not stop.is_set():
                 try:
                     proof=self.cluster.remote(self.api(),script)
-                    result['samples']+=1; result['requests']+=proof['requests']
+                    public=self.cluster.remote(self.api(),public_script)
+                    result['samples']+=1; result['requests']+=proof['requests']+public['requests']
                 except Exception as error:
                     result['errors']+=1
                     result['last_error_type']=type(error).__name__
@@ -291,6 +311,7 @@ class RolesDelivery:
         raise RuntimeError('Service endpoints did not match the ready cohort')
 
     def plan(self):
+        self.public_base()
         if self.get('namespace','traffic-mlops')['metadata']['uid']!=self.cluster.namespace_uid:
             raise RuntimeError('Wrong cluster namespace')
         api=self.api(); active=api['metadata']['name']
@@ -430,6 +451,7 @@ class RolesDelivery:
                                   ('traffic-training-tree',tree,1),('traffic-training-worker',neural,1)]:
             self.endpoints(service,app,count)
         self.business()
+        self.public_health()
         return proof
 
     def rollback(self):
@@ -522,6 +544,7 @@ class RolesDelivery:
                 return
             self.start_guard()
             self.business()
+            self.public_health()
             self.monitor_start()
             if plan['target'] in plan['changes']:
                 self.change('deployment',plan['target'],plan['changes'][plan['target']])

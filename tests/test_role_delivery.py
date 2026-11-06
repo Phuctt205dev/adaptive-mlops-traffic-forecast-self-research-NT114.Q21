@@ -102,6 +102,7 @@ class DeliveryOrdering(unittest.TestCase):
             op.api=Mock(); op.start_guard=Mock(); op.change=Mock(); op.health=Mock(); op.endpoints=Mock()
             op.route=Mock(); op.business=Mock(side_effect=[{},RuntimeError('Preview failed')]); op.rollback=Mock()
             op.monitor_start=Mock(); op.monitor_stop=Mock()
+            op.public_health=Mock()
             with self.assertRaisesRegex(RuntimeError,'Preview failed'):
                 op.apply()
             self.assertEqual(op.route.call_args_list[0].args,('api-preview','api'))
@@ -116,6 +117,14 @@ class DeliveryOrdering(unittest.TestCase):
         images['tree']['source_id']='wrong'
         with self.assertRaises(ValueError):
             validate_delivery(release,value)
+
+    def test_public_probe_requires_https_api_url_without_embedded_credentials(self):
+        op=object.__new__(RolesDelivery)
+        for value in ('http://api.example/api/v1','https://user:secret@api.example/api/v1','https://api.example/not-api'):
+            with patch.dict(os.environ,{'PUBLIC_API_BASE_URL':value}):
+                with self.assertRaises(ValueError): op.public_base()
+        with patch.dict(os.environ,{'PUBLIC_API_BASE_URL':'https://api.example/api/v1'}):
+            self.assertEqual(op.public_base(),'https://api.example/api/v1')
 
 
 class DeferredPolicy(unittest.TestCase):

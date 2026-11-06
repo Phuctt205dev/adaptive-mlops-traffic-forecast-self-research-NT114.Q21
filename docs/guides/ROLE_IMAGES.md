@@ -65,6 +65,9 @@ The Actions Summary distinguishes completed, deferred, failed and recovered
 outcomes. The sanitized receipt records role source IDs, image digests, ready
 pods, business-check counts and an availability observation window. It never
 contains user response bodies, credentials or inverse specifications.
+Authenticated business probes stay inside the cluster. Public ingress probes
+use anonymous live/ready endpoints only; no administrator token crosses the
+external tunnel. The user verifies authenticated frontend flows separately.
 
 Write-ahead inverses stay in `role-transactions/` beside the private delivery
 kubeconfig, outside the runner checkout and uploaded artifact paths. Each

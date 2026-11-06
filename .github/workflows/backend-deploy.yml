@@ -32,13 +32,17 @@ jobs:
       sha: ${{ steps.provenance.outputs.sha }}
       run_id: ${{ steps.provenance.outputs.run_id }}
       artifact: ${{ steps.provenance.outputs.artifact }}
+      mode: ${{ steps.provenance.outputs.mode }}
+      epoch: ${{ steps.provenance.outputs.epoch }}
+      environment: ${{ steps.provenance.outputs.environment }}
+      ci_number: ${{ steps.provenance.outputs.ci_number }}
     steps:
       # The validation code comes from the protected default branch, never a PR.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
-      - name: Verify source run and configured approval protection
+      - name: Verify source run and selected deployment protection
         id: provenance
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -47,9 +51,14 @@ jobs:
 
   deploy:
     needs: inspect
-    environment: rke2-production
+    environment: ${{ needs.inspect.outputs.environment }}
     runs-on: [self-hosted, Windows, X64, rke2-deploy]
     timeout-minutes: 55
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      began: ${{ steps.claim.outputs.began }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -61,7 +70,19 @@ jobs:
           run-id: ${{ needs.inspect.outputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: delivery-artifact
+      - name: Claim this deployment under the saved mode
+        id: claim
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_COMMIT: ${{ needs.inspect.outputs.sha }}
+          CI_NUMBER: ${{ needs.inspect.outputs.ci_number }}
+          DELIVERY_MODE: ${{ needs.inspect.outputs.mode }}
+          CONTROL_EPOCH: ${{ needs.inspect.outputs.epoch }}
+        run: python -B scripts/cicd/cd_state.py begin
       - name: Deliver the approved immutable release
+        id: delivery
+        if: steps.claim.outputs.began == 'true'
         shell: powershell
         env:
           EXPECTED_COMMIT: ${{ needs.inspect.outputs.sha }}
@@ -70,6 +91,13 @@ jobs:
           RKE2_KUBECONFIG: ${{ vars.RKE2_KUBECONFIG }}
           RKE2_IMAGE_PULL_SECRET: ${{ vars.RKE2_IMAGE_PULL_SECRET }}
         run: ./scripts/cicd/deliver.ps1 -ArtifactDirectory ./delivery-artifact -ExpectedCommit $env:EXPECTED_COMMIT
+      - name: Summarize deployment and recovery separately
+        if: always()
+        shell: powershell
+        env:
+          EXPECTED_COMMIT: ${{ needs.inspect.outputs.sha }}
+          DELIVERY_OUTCOME: ${{ steps.delivery.conclusion || 'failure' }}
+        run: python -B scripts/cicd/diagnostics.py --outcome $env:DELIVERY_OUTCOME
       - name: Preserve sanitized deployment receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -78,3 +106,34 @@ jobs:
           path: results/cicd/*.json
           if-no-files-found: ignore
           retention-days: 30
+
+  record-result:
+    needs: [inspect, deploy]
+    if: always() && needs.inspect.result == 'success' && needs.deploy.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: master
+          persist-credentials: false
+      - name: Download the sanitized receipt, if the runner could preserve it
+        id: receipt
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: delivery-receipt-${{ needs.inspect.outputs.sha }}-${{ github.run_attempt }}
+          path: receipt
+      - name: Record outcome and block Auto after failure
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_COMMIT: ${{ needs.inspect.outputs.sha }}
+          CI_NUMBER: ${{ needs.inspect.outputs.ci_number }}
+          DELIVERY_MODE: ${{ needs.inspect.outputs.mode }}
+          CONTROL_EPOCH: ${{ needs.inspect.outputs.epoch }}
+          DELIVERY_RESULT: ${{ needs.deploy.result }}
+          DELIVERY_BEGAN: ${{ needs.deploy.outputs.began }}
+        run: python -B scripts/cicd/cd_state.py finish --receipt-directory receipt

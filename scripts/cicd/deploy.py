@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from scripts.cicd.release import DIGEST_IMAGE, canonical, digest, read_json, verify
 from scripts.cicd import startup
+from scripts.cicd import diagnostics
 from scripts.cloud_training.manage_rollout import READINESS
 from scripts.shap.recover_feature_importance_cache import INVENTORY, CACHE_BYTES
 
@@ -447,14 +448,19 @@ class Delivery:
             raise ValueError("Apply requires the published GHCR release image, not the Plan-only base image reference.")
         if self.state.get("started") and not (self.state.get("completed") or self.state.get("rolled_back")):
             raise RuntimeError("An interrupted delivery needs recovery; do not replay Apply.")
+        self.save(preflight_only=True, started=False, completed=False, rolled_back=False,
+                  guard_held=False, recovery_required=False, patched=[])
         values, readiness = self.inventory()
         if all(values[n]["spec"]["template"]["metadata"].get("annotations", {}).get(ANNOTATION) == self.release["release_id"] for n in self.release["baseline"]["application_deployments"]):
-            self.health()
-            self.save(completed=True, up_to_date=True)
+            proof = self.health()
+            snapshots = {name: {'uid': value['metadata']['uid'], 'before': spec_hash(value), 'after': spec_hash(value)}
+                         for name, value in values.items()}
+            self.save(completed=True, up_to_date=True, proof=proof, plans=snapshots,
+                      dag_was_paused=readiness['dag_paused'])
             return {"up_to_date": True}
         _, _, plans = self.plan()
         self.check_startup()
-        self.save(started=True, completed=False, rolled_back=False, patched=[], plans=plans, dag_was_paused=readiness["dag_paused"])
+        self.save(preflight_only=False, started=True, completed=False, rolled_back=False, patched=[], plans=plans, dag_was_paused=readiness["dag_paused"])
         try:
             self.start_guard(values["traffic-api"])
             self.pause(True)
@@ -480,6 +486,14 @@ class Delivery:
             return {"completed": True, "commit": self.release["commit"], "release_id": self.release["release_id"]}
         except Exception:
             self.save(recovery_required=True)
+            # Capture failure facts before inverse patches remove failed pods.
+            # Collection is bounded and must never prevent rollback.
+            try:
+                evidence = diagnostics.collect(self.cluster, self.state.get('patched', []))
+                target = self.path.with_suffix('.diagnostics.json')
+                target.write_text(json.dumps(evidence, indent=2), encoding='utf-8')
+            except Exception:
+                pass
             if self.state.get("guard_held"):
                 try:
                     self.rollback()

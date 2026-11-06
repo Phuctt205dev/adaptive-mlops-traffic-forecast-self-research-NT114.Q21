@@ -1,0 +1,41 @@
+name: CD Control
+
+on:
+  workflow_dispatch:
+    inputs:
+      automatic:
+        description: 'Desired mode: checked = Auto, unchecked = Manual. See the saved result in Summary.'
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cd-control
+  cancel-in-progress: false
+
+jobs:
+  save-mode:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: master
+          persist-credentials: false
+      - name: Show the saved state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RKE2_CD_ENABLED: ${{ vars.RKE2_CD_ENABLED }}
+        run: python -B scripts/cicd/cd_state.py status
+      - name: Save persistent deployment mode
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_AUTO: ${{ inputs.automatic }}
+          RKE2_CD_ENABLED: ${{ vars.RKE2_CD_ENABLED }}
+        run: python -B scripts/cicd/cd_state.py mode --auto "$REQUESTED_AUTO"

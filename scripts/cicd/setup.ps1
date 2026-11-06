@@ -1,7 +1,7 @@
 # One-time operator setup. Check is read-only; other actions are explicit.
 [CmdletBinding()]
 param(
-    [ValidateSet('Check', 'ConfigureGitHub', 'CreateAccess', 'RegisterRunner', 'RepairRunner', 'StartRunner', 'EnableCD')]
+    [ValidateSet('Check', 'ConfigureGitHub', 'ConfigureCDModes', 'CreateAccess', 'RegisterRunner', 'RepairRunner', 'StartRunner', 'EnableCD')]
     [string]$Action = 'Check',
     [string]$PullSecretName = '',
     [switch]$PublicImageConfirmed
@@ -128,6 +128,49 @@ try {
         Set-VariableValue 'RKE2_IMAGE_PULL_SECRET' $PullSecretName
         if (-not (Check-Gate)) { throw 'The required-reviewer gate was not confirmed.' }
         Write-Output 'GitHub approval is configured. Automatic delivery remains disabled.'
+    }
+    elseif ($Action -eq 'ConfigureCDModes') {
+        $repo = Invoke-GitHub GET $apiRoot
+        if (-not $repo.permissions.admin -or $repo.default_branch -ne 'master') { throw 'Repository admin/master configuration is required.' }
+        if (-not (Check-Gate)) { throw 'Preserve/configure the existing Manual reviewer gate first.' }
+        $autoName = 'rke2-production-auto'
+        $auto = Invoke-GitHub GET ($apiRoot + '/environments/' + $autoName) -AllowMissing
+        if (-not $auto) {
+            $body = @{ wait_timer = 0; can_admins_bypass = $false;
+                       deployment_branch_policy = @{ protected_branches = $false; custom_branch_policies = $true } }
+            Invoke-GitHub PUT ($apiRoot + '/environments/' + $autoName) $body | Out-Null
+        } elseif ($auto.protection_rules | Where-Object { $_.type -eq 'required_reviewers' -and $_.reviewers.Count -gt 0 }) {
+            throw 'Auto environment already has reviewers; inspect instead of deleting its protection.'
+        }
+        $policies = Invoke-GitHub GET ($apiRoot + '/environments/' + $autoName + '/deployment-branch-policies')
+        if (-not $policies.branch_policies.Count) {
+            Invoke-GitHub POST ($apiRoot + '/environments/' + $autoName + '/deployment-branch-policies') @{ name = 'master'; type = 'branch' } | Out-Null
+        } elseif ($policies.branch_policies.Count -ne 1 -or $policies.branch_policies[0].name -ne 'master' -or $policies.branch_policies[0].type -ne 'branch') {
+            throw 'Auto deployment branch policy is broader than master.'
+        }
+        $previousToken = $env:GH_TOKEN
+        $previousRepo = $env:GITHUB_REPOSITORY
+        $previousCa = $env:NODE_EXTRA_CA_CERTS
+        try {
+            if (-not $previousCa) {
+                $pemPath = Join-Path $privateDirectory 'windows-public-roots.pem'
+                if (-not (Test-Path -LiteralPath $pemPath)) {
+                    $certificates = @(Get-ChildItem Cert:\CurrentUser\Root, Cert:\LocalMachine\Root | Sort-Object Thumbprint -Unique)
+                    $pemText = ($certificates | ForEach-Object { "-----BEGIN CERTIFICATE-----`n" + [Convert]::ToBase64String($_.RawData, [Base64FormattingOptions]::InsertLineBreaks) + "`n-----END CERTIFICATE-----`n" }) -join "`n"
+                    [IO.File]::WriteAllText($pemPath, $pemText, (New-Object Text.UTF8Encoding($false)))
+                }
+                $env:NODE_EXTRA_CA_CERTS = $pemPath
+            }
+            $env:GH_TOKEN = (Get-ApiHeaders).Authorization.Substring(7)
+            $env:GITHUB_REPOSITORY = $repository
+            & python -B scripts/cicd/cd_state.py initialize
+            if ($LASTEXITCODE -ne 0) { throw 'Persistent CD state initialization failed.' }
+        } finally {
+            $env:GH_TOKEN = $previousToken
+            $env:GITHUB_REPOSITORY = $previousRepo
+            $env:NODE_EXTRA_CA_CERTS = $previousCa
+        }
+        Write-Output 'CD modes prepared; existing saved mode and CD enable switch were preserved.'
     }
     elseif ($Action -eq 'CreateAccess') {
         # Operator invocation explicitly authorizes this one-time RBAC apply.

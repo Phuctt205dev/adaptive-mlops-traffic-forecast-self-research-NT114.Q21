@@ -1,5 +1,6 @@
 """Delivery safety and immutable packaging; no live services or credentials."""
 import copy
+import base64
 import json
 import os
 from pathlib import Path
@@ -10,7 +11,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
-from scripts.cicd import deploy, github_gate, maintenance, release, startup
+from scripts.cicd import cd_state, deploy, github_gate, maintenance, release, startup
 
 COMMIT = "a" * 40
 IMAGE = "ghcr.io/example/traffic/backend@sha256:" + "b" * 64
@@ -253,9 +254,12 @@ class PatchTests(unittest.TestCase):
 class GateTests(unittest.TestCase):
     def responses(self):
         return [{"conclusion": "success", "status": "completed", "event": "push", "workflow_id": 1,
-                 "head_branch": "master", "head_sha": COMMIT, "head_repository": {"full_name": "owner/repo"}},
-                {"id": 1}, {"default_branch": "master"},
-                {"protection_rules": [{"type": "required_reviewers", "reviewers": [{"id": 1}]}]}]
+                 "head_branch": "master", "head_sha": COMMIT, "run_number": 1, "head_repository": {"full_name": "owner/repo"}},
+                {"id": 1}, {"default_branch": "master"}, {'type': 'file'},
+                {'type': 'file', 'encoding': 'base64', 'content': base64.b64encode(json.dumps(cd_state.initial()).encode()).decode()},
+                {"protection_rules": [{"type": "required_reviewers", "reviewers": [{"id": 1}]}],
+                 'deployment_branch_policy': {'custom_branch_policies': True, 'protected_branches': False}},
+                {'branch_policies': [{'name': 'master', 'type': 'branch'}]}]
 
     def test_trusted_push_and_real_review_gate(self):
         result = github_gate.validate("owner/repo", "1", fetch=Mock(side_effect=self.responses()))
@@ -263,7 +267,7 @@ class GateTests(unittest.TestCase):
         self.assertEqual(result["artifact"], "backend-release-" + COMMIT)
 
     def test_no_reviewers_fails_before_self_hosted_job(self):
-        values = self.responses(); values[-1] = {"protection_rules": []}
+        values = self.responses(); values[-2] = {"protection_rules": []}
         with self.assertRaisesRegex(ValueError, "reviewers"):
             github_gate.validate("owner/repo", "1", fetch=Mock(side_effect=values))
 
@@ -354,6 +358,26 @@ class DeliveryTests(unittest.TestCase):
             operator.apply()
         operator.start_guard.assert_not_called()
         operator.cluster.patch.assert_not_called()
+
+    def test_evidence_is_attempted_before_rollback_and_failure_cannot_block_recovery(self):
+        operator, values = self.operator()
+        originals = copy.deepcopy(values)
+        waits = [0]
+        def wait(name):
+            waits[0] += 1
+            if waits[0] == 1:
+                raise RuntimeError('rollout failed')
+        operator.cluster.wait.side_effect = wait
+        observed = []
+        def collect(*args):
+            observed.append(copy.deepcopy(values))
+            raise TimeoutError('diagnostic unavailable')
+        with patch.object(deploy.diagnostics, 'collect', side_effect=collect):
+            with self.assertRaisesRegex(RuntimeError, 'rollout failed'):
+                operator.apply()
+        self.assertNotEqual(observed[0], originals)
+        self.assertEqual(values, originals)
+        self.assertTrue(operator.state['rolled_back'])
 
     def test_candidate_startup_failure_stops_before_guard_pause_and_patch(self):
         operator, _ = self.operator()

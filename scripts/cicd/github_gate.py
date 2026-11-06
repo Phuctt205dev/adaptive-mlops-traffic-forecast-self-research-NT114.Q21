@@ -1,21 +1,36 @@
-"""Validate CI provenance and the real production approval gate, hosted only."""
+"""Validate immutable CI provenance and the selected deployment policy, hosted only."""
 import argparse
 import json
 import os
 from pathlib import Path
 import re
+import base64
+import sys
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.cicd.cd_state import BRANCH, FILE, ENVIRONMENTS, initial, validate as validate_state
+
+
+class MissingResource(RuntimeError):
+    pass
 
 
 def get(path):
     token = os.environ["GH_TOKEN"]
     request = Request("https://api.github.com/" + path, headers={"Authorization": "Bearer " + token,
-                      "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"})
+                      "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
+                      'Cache-Control': 'no-cache'})
     try:
         with urlopen(request, timeout=30) as response:
-            return json.load(response)
+            raw = response.read(2 * 1024 * 1024 + 1)
+            if len(raw) > 2 * 1024 * 1024:
+                raise ValueError('GitHub response exceeds its budget.')
+            return json.loads(raw)
     except HTTPError as error:
+        if error.code == 404:
+            raise MissingResource('GitHub resource is missing.') from None
         raise RuntimeError("GitHub API check failed (HTTP " + str(error.code) + "); token/body omitted.") from None
 
 
@@ -30,11 +45,39 @@ def validate(repository, run_id, *, fetch=get):
             or (run.get("head_repository") or {}).get("full_name", "").lower() != repository.lower()
             or not re.fullmatch(r"[0-9a-f]{40}", run.get("head_sha", ""))):
         raise ValueError("Only successful default-branch push runs from this repository may deploy.")
-    environment = fetch(f"repos/{repository}/environments/rke2-production")
+    controller = fetch(f'repos/{repository}/contents/scripts/cicd/cd_state.py?ref={run["head_sha"]}')
+    if controller.get('type') != 'file':
+        raise ValueError('This CI does not contain the mode-aware delivery controller.')
+    try:
+        config = fetch(f'repos/{repository}/contents/{FILE}?ref={BRANCH}')
+        raw = base64.b64decode(''.join(config['content'].split()), validate=True)
+        if config.get('type') != 'file' or config.get('encoding') != 'base64' or len(raw) > 32768:
+            raise ValueError('Invalid CD configuration envelope.')
+        state = validate_state(json.loads(raw))
+    except MissingResource:
+        state = initial()
+    mode = state['mode']
+    if state['active'] is not None:
+        raise ValueError('An earlier delivery needs completion or verified recovery.')
+    if mode == 'auto' and state['blocked']:
+        raise ValueError('Auto is blocked by a failed release; use Manual to verify a repair.')
+    environment_name = ENVIRONMENTS[mode]
+    environment = fetch(f"repos/{repository}/environments/{environment_name}")
     rules = environment.get("protection_rules", [])
-    if not any(r.get("type") == "required_reviewers" and r.get("reviewers") for r in rules):
+    reviewers = any(r.get("type") == "required_reviewers" and r.get("reviewers") for r in rules)
+    if mode == 'manual' and not reviewers:
         raise ValueError("rke2-production must have required reviewers; deployment stays disabled.")
-    return {"sha": run["head_sha"], "run_id": str(run_id), "artifact": "backend-release-" + run["head_sha"]}
+    if mode == 'auto' and reviewers:
+        raise ValueError('Auto environment unexpectedly requires review; policy was not changed automatically.')
+    policy = environment.get('deployment_branch_policy') or {}
+    branches = fetch(f'repos/{repository}/environments/{environment_name}/deployment-branch-policies')
+    if (not policy.get('custom_branch_policies') or policy.get('protected_branches')
+            or [(p.get('name'), p.get('type')) for p in branches.get('branch_policies', [])] != [(repo['default_branch'], 'branch')]):
+        raise ValueError('Deployment environment must allow only the default branch.')
+    if type(run.get('run_number')) is not int or run['run_number'] < 1:
+        raise ValueError('CI sequence is missing.')
+    return {"sha": run["head_sha"], "run_id": str(run_id), "artifact": "backend-release-" + run["head_sha"],
+            'mode': mode, 'epoch': str(state['epoch']), 'environment': environment_name, 'ci_number': str(run['run_number'])}
 
 
 def main():
@@ -45,7 +88,12 @@ def main():
     with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as stream:
         for key, value in result.items():
             stream.write(key + "=" + value + "\n")
-    print(json.dumps({"ci_provenance_verified": True, "approval_gate_verified": True, **result}))
+    print(json.dumps({"ci_provenance_verified": True, "deployment_policy_verified": True, **result}))
+    if os.environ.get('GITHUB_STEP_SUMMARY'):
+        with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a', encoding='utf-8') as stream:
+            stream.write('## Deployment selection\n\n- Mode: **' + result['mode'] + '**\n- Environment: `' +
+                         result['environment'] + '`\n- Commit: `' + result['sha'] + '`\n- Source CI: https://github.com/' +
+                         os.environ['GITHUB_REPOSITORY'] + '/actions/runs/' + result['run_id'] + '\n')
 
 
 if __name__ == "__main__":

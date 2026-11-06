@@ -2,6 +2,11 @@
 
 Phương án đã được người dùng chốt ngày 05/11/2026: **CI kiểm chứng → duyệt một lần trên GitHub → runner Windows triển khai qua Tailscale → Verify**. Thiết lập ban đầu và nghiệm thu live vẫn là các bước riêng, không suy ra đã hoàn thành từ việc có workflow trong source.
 
+Bản nâng cấp 06/11 bổ sung lựa chọn Manual/Auto có trạng thái lưu lâu dài;
+đường rollout/guard/Verify vẫn giữ. Xem [CD Control](CD_MODES.md) cho cách đổi
+chế độ, chốt lỗi, bằng chứng trước rollback và xác nhận phục hồi. Mốc nghiệm
+thu live của bản nâng cấp phải tra handoff; tài liệu source không thay bằng chứng.
+
 ## Thành phần
 
 | File | Vai trò |

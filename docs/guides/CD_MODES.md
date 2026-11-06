@@ -1,0 +1,94 @@
+# CD Control: Manual / Auto
+
+Code vẫn push vào `master` như hiện tại; CI kiểm/build như trước. Chế độ chỉ
+chọn có cần duyệt deployment trước khi giao việc cho runner.
+
+## Bật/tắt bằng GitHub Actions
+
+1. Mở **Actions → CD Control → Run workflow**, chọn nhánh `master`.
+2. Ô **Desired mode**: đánh dấu chọn **Auto**, bỏ đánh dấu chọn **Manual**.
+3. Bấm **Run workflow**, chờ bước lưu thành công.
+4. Xem **Summary → mode** và **blocked** để biết kết quả đã lưu.
+
+Đây là ô chọn *chế độ muốn lưu*, không phải chỉ báo trực tiếp trạng thái hiện
+tại; GitHub mặc định bỏ chọn. Job hiển thị trạng thái cũ rồi kết quả lưu mới.
+Chỉ coi việc đổi chế độ đã xác nhận khi job thành công. Auto được lưu qua các
+lần push; không cần bật lại. Đổi mode không tạo release, build image hoặc thay pod.
+
+Nhánh riêng `cd-settings` giữ `cd-state.json`, không chen commit vào master.
+Không thực thi mã từ nhánh cấu hình. Chỉ job điều khiển/kết quả nhận Contents
+write cho token job; không thêm PAT cá nhân. Thiếu cấu hình mặc định Manual;
+state chưa khởi tạo hoặc không hợp lệ phải chặn triển khai.
+
+| Chế độ | Sau CI thành công |
+| --- | --- |
+| Manual | `rke2-production` yêu cầu Review deployments → Approve and deploy. |
+| Auto | `rke2-production-auto` đi thẳng tới runner, vẫn kiểm nguồn/commit và cụm. |
+
+Cùng namespace, chỉ nhánh master, cùng startup/guard/rollout/Verify/rollback.
+Windows/Tailscale/runner vẫn cần online. Gói này chưa cài autostart hoặc tự đợi
+training: đang training thì preflight từ chối release trước khi sửa Deployment.
+
+## Job cũ khi đổi chế độ
+
+- Release chốt mode/epoch trong inspect, rồi nhận quyền triển khai bằng CAS.
+  Nếu mode đổi trước lúc nhận quyền, release được skip trước thao tác trên cụm.
+- Release đã nhận quyền tiếp tục hoàn tất/phục hồi. Đổi công tắc không cắt
+  ngang transaction hoặc tự duyệt một yêu cầu đang chờ.
+- Job chờ duyệt vẫn giữ gate; bạn có thể hủy job cũ **chưa triển khai** trên
+  GitHub. Nếu duyệt sau khi mode đổi, bước claim sẽ skip. Job chờ cũ có thể giữ
+  hàng đợi, nên xem Actions khi chuyển mode.
+- Không ngắt rollout đang chạy hoặc triển khai CI cũ hơn bản đã phát hành.
+
+`RKE2_CD_ENABLED=false` vẫn ngăn release mới ở inspect, không dừng transaction
+đang chạy. Chọn Auto không tự bật công tắc này.
+
+## Lỗi và bằng chứng
+
+Workflow vẫn **FAILED** dù rollback thành công. Summary tách deployment và
+recovery; artifact `delivery-receipt-<commit>-<attempt>` giữ receipt/chẩn đoán
+đã lọc trong 30 ngày. Gửi link run thay vì chụp kịp pod đỏ.
+
+Trước rollback, controller thu trạng thái pod/container, reason/exit code,
+error type và tên file/dòng traceback với budget 12 giây. Không upload raw
+spec/env, exception message, Secret hoặc log thô. Nếu mất kết nối/budget hết,
+báo phần không thu được và vẫn ưu tiên rollback.
+
+Sau lỗi, Auto bị chặn. Chuyển Manual, kiểm nguyên nhân/phục hồi rồi phát hành
+một bản Manual đạt Apply+Verify; kết quả xác nhận mới gỡ chốt. Sau đó bật Auto
+lại. Đổi công tắc không tự xóa chốt lỗi.
+
+Nếu runner mất kết nối/receipt chưa chứng minh nhả guard, quyền sở hữu release
+được giữ để chặn triển khai chồng. Không sửa JSON để xóa quyền này.
+
+## Xác nhận phục hồi quyền sở hữu bị kẹt
+
+Chủ vận hành đọc receipt gốc/hiện trạng và hoàn tất phục hồi bằng đúng artifact,
+journal theo [guide CI/CD](CICD_RKE2.md). Sau đó `recover_cd.py` kiểm chỉ đọc:
+đúng namespace UID, đủ năm Deployment đúng UID/spec trước (hoặc sau nếu receipt
+đã completed), đủ replica Ready, guard kết thúc, DAG phù hợp và không training.
+Chỉ sau bằng chứng mới xóa quyền sở hữu; Auto vẫn chặn tới Manual release đạt.
+
+```powershell
+# GH_TOKEN được cấp quyền, chỉ giữ trong bộ nhớ; không ghi log.
+python -B scripts/cicd/recover_cd.py `
+  --receipt <original-delivery-journal.json> `
+  --kubectl <kubectl.exe> --kubeconfig <dedicated-kubeconfig> `
+  --context traffic-delivery --namespace-uid <reviewed-namespace-uid>
+```
+
+Thiếu receipt, cấu hình đổi xen vào hoặc guard chưa rõ thì phải dừng và tái lập
+phương án phục hồi có kiểm chứng. Không sửa receipt hoặc replay Apply để thử.
+
+## Chuẩn bị một lần
+
+`setup.ps1 -Action ConfigureCDModes` chuẩn bị environment Auto chỉ master và
+khởi tạo Manual nếu chưa có. Giữ reviewer Manual, mode đã lưu và CD enable;
+không đăng ký lại runner hoặc apply manifest nền.
+
+Không dùng CI trước bản nâng cấp mode-control với workflow mới vì thiếu helper.
+Khôi phục ứng dụng bằng rollback có kiểm chứng, không replay một CI cũ ngẫu nhiên.
+
+Có thể bật thông báo workflow lỗi trong [cài đặt GitHub Actions cá nhân](https://docs.github.com/en/subscriptions-and-notifications/how-tos/managing-github-actions-notifications).
+Gói này không tự bật email/Slack thay user. Lỗi pod sau khi workflow hoàn tất
+vẫn cần giám sát riêng; không hứa rollback mọi lỗi muộn hoặc zero downtime.

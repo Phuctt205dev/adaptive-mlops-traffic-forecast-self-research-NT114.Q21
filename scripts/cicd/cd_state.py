@@ -194,6 +194,8 @@ def finish(store, transaction, outcome, receipt=None, *, began=False):
         owned = active is not None and all(active.get(k) == transaction[k] for k in ('run_id', 'attempt', 'commit'))
         if not owned and not began and (state['mode'] != transaction['mode'] or state['epoch'] != transaction['epoch']):
             return state, {'outcome': 'obsolete unstarted release skipped', 'blocked': state['blocked']}
+        if not owned and not began and outcome == 'cancelled':
+            return state, {'outcome': 'unstarted cancellation skipped', 'blocked': state['blocked']}
         if active is not None and not owned:
             raise ValueError('Another release owns the transaction; outcome was not applied.')
         if outcome == 'success' and not began and not owned:
@@ -285,14 +287,18 @@ def main():
         transaction = {'run_id': os.environ['GITHUB_RUN_ID'], 'attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
                        'commit': os.environ['EXPECTED_COMMIT'], 'ci_number': int(os.environ['CI_NUMBER']),
                        'mode': os.environ['DELIVERY_MODE'], 'epoch': int(os.environ['CONTROL_EPOCH'])}
-        emit(begin(store, transaction) if args.action == 'begin' else finish(
+        result = begin(store, transaction) if args.action == 'begin' else finish(
             store, transaction, os.environ['DELIVERY_RESULT'], read_receipt(args.receipt_directory, transaction),
-            began=os.environ.get('DELIVERY_BEGAN') == 'true'))
+            began=os.environ.get('DELIVERY_BEGAN') == 'true')
+        emit(result)
+        if args.action == 'finish' and result['outcome'] == 'failed':
+            return 1
+    return 0
 
 
 if __name__ == '__main__':
     try:
-        main()
+        raise SystemExit(main())
     except Exception as error:
         # Never echo an API body, token or unexpected exception text.
         print(json.dumps({'cd_control_failed': True, 'error_type': type(error).__name__,

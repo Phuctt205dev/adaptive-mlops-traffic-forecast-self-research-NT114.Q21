@@ -97,6 +97,8 @@ jobs:
         env:
           EXPECTED_COMMIT: ${{ needs.inspect.outputs.sha }}
           DELIVERY_OUTCOME: ${{ steps.delivery.conclusion || 'failure' }}
+          CLAIM_BEGAN: ${{ steps.claim.outputs.began }}
+          CLAIM_OUTCOME: ${{ steps.claim.conclusion }}
         run: python -B scripts/cicd/diagnostics.py --outcome $env:DELIVERY_OUTCOME
       - name: Preserve sanitized deployment receipt
         if: always()

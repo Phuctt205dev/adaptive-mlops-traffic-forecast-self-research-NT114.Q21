@@ -121,8 +121,11 @@ def main():
     parser.add_argument('--directory', default='results/cicd')
     parser.add_argument('--outcome', required=True, choices=('success', 'failure', 'cancelled', 'skipped'))
     args = parser.parse_args()
+    outcome = args.outcome
+    if outcome == 'skipped' and not (os.environ.get('CLAIM_BEGAN') == 'false' and os.environ.get('CLAIM_OUTCOME') == 'success'):
+        outcome = 'failure'
     text = report(args.directory, os.environ['EXPECTED_COMMIT'], os.environ['GITHUB_RUN_ID'],
-                  os.environ['GITHUB_RUN_ATTEMPT'], args.outcome)
+                  os.environ['GITHUB_RUN_ATTEMPT'], outcome)
     print(text)
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a', encoding='utf-8') as stream:

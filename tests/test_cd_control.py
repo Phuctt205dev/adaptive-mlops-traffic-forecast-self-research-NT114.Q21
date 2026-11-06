@@ -2,6 +2,8 @@ import base64
 import copy
 import json
 import io
+import os
+import sys
 import ssl
 from pathlib import Path
 import tempfile
@@ -154,6 +156,23 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(result['outcome'], 'obsolete unstarted release skipped')
         self.assertFalse(self.api.state['blocked'])
 
+    def test_cancel_before_claim_does_not_create_a_false_deployment_failure(self):
+        result = cd.finish(self.store, transaction(), 'cancelled')
+        self.assertEqual(result['outcome'], 'unstarted cancellation skipped')
+        self.assertFalse(self.api.state['blocked'])
+
+    def test_unverified_outcome_fails_the_result_job_even_if_deploy_job_was_green(self):
+        item = transaction()
+        cd.begin(self.store, item)
+        environment = {'GITHUB_REPOSITORY': 'owner/repo', 'GITHUB_RUN_ID': item['run_id'],
+            'GITHUB_RUN_ATTEMPT': '1', 'EXPECTED_COMMIT': item['commit'], 'CI_NUMBER': '1',
+            'DELIVERY_MODE': 'manual', 'CONTROL_EPOCH': '0', 'DELIVERY_RESULT': 'success', 'DELIVERY_BEGAN': 'true'}
+        with patch.dict(os.environ, environment, clear=True), patch.object(sys, 'argv', ['cd_state.py', 'finish']), \
+             patch.object(cd, 'GitHub', return_value=self.api), patch.object(cd, 'Store', return_value=self.store), \
+             patch.object(cd, 'read_receipt', return_value=None), patch.object(cd, 'emit'):
+            self.assertEqual(cd.main(), 1)
+        self.assertTrue(self.api.state['blocked'])
+
     def test_older_ci_cannot_overwrite_a_newer_success(self):
         item = transaction(3)
         cd.begin(self.store, item)
@@ -282,6 +301,16 @@ class PolicyTests(unittest.TestCase):
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_summary_distinguishes_intentional_skip_from_predeployment_failure(self):
+        base = {'EXPECTED_COMMIT': 'a' * 40, 'GITHUB_RUN_ID': '10', 'GITHUB_RUN_ATTEMPT': '1'}
+        for claimed, claim_outcome, expected in (('', 'failure', 'failure'), ('false', 'success', 'skipped'), ('true', 'success', 'failure')):
+            with self.subTest(claimed=claimed, status=claim_outcome), \
+                 patch.dict(os.environ, {**base, 'CLAIM_BEGAN': claimed, 'CLAIM_OUTCOME': claim_outcome}, clear=True), \
+                 patch.object(sys, 'argv', ['diagnostics.py', '--outcome', 'skipped']), \
+                 patch.object(diagnostics, 'report', return_value='safe summary') as render, patch('builtins.print'):
+                diagnostics.main()
+                self.assertEqual(render.call_args.args[-1], expected)
+
     def test_crashloop_rolls_back_keeps_failure_evidence_and_blocks_auto(self):
         helper = fixtures.DeliveryTests()
         self.addCleanup(helper.doCleanups)

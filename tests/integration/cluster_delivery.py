@@ -132,6 +132,7 @@ class Suite:
                      'spec':{'replicas':1,'selector':{'matchLabels':{'app':name}},'template':{'metadata':{'labels':{'app':name}},'spec':pod}}})
 
     def setup(self,release):
+        print(json.dumps({'isolated_setup':'database_and_storage'}),flush=True)
         certificate=self.temp/'server.crt';key=self.temp/'server.key'
         command('openssl','req','-x509','-newkey','rsa:2048','-nodes','-keyout',str(key),'-out',str(certificate),
                 '-days','1','-subj','/CN=ingress.traffic-mlops.svc.cluster.local',
@@ -173,6 +174,7 @@ class Suite:
                'volumeMounts':[{'name':'fixtures','mountPath':'/fixtures'}]}],'volumes':[{'name':'fixtures','configMap':{'name':'fixture-runtime'}}]}}}}
         self.create(seed);self.cluster.call('wait','--for=condition=complete','job/seed','--timeout=180s',json_output=False,timeout=190)
         self.airflow(release)
+        print(json.dumps({'isolated_setup':'legacy_cohorts'}),flush=True)
         baseline=json.loads((release[0]/'release.json').read_text())['baseline']['legacy_application_image']
         for role,legacy in [('api','traffic-api'),('tree','traffic-training-tree'),('neural','traffic-training-worker')]:
             first=SLOTS[role][0];value=render(role,first,images,directory=release[0])
@@ -190,6 +192,7 @@ class Suite:
             self.create(value)
             for slot in SLOTS[role]:self.create(render(role,slot,images,directory=release[0],inactive=True))
             self.cluster.wait(legacy)
+            print(json.dumps({'isolated_legacy_ready':role}),flush=True)
         for name,app in [('traffic-api','traffic-api'),('traffic-api-training','traffic-api'),('api-peers','traffic-api'),
                          ('api-preview','api'),('traffic-training-tree','traffic-training-tree'),('traffic-training-worker','traffic-training-worker')]:
             self.create(service(name,app))
@@ -216,6 +219,7 @@ class Suite:
     def record(self,name,op):
         self.cases.append({'case':name,**{k:op.state.get(k) for k in ('completed','up_to_date','deferred','rolled_back','recovery_required',
                            'guard_held','failed_phase','execution_failure','probe_failure','availability','flush_proofs')}})
+        print(json.dumps({'isolated_case_passed':name}),flush=True)
 
     def assert_recovered(self,op):
         assert op.state['rolled_back'] and not op.state['guard_held'] and not op.state['recovery_required']
@@ -266,7 +270,9 @@ class Suite:
         try:bad.apply()
         except RuntimeError:pass
         else:raise AssertionError('Wrong legacy source hash passed preflight')
-        assert not bad.state['started'] and not bad.state['patched'];self.record('legacy_preflight_failure_before_mutation',bad)
+        assert not bad.state['started'] and not bad.state['patched']
+        assert bad.state['execution_failure']['container']=='artifact-cache-sync'
+        self.record('legacy_preflight_failure_before_mutation',bad)
         migration=self.operator(base,'migration',True);self.long_request(migration);migration.verify()
         assert migration.state['completed'] and migration.state['legacy_drain']['cache_flush_confirmed'];self.record('actual_migration',migration)
         noop=self.operator(base,'noop');noop.apply()

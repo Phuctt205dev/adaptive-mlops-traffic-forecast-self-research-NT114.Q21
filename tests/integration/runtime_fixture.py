@@ -117,7 +117,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'draining':DRAINING,'inflight':INFLIGHT,'warmed':True})
             elif path.endswith('/health/release'):self.send_json(identity())
             elif path.endswith('/health/serving-ready') and DRAINING:self.send_json({'status':'draining'},503)
-            elif '/health/' in path or MODE=='health':self.send_json({'status':'ready'})
+            elif '/health/' in path or MODE=='health':self.send_json({'status':'ok' if path.endswith('/health/live') else 'ready'})
             elif '/internal/training-runs/' in path:
                 PROVIDER_CALLS+=1;self.send_json({'error':'Provider is disabled in this fixture'},409)
             elif path.endswith('/_fixture/slow'):
@@ -135,6 +135,7 @@ def seed():
     import boto3,uuid
     from sqlalchemy import text
     from backend.app.db.models import Base,User,UserRole,Region,Dataset,TrainingRun,TrainingRunStatus,ModelVersion
+    from backend.app.db.training_execution import TrainingExecution
     from backend.app.db.session import engine,SessionLocal
     Base.metadata.create_all(engine)
     with engine.connect().execution_options(isolation_level='AUTOCOMMIT') as c:

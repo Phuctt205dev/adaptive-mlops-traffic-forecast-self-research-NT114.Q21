@@ -172,6 +172,28 @@ Mục tiêu là không có lỗi request hợp lệ do rollout và không mất 
 nhận. Chưa kiểm chứng thì chưa tuyên bố đạt; quy trình không loại bỏ sự cố độc
 lập ở ingress, mạng hoặc dịch vụ dữ liệu đơn lẻ.
 
+## 7. Cách dùng sau khi đã nghiệm thu migration
+
+1. Sửa source/test và manifest Git nếu cần đổi cấu hình. Push nhánh mặc định.
+   Không thêm một workflow deploy riêng cho từng tính năng.
+2. Backend CI phải đạt toàn bộ tests, image checks, package và
+   `isolated-delivery`. Gói theo SHA giữ cả image digest và cấu hình mong muốn.
+3. Khi CD được bật, `Deploy Backend RKE2` nhận gói đó. Manual yêu cầu duyệt
+   environment; Auto giữ mode đã lưu qua nhiều push. Cả hai chọn operation
+   `release` và đi cùng controller. Thiếu training idle thì DEFERRED, không
+   cưỡng chế ngắt công việc để cập nhật.
+4. Xem Summary để phân biệt deployment, recovery và bước frontend. Cấu hình
+   giống bản đang chạy là no-op đã Verify; lỗi quan sát là lỗi riêng, không
+   dùng restart để thử. Khi lỗi, gửi link Actions/receipt, không cần chụp kịp pod.
+5. Chỉ sửa controller hoặc tăng runtime contract khi chính giao thức vận hành
+   cần đổi; nâng cấp chức năng thông thường không đổi các bước phát hành.
+
+Lần đầu từ legacy phải chọn `migrate-role-runtime-v1` trong workflow dispatch,
+đúng CI thành công và qua Manual. Đây là chuyển runtime, không phải migration
+dữ liệu ứng dụng. Artifact v1/controller cũ chỉ phục hồi transaction lịch sử;
+không gửi vào engine mới. Trạng thái tạm dừng CD hiện tại không tự được mở lại
+bằng commit tài liệu hoặc bật công tắc Auto.
+
 Theo xác minh chỉ đọc sáng07/11, production vẫn là hai traffic-api và hai worker cũ;
 DAG mở/guard nhả, CD_ENABLED=false, Manual/blocked=true/active=null. Đây là mốc
 đã ghi nhận, chưa áp dụng controller mới lên production. Handoff tại

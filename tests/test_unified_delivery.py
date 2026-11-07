@@ -115,6 +115,15 @@ class FlushAcknowledgements(unittest.TestCase):
 
 
 class DeliveryFailureBoundaries(unittest.TestCase):
+    def test_missing_legacy_pod_cannot_be_treated_as_a_flushed_cache(self):
+        from scripts.cicd.migrations.role_runtime_v1 import Migration
+        migration=object.__new__(Migration);op=Mock();migration.op=op
+        op.cluster.deployment.return_value={'spec':{'replicas':2,'selector':{'matchLabels':{'app':'traffic-api'}}}}
+        op.cluster.call.return_value={'items':[]}
+        with self.assertRaisesRegex(RuntimeError,'not fully observable'):
+            migration.retire_api('traffic-api')
+        op.scale.assert_not_called();op.execute.assert_not_called()
+
     def test_staging_capacity_refuses_memory_cpu_or_disk_shortfall(self):
         host={'cpus':4,'memory_available':4*1024**3,'disk_available':30*1024**3}
         assignment=[('node',{'containers':[{'resources':{'requests':{'cpu':'500m','memory':'1Gi'}}}]})]
@@ -156,6 +165,14 @@ class DeliveryFailureBoundaries(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'not fully acknowledged'):
                 op.require_flush({'schema':'traffic-artifact-sync/v1','complete':False,'error_type':'UploadPaused'},'api')
             self.assertEqual(op.state['execution_failure']['phase'],'retire')
+
+    def test_recovery_error_does_not_erase_the_original_deployment_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            op=operator(directory);op.state.update(phase='rollback',execution_failure={'error_type':'OriginalFailure'})
+            with self.assertRaises(RuntimeError):
+                op.require_flush({'error_type':'RecoveryUploadFailure'},'api-next')
+            self.assertEqual(op.state['execution_failure']['error_type'],'OriginalFailure')
+            self.assertEqual(op.state['recovery_execution_failure']['error_type'],'RecoveryUploadFailure')
 
     def test_exec_error_preserves_safe_frames_without_exception_message(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -110,6 +110,38 @@ class DeliveryOrdering(unittest.TestCase):
                 op.rollback()
             op.patch.assert_not_called()
 
+    def test_rollback_restores_route_then_drains_exposed_candidate_before_scale_zero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            op=self.operator(directory);events=[]
+            resources={
+                ('deployment','api'):{'metadata':{'uid':'old','name':'api'},'spec':{'replicas':0,'selector':{'matchLabels':{'app':'api'}}}},
+                ('deployment','api-next'):{'metadata':{'uid':'new','name':'api-next'},'spec':{'replicas':2}},
+                ('service','traffic-api'):{'metadata':{'uid':'svc','name':'traffic-api'},'spec':{'selector':{'app':'api-next'}}}}
+            for kind,name,before in [('deployment','api-next',{'replicas':0}),
+                                     ('service','traffic-api',{'selector':{'app':'api'}}),
+                                     ('deployment','api',{'replicas':2,'selector':{'matchLabels':{'app':'api'}}})]:
+                current=resources[kind,name]
+                op.inverses.append({'kind':kind,'name':name,'uid':current['metadata']['uid'],
+                                    'before':before,'after':digest(canonical(current['spec']))})
+            op.state.update(active_before='api',dag_was_paused=False,drift_was_paused=False)
+            op.get=Mock(side_effect=lambda kind,name:copy.deepcopy(resources[kind,name]))
+            op.cluster=Mock();op.cluster.deployment.side_effect=lambda name:copy.deepcopy(resources['deployment',name])
+            op.cluster.call.return_value={'items':[]}
+            def apply_inverse(kind,value,operations):
+                name=value['metadata']['name'];events.append(('patch',name))
+                resources[kind,name]['spec']=copy.deepcopy(operations[0]['value'])
+            op.patch=Mock(side_effect=apply_inverse)
+            op.drain_managed=Mock(side_effect=lambda name,**kwargs:events.append(('drain',name)))
+            op.wait_retired=Mock(side_effect=lambda name:events.append(('retired',name)))
+            op.pause=Mock(side_effect=lambda *args,**kwargs:events.append(('pause',None)))
+            op.resource_proof=Mock()
+            op.rollback()
+            op.drain_managed.assert_called_once_with('api-next',scale=False)
+            self.assertLess(events.index(('patch','traffic-api')),events.index(('drain','api-next')))
+            self.assertLess(events.index(('drain','api-next')),events.index(('patch','api-next')))
+            self.assertLess(events.index(('retired','api-next')),events.index(('pause',None)))
+            self.assertTrue(op.state['rolled_back'])
+
     def test_busy_training_defers_before_pause_or_cluster_mutation(self):
         with tempfile.TemporaryDirectory() as directory:
             op=self.operator(directory)
@@ -127,7 +159,7 @@ class DeliveryOrdering(unittest.TestCase):
             op=self.operator(directory)
             plan={'idle':{'active':0,'running':0,'paused':False,'drift_paused':False},'active':'traffic-api','target':'api','changes':{'api':{}},'targets':{'api':'api','tree':'train-tree','neural':'train-neural'}}
             op.plan=Mock(return_value=plan); op.verify=Mock(side_effect=RuntimeError('Old'))
-            op.pause=Mock(); op.cluster=Mock(); op.cluster.remote.return_value={'active':0,'running':0}
+            op.pause=Mock(); op.cluster=Mock(); op.remote=Mock(return_value={'active':0,'running':0})
             op.api=Mock(); op.start_guard=Mock(); op.change=Mock(); op.health=Mock(); op.endpoints=Mock()
             op.route=Mock(); op.business=Mock(side_effect=[{},RuntimeError('Preview failed')]); op.rollback=Mock()
             op.monitor_start=Mock(); op.monitor_stop=Mock()

@@ -26,12 +26,16 @@ state chưa khởi tạo hoặc không hợp lệ phải chặn triển khai.
 | Auto | `rke2-production-auto` đi thẳng tới runner, vẫn kiểm nguồn/commit và cụm. |
 
 Cùng namespace, chỉ nhánh master, cùng startup/guard/rollout/Verify/rollback.
-Windows/Tailscale/runner vẫn cần online. Gói này chưa cài autostart hoặc tự đợi
-training: đang training thì preflight từ chối release trước khi sửa Deployment.
+Windows/Tailscale/runner vẫn cần online. Training đang hoạt động thì release
+được ghi DEFERRED trước mutation; backend-deferred kiểm lại đúng CI/mode/epoch
+trước thử lại. Không hủy công việc đang chạy hoặc xóa hàng chờ để triển khai.
 
-Công tắc áp dụng cho backend. Frontend vẫn dùng workflow riêng; khi thay cả
-hai phía, phát hành backend và xác nhận Verify trước rồi mới push phần frontend
-phụ thuộc vào API mới. Công tắc không tự sắp thứ tự hai workflow này.
+Công tắc áp dụng cho backend. Luồng thống nhất bổ sung gate cho frontend:
+Pages chỉ publish khi nội dung backend tương ứng đã Apply+Verify hoặc không
+đổi so với bản đã Verify. Backend đạt gọi lại Pages cho frontend mới nhất
+tương thích. Bản frontend đã publish được ghi riêng, không thay mode/chốt CD.
+Đây là hành vi của source mới; xem [trạng thái nghiệm thu](CICD_UNIFIED_FLOW.md)
+trước khi tiếp tục migration production đang tạm hoãn.
 
 ## Job cũ khi đổi chế độ
 
@@ -92,6 +96,9 @@ không đăng ký lại runner hoặc apply manifest nền.
 
 Không dùng CI trước bản nâng cấp mode-control với workflow mới vì thiếu helper.
 Khôi phục ứng dụng bằng rollback có kiểm chứng, không replay một CI cũ ngẫu nhiên.
+Controller thống nhất còn yêu cầu runtime contract trong source CI. Chuyển
+legacy sang runtime mới là thao tác `migrate-role-runtime-v1`, chỉ qua Manual;
+release thường ngày chọn `release`, dùng cùng engine và không đoán layout cũ.
 
 Có thể bật thông báo workflow lỗi trong [cài đặt GitHub Actions cá nhân](https://docs.github.com/en/subscriptions-and-notifications/how-tos/managing-github-actions-notifications).
 Gói này không tự bật email/Slack thay user. Lỗi pod sau khi workflow hoàn tất

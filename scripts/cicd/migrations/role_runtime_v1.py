@@ -71,6 +71,8 @@ exec(HELPER,n)
     def retire_api(self,name):
         op=self.op;value=op.cluster.deployment(name)
         pods=ready_pods(value,op.cluster.call('get','pods','-o','json')['items'])
+        if len(pods)!=value['spec']['replicas']:
+            raise RuntimeError('Legacy cache state is not fully observable; retirement stopped')
         import time
         source="import json;from pathlib import Path;rows=[line.split() for file in ('/proc/net/tcp','/proc/net/tcp6') if Path(file).exists() for line in Path(file).read_text().splitlines()[1:]];print(json.dumps({'connections':sum(r[1].endswith(':1F40') and r[3]=='01' for r in rows)}))"
         for pod in pods:

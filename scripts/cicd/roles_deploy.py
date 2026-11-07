@@ -105,6 +105,9 @@ class RolesDelivery:
     def get(self, kind, name):
         return self.cluster.call('get',kind,name,'-o','json')
 
+    def remote(self,deployment,source):
+        return self.execute(self.cluster.pod(deployment),container(deployment)[1]['name'],source)
+
     def execute(self,pod,name,source,*,timeout=100):
         """Keep sanitized exception facts even when every application pod is Ready."""
         wrapped=("import json,traceback\ntry:\n exec("+repr(source)+")\n"
@@ -115,15 +118,16 @@ class RolesDelivery:
             fact={'phase':self.state.get('phase','preflight'),'pod':diagnostics.identifier(pod),
                   'container':diagnostics.identifier(name),'error_type':diagnostics.identifier(result.get('error_type')),
                   'frames':[{'file':diagnostics.identifier(f.get('file')),'line':f.get('line')} for f in result.get('frames',[]) if type(f.get('line')) is int]}
-            self.save(execution_failure=fact)
+            self.save(**{'recovery_execution_failure' if self.state.get('phase')=='rollback' else 'execution_failure':fact})
             raise RuntimeError('Runtime operation failed: '+fact['error_type'])
         return result
 
     def require_flush(self,proof,name):
         if (proof.get('schema')!='traffic-artifact-sync/v1' or proof.get('complete') is not True
                 or proof.get('stable') is not True or type(proof.get('acknowledged_files')) is not int):
-            self.save(execution_failure={'phase':self.state.get('phase','retire'),'workload':name,
-                      'error_type':diagnostics.identifier(proof.get('error_type','UnconfirmedFlush'))})
+            fact={'phase':self.state.get('phase','retire'),'workload':name,
+                  'error_type':diagnostics.identifier(proof.get('error_type','UnconfirmedFlush'))}
+            self.save(**{'recovery_execution_failure' if self.state.get('phase')=='rollback' else 'execution_failure':fact})
             raise RuntimeError('Artifact flush was not fully acknowledged; retirement stopped')
         self.save(flush_proofs=[*self.state.get('flush_proofs',[]),{'workload':name,**{k:proof[k] for k in ('schema','complete','stable','acknowledged_files')}}])
 
@@ -196,7 +200,7 @@ class RolesDelivery:
                 "c=requests.Session();c.trust_env=False;base=s.airflow_api_url+'/dags/'+s."+('drift_dag_id' if drift else 'training_dag_id')+";"
                 "auth=(s.airflow_admin_username,s.airflow_admin_password);r="+expression+
                 ";r.raise_for_status();print(json.dumps({'paused':r.json()['is_paused']}))")
-        actual = self.cluster.remote(self.api(),code)['paused']
+        actual = self.remote(self.api(),code)['paused']
         if value is not None and actual is not value:
             raise RuntimeError('DAG pause state was not confirmed')
         return actual
@@ -276,7 +280,7 @@ class RolesDelivery:
     def public_health(self):
         script=Path(__file__).with_name('public_probe.py').read_text(encoding='utf-8')
         script+='\nprint(json.dumps(check('+repr(self.public_base())+')))'
-        proof=self.cluster.remote(self.api(),script)
+        proof=self.remote(self.api(),script)
         self.save(business_proofs=[*self.state.get('business_proofs',[]),{'target':'public_ingress',**proof}])
         return proof
 
@@ -403,7 +407,7 @@ class RolesDelivery:
         if self.get('namespace','traffic-mlops')['metadata']['uid']!=self.cluster.namespace_uid:
             raise RuntimeError('Wrong cluster namespace')
         api=self.api(); active=api['metadata']['name']
-        idle=self.cluster.remote(api,IDLE)
+        idle=self.remote(api,IDLE)
         if idle['heads']!=self.release['baseline']['migration_heads']:
             raise RuntimeError('Unexpected migration state')
         changes={}; targets={}; originals={}
@@ -470,7 +474,7 @@ class RolesDelivery:
         scheduler=self.cluster.deployment('airflow-scheduler')
         if container(scheduler)[1]['image']!=self.release['baseline']['airflow_image']:
             raise RuntimeError('Airflow dependency image differs')
-        actual=self.cluster.remote(scheduler,AIRFLOW_FILES)
+        actual=self.remote(scheduler,AIRFLOW_FILES)
         expected={k:digest((self.directory/'airflow'/k).read_bytes()) for k in actual}
         return actual!=expected
 
@@ -487,7 +491,7 @@ class RolesDelivery:
             self.cluster.call('create','-f','-','-o','json',value=cm)
         # Only LocalExecutor's scheduler executes these helpers. The webserver
         # stays live to acknowledge durable queued requests throughout delivery.
-        executor=self.cluster.remote(self.cluster.deployment('airflow-scheduler'),
+        executor=self.remote(self.cluster.deployment('airflow-scheduler'),
             "import json;from airflow.configuration import conf;print(json.dumps({'executor':conf.get('core','executor')}))")
         if executor.get('executor')!='LocalExecutor':
             raise RuntimeError('This delivery requires the reviewed LocalExecutor topology')
@@ -507,11 +511,11 @@ class RolesDelivery:
             pod['initContainers']=[c for c in pod.get('initContainers',[]) if c['name']!='delivery-source']
             self.change('deployment',target,spec)
             self.cluster.wait(target)
-            actual=self.cluster.remote(self.cluster.deployment(target),AIRFLOW_FILES)
+            actual=self.remote(self.cluster.deployment(target),AIRFLOW_FILES)
             expected={k:digest((self.directory/'airflow'/k).read_bytes()) for k in actual}
-            if actual!=expected or not self.cluster.remote(self.cluster.deployment(target),DAG_CHECK).get('dag_valid'):
+            if actual!=expected or not self.remote(self.cluster.deployment(target),DAG_CHECK).get('dag_valid'):
                 raise RuntimeError('Airflow source/graph verification failed')
-        if not self.cluster.remote(self.cluster.deployment('airflow-webserver'),DAG_CHECK).get('dag_valid'):
+        if not self.remote(self.cluster.deployment('airflow-webserver'),DAG_CHECK).get('dag_valid'):
             raise RuntimeError('Live Airflow webserver graph compatibility failed')
 
     def retire_api(self,name):
@@ -661,7 +665,7 @@ class RolesDelivery:
             self.save(phase='admission')
             self.pause(True)
             self.pause(True,drift=True)
-            idle=self.cluster.remote(self.api(),IDLE)
+            idle=self.remote(self.api(),IDLE)
             if idle['active'] or idle['running']:
                 self.pause(plan['idle']['paused'])
                 self.pause(plan['idle']['drift_paused'],drift=True)

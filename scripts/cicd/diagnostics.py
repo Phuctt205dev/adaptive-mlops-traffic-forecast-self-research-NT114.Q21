@@ -98,6 +98,10 @@ def report(directory, commit, run_id, attempt, outcome):
     if execution:
         lines.append('- Runtime operation: `'+identifier(execution.get('container') or execution.get('workload'))+
                      '`; '+identifier(execution.get('error_type')))
+    recovery_execution=receipt.get('recovery_execution_failure',{})
+    if recovery_execution:
+        lines.append('- Recovery runtime operation: `'+identifier(recovery_execution.get('container') or recovery_execution.get('workload'))+
+                     '`; '+identifier(recovery_execution.get('error_type')))
     failure=receipt.get('probe_failure',{})
     if failure:
         line='- Read-only check: **'+identifier(failure.get('target'))+' / '+identifier(failure.get('endpoint'))+'**'

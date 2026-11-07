@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import sys
 import subprocess
+import tempfile
+import uuid
 
 
 def fixtures(directory):
@@ -64,6 +66,30 @@ def installed(name):
         return None
 
 
+def check_cloud_preparation(project, role):
+    """Exercise packaged code and template without submitting or fitting."""
+    from src.cloud_training.package import configuration_digest, prepare_package
+    from src.cloud_training.kaggle_execution import initial_ledger
+    from backend.app.services.worker_context import normalize_selected_models
+    branch = 'tree' if role == 'tree' else 'lstm'
+    selected = ['random_forest_lag'] if role == 'tree' else ['lstm', 'gru']
+    configuration = {'training_backend': 'kaggle', '_execution_protocol': 2,
+                     'selected_models': normalize_selected_models(selected)}
+    context = {key: str(uuid.uuid4()) for key in ('run_id', 'region_id', 'dataset_id', 'attempt_id')}
+    context.update(branch=branch, configuration_sha256=configuration_digest(configuration))
+    with tempfile.TemporaryDirectory(prefix='offline-cloud-preparation-') as directory:
+        root = Path(directory)
+        dataset = root / 'source.csv'
+        dataset.write_bytes(b'a,b\n1,2\n')
+        snapshot = prepare_package(project, dataset, configuration, context, root / 'input',
+                                   hashlib.sha256(dataset.read_bytes()).hexdigest())
+        ledger = initial_ledger(snapshot, 'synthetic-user')
+        assert ledger['supervisor_configuration']['context'] == context
+        assert not ledger['submit_pending'] and not ledger['dataset_pending']
+    assert 'src.cloud_training.notebook' not in sys.modules
+    return {'input_snapshot_prepared': True, 'notebook_rendered': True, 'provider_called': False}
+
+
 def check(directory):
     from deployment.rke2.runtime.role_runtime import verify, build_app
     document = verify()
@@ -117,6 +143,7 @@ def check(directory):
     preprocessor = joblib.load(directory / 'preprocessor.joblib')
     assert preprocessor['target_scaler'].inverse_transform([[0.0]]).shape == (1, 1)
     if role in {'tree','neural'}:
+        preparation = check_cloud_preparation(Path('/app/kaggle-project'), role)
         subprocess.run(['/opt/kaggle-sdk/bin/python','-m','pip','check'],check=True)
         entries=[{'model_file':str(directory/expected['models'][name]['file']),
                   'compatibility_file':str(directory/expected['models'][name]['compatibility']),
@@ -160,6 +187,7 @@ def check(directory):
     finally:
         client.close()
     print(json.dumps({'role': role, 'verified_models': tested, 'role_boundary_verified': True,
+                      'cloud_preparation': preparation if role in {'tree', 'neural'} else None,
                       'lifespan_started': False, 'provider_called': False}))
 
 

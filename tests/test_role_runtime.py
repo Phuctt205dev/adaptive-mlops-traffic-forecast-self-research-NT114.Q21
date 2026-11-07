@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 from types import SimpleNamespace
@@ -24,6 +26,43 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RolePackageTests(unittest.TestCase):
+    def test_built_worker_packages_prepare_cloud_input_and_render_notebook_without_repo_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'release'
+            release = roles_release.build(ROOT, output, 'a' * 40)
+            code = '''import json,sys
+from pathlib import Path
+from unittest.mock import patch
+from scripts.cicd.role_checks import check_cloud_preparation
+from src.cloud_training.kaggle_transport import SDKTransport
+role=sys.argv[1]
+with patch.object(SDKTransport,'call',side_effect=AssertionError('No provider operation allowed')), patch.object(SDKTransport,'stream',side_effect=AssertionError('No provider stream allowed')):
+ result=check_cloud_preparation(Path('kaggle-project'),role)
+assert Path(__import__('src.cloud_training.control',fromlist=['control']).__file__).resolve().is_relative_to(Path.cwd())
+assert not any(name in sys.modules for name in ['src.pipeline','src.time_series_training','src.lstm_sequences','src.cloud_training.notebook'])
+print(json.dumps(result))
+'''
+            for role in ('tree', 'neural'):
+                with self.subTest(role=role):
+                    worker = output / 'roles' / role
+                    template = worker / 'src/cloud_training/notebook.py'
+                    self.assertTrue(template.is_file())
+                    metadata = json.loads((worker / 'role-release.json').read_text())
+                    self.assertEqual(metadata['files']['src/cloud_training/notebook.py'],
+                                     roles_release.digest(template.read_bytes()))
+                    # Only this offline checker is added; application imports
+                    # must resolve from the packaged worker, not the checkout.
+                    checker = worker / 'scripts/cicd/role_checks.py'
+                    checker.parent.mkdir(parents=True, exist_ok=True)
+                    checker.write_bytes((ROOT / 'scripts/cicd/role_checks.py').read_bytes())
+                    result = subprocess.run([sys.executable, '-B', '-c', code, role], cwd=worker,
+                        env={**os.environ, 'PYTHONPATH': str(worker)}, capture_output=True,
+                        text=True, timeout=30)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertTrue(json.loads(result.stdout)['notebook_rendered'])
+                    self.assertNotIn('src/cloud_training/notebook.py',
+                                     roles_release.closure(ROOT, 'api'))
+
     def test_roles_exclude_unrelated_executors_and_uploader_has_no_ml_source(self):
         api = roles_release.closure(ROOT, 'api')
         worker = roles_release.closure(ROOT, 'neural')
@@ -156,6 +195,57 @@ class MemoryS3:
 
 
 class PortedArtifactContractTests(unittest.TestCase):
+    def test_worker_finalizer_aggregates_five_cloud_models_with_existing_cv_policy(self):
+        from backend.app.services import worker_context
+        from src.model_variants import DEFAULT_PRODUCTION_MODEL_VARIANTS
+        from unittest.mock import Mock
+        run = SimpleNamespace(id=uuid.UUID(int=1), region_id=uuid.UUID(int=2),
+            dataset_id=uuid.UUID(int=3), status=SimpleNamespace(value='completed'),
+            configuration_json={'training_backend': 'kaggle',
+                                'selected_models': list(DEFAULT_PRODUCTION_MODEL_VARIANTS)})
+        branches = {'tree': {'candidates': []}, 'lstm': {'candidates': []}, 'gru': {'candidates': []}}
+        for name, branch, mae in [('RandomForest', 'tree', 3), ('XGBoost', 'tree', 2),
+                                  ('LightGBM', 'tree', 4), ('LSTM', 'lstm', 5), ('GRU', 'gru', 1)]:
+            branches[branch]['candidates'].append({'best_model_name': name,
+                'model_family': 'legacy_sklearn' if branch == 'tree' else 'neural_sequence',
+                'validation_MAE': mae, 'validation_MAE_std': 0.1, 'test_MAE': 100 - mae})
+        version = SimpleNamespace(id=uuid.UUID(int=4), version=7, variant='gru',
+                                  status=SimpleNamespace(value='candidate'))
+        register = Mock(return_value=(run, version))
+        def read(_run, branch):
+            return copy.deepcopy(branches[branch])
+        with patch.object(worker_context, '_get_training_context', return_value=(run, None, None)), \
+             patch.object(worker_context, '_read_branch_result', side_effect=read), \
+             patch.object(worker_context, '_read_optional_branch_result', side_effect=read), \
+             patch.object(worker_context, 'register_training_result', register), \
+             patch.object(worker_context, 'mark_training_run_failed') as failed:
+            result = worker_context.finalize_parallel_training_run(run.id, _token=None, db=object())
+        self.assertEqual(result['best_model_name'], 'GRU')
+        self.assertEqual(len(result['candidates']), 5)
+        self.assertEqual(register.call_args.args[3]['selected_from_candidates'], list(DEFAULT_PRODUCTION_MODEL_VARIANTS))
+        failed.assert_not_called()
+
+    def test_worker_finalizer_consumes_verified_receipts_without_importing_the_trainer(self):
+        from backend.app.services import worker_context
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as directory:
+            bridge, run, receipts = self.setup_bridge(directory)
+            run.status = SimpleNamespace(value='completed')
+            version = SimpleNamespace(id=uuid.UUID(int=4), version=7, variant='random_forest_lag',
+                                      status=SimpleNamespace(value='candidate'))
+            register = Mock(return_value=(run, version))
+            with bridge.finalize_scope(run, receipts), \
+                 patch.object(worker_context, '_get_training_context', return_value=(run, None, None)), \
+                 patch.object(worker_context, '_read_branch_result', side_effect=bridge.read_branch), \
+                 patch.object(worker_context, '_read_optional_branch_result', side_effect=bridge.read_branch), \
+                 patch.object(worker_context, 'register_training_result', register), \
+                 patch.object(worker_context, 'mark_training_run_failed') as failed:
+                result = worker_context.finalize_parallel_training_run(run.id, _token=None, db=object())
+            self.assertEqual(result['training_run_status'], 'completed')
+            self.assertEqual(result['best_model_name'], 'RandomForest')
+            self.assertEqual(register.call_args.args[3]['selected_from_candidates'], ['random_forest_lag'])
+            failed.assert_not_called()
+
     def setup_bridge(self, directory):
         root = Path(directory)
         for name in ('source', 'receive', 'models', 'models/serving'):

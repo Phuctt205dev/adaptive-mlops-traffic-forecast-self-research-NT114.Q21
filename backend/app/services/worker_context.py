@@ -10,6 +10,7 @@ from backend.app.db.session import get_db
 from backend.app.db.models import Dataset,Region,TrainingRun,TrainingRunStatus
 from backend.app.services.model_registry import mark_training_run_failed,register_training_result
 from src.model_selection import select_best_candidate
+from src.model_variants import normalize_selected_models
 
 def download_dataset(storage_uri, destination):
     from backend.app.services.storage import get_s3_client

@@ -11,6 +11,7 @@ from pathlib import Path
 import sys
 import threading
 import time
+import traceback
 import uuid
 
 from sqlalchemy import select
@@ -24,6 +25,14 @@ from src.cloud_training.kaggle_execution import KaggleExecution, TrainingCancell
 from src.cloud_training.kaggle_transport import ProviderError, SDKTransport
 from src.cloud_training.package import configuration_digest, prepare_package
 from src.cloud_training.process import ExecutionProcess, cleanup_execution, execution_directory
+
+
+def failure_facts(error, phase, branch):
+    """Keep technical locations without exception text, locals or credentials."""
+    return {'training_operation_failed': True, 'phase': phase, 'branch': branch,
+            'error_type': type(error).__name__,
+            'frames': [{'file': Path(frame.filename).name, 'line': frame.lineno}
+                       for frame in traceback.extract_tb(error.__traceback__)[-6:]]}
 
 
 def delete_prefix(store, prefix):
@@ -166,6 +175,7 @@ class WorkerController:
         cancelled = lambda: self.cancelled(run_id, branch, attempt)
         progress = lambda event: self.progress(run_id, branch, attempt, event)
         directory = execution_directory(self.root, str(run_id), branch, attempt)
+        phase = 'prepare_input'
         try:
             if self.barrier_factory:
                 barrier = self.barrier_factory()
@@ -213,18 +223,22 @@ class WorkerController:
             elif backend == "kaggle":
                 if not self.username or not self.training.get_settings().cloud_training_enabled:
                     raise ApplicationError("cloud_training_not_ready", "Cloud execution is not configured on this worker.", 503)
+                phase = 'prepare_notebook'
                 ledger = initial_ledger(snapshot, self.username)
                 self.save_provider(run_id, branch, attempt, ledger)
                 provider = KaggleExecution(self.transport, directory, ledger,
                     lambda value: self.save_provider(run_id, branch, attempt, value))
                 handle["provider"] = provider
+                phase = 'provider_execution'
                 result = provider.run(progress, cancelled)
                 handle["stopped"] = True
                 if not provider.cleanup():
                     raise RuntimeError("Cloud staging cleanup was not confirmed.")
             if cancelled():
                 raise TrainingCancelled("Training stopped before result publication.")
+            phase = 'verify_serving'
             self.verify_serving(directory, context, result, handle, cancelled)
+            phase = 'publish_branch'
             with self.sessions() as db:
                 # Serialize publication against a concurrent sibling failure.
                 record = state.execution(db, run_id, lock=True)
@@ -235,6 +249,9 @@ class WorkerController:
             cleanup_execution(self.root, str(run_id), branch, attempt)
         except Exception as error:
             handle["failed"] = True
+            # A pre-provider packaging error otherwise leaves only the generic
+            # browser message. Preserve its location without logging payloads.
+            print(json.dumps(failure_facts(error, phase, branch)), flush=True)
             if handle["provider"] is not None and isinstance(error, ProviderError):
                 # Keep only normalized technical facts, never SDK exception text.
                 try:

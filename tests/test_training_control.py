@@ -17,7 +17,7 @@ from sqlalchemy.pool import StaticPool
 from backend.app.db.models import Base, Dataset, DatasetStatus, Region, TrainingRun, User, UserRole
 from backend.app.services import training_execution as state
 from backend.app.services.model_registry import create_queued_training_run
-from backend.app.services.training_control import WorkerController
+from backend.app.services.training_control import WorkerController, failure_facts
 from src.cloud_training.artifacts import write_bundle
 
 
@@ -56,6 +56,17 @@ class FakeCloud:
 
 
 class TrainingControlTests(unittest.TestCase):
+    def test_failure_facts_keep_stage_and_type_without_exception_payload(self):
+        try:
+            raise FileNotFoundError('private-token-and-dataset-content')
+        except FileNotFoundError as error:
+            facts = failure_facts(error, 'prepare_notebook', 'tree')
+        self.assertEqual(facts['error_type'], 'FileNotFoundError')
+        self.assertEqual(facts['phase'], 'prepare_notebook')
+        self.assertTrue(facts['frames'])
+        self.assertNotIn('private-token', json.dumps(facts))
+        self.assertNotIn(str(Path(__file__).parent), json.dumps(facts))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

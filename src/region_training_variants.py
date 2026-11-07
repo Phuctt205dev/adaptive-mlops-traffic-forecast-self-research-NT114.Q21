@@ -9,35 +9,10 @@ from src.time_series_cross_validation import run_model_time_series_cross_validat
 from src.time_series_features import create_time_series_features, save_time_series_features
 from src.mlflow_regions import region_experiment_name
 from src.time_series_preprocess import prepare_hourly_time_series, save_hourly_dataset
-
-
-TREE_LAG_VARIANTS = {
-    "random_forest_lag": "RandomForest",
-    "xgboost_lag": "XGBoost",
-    "lightgbm_lag": "LightGBM",
-}
-RECURRENT_VARIANTS = {
-    "lstm": "LSTM",
-    "gru": "GRU",
-}
-PRODUCTION_MODEL_VARIANTS = (
-    *TREE_LAG_VARIANTS.keys(),
-    *RECURRENT_VARIANTS.keys(),
+from src.model_variants import (
+    TREE_LAG_VARIANTS, RECURRENT_VARIANTS, PRODUCTION_MODEL_VARIANTS,
+    DEFAULT_PRODUCTION_MODEL_VARIANTS, normalize_selected_models,
 )
-DEFAULT_PRODUCTION_MODEL_VARIANTS = tuple(PRODUCTION_MODEL_VARIANTS)
-
-
-def normalize_selected_models(selected_models):
-    if not selected_models:
-        return list(DEFAULT_PRODUCTION_MODEL_VARIANTS)
-    normalized = []
-    for model in selected_models:
-        value = str(model).strip().lower()
-        if value not in PRODUCTION_MODEL_VARIANTS:
-            raise ValueError(f"Unsupported training model variant: {model}.")
-        if value not in normalized:
-            normalized.append(value)
-    return normalized
 
 
 def selected_tree_variants(selected_models):

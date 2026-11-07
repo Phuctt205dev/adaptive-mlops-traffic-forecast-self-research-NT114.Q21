@@ -20,6 +20,11 @@ ROOTS = {
     'sync': ['backend.app.services.region_cleanup_uploader', 'backend.app.services.restore_cache',
              'backend.app.services.artifact_sync_control'],
 }
+# Templates are read as data, so import traversal cannot discover them.
+RESOURCES = {
+    'tree': ('src/cloud_training/notebook.py',),
+    'neural': ('src/cloud_training/notebook.py',),
+}
 FORBIDDEN = {'src/pipeline.py', 'src/time_series_training.py', 'src/lstm_sequences.py',
              'backend/app/api/routes/internal_training.py'}
 
@@ -90,6 +95,11 @@ def closure(root, role):
             elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'import_module':
                 if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
                     enqueue(node.args[0].value)
+    for name in RESOURCES.get(role, ()):
+        path = root / name
+        if path.is_symlink():
+            raise ValueError('Role resources cannot follow symlinks')
+        result[name] = path.read_bytes().replace(b'\r\n', b'\n')
     return result
 
 

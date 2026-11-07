@@ -28,6 +28,10 @@ The test profile adjusts node names, mounts the fixture handler, uses a tiny
 data disk reserve, and replaces the log PVC with ephemeral storage. Production
 templates/resources remain unchanged. Synthetic secrets and a generated local
 TLS key exist only on the ephemeral cluster and are not uploaded as evidence.
+The fixture process adds its generated public certificate to the disposable
+container's certifi bundle. This lets requests probes which ignore environment
+overrides validate the local HTTPS ingress without disabling certificate or
+hostname verification; production trust stores are unchanged.
 
 Required cases include legacy preflight failure before mutation, actual
 migration with a long request finishing, idle-only deferral, verified no-op,

@@ -45,6 +45,17 @@ def inference():
     return {'fixture_inference_verified':True,'rows':len(predicted)}
 
 
+def install_fixture_ca():
+    # requests with trust_env=False deliberately ignores CA environment
+    # overrides. Trust our generated certificate in the disposable container's
+    # CA bundle too; keep real TLS/hostname validation enabled in the probe.
+    import certifi
+    certificate=Path('/fixtures/server.crt').read_bytes()
+    bundle=Path(certifi.where())
+    if certificate.strip() not in bundle.read_bytes():
+        with bundle.open('ab') as stream:stream.write(b'\n'+certificate)
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
     def send_json(self,value,status=200):
@@ -168,6 +179,7 @@ if __name__=='__main__':
     args=p.parse_args();MODE=args.mode
     if MODE=='seed':seed()
     else:
+        if MODE=='role':install_fixture_ca()
         if MODE=='role' and os.environ.get('REGION_CLEANUP_ROLE')=='api':inference()
         server=ThreadingHTTPServer(('0.0.0.0',args.port),Handler)
         if MODE=='proxy':

@@ -221,7 +221,9 @@ jobs:
   isolated-delivery:
     needs: package
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    # The real legacy migration took ~20 minutes before the recovery cases.
+    # Keep the production grace/drain checks; budget setup and all nine cases.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -267,7 +269,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: isolated-delivery-proof-${{ github.sha }}
-          path: results/cicd/kubernetes-delivery-proof.json
+          path: |
+            results/cicd/kubernetes-delivery-proof.json
+            results/cicd/kubernetes-delivery-progress.json
           if-no-files-found: ignore
           retention-days: 30
       - name: Remove only the disposable test cluster

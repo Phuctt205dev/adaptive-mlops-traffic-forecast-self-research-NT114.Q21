@@ -45,3 +45,12 @@ PostgreSQL and its unchanged queued state is checked after every case. Airflow's
 queue REST response is a fixture; no real scheduler is asked to dispatch it.
 Only allowlisted receipt/error/pod facts are preserved in
 `results/cicd/kubernetes-delivery-proof.json`.
+
+The hosted job allows 50 minutes for setup and all nine cases. The pinned
+legacy migration alone took about 20 minutes in run 42338350630; that run
+passed seven cases before its old 35-minute job limit canceled the last update.
+Production drain/shutdown budgets are preserved. Phase transitions are logged,
+and `kubernetes-delivery-progress.json` is written atomically before and after
+each case, so timeouts can preserve the completed results. Its distinct
+`traffic-isolated-delivery-progress/v1` schema and `complete: false` never
+substitute for the final acceptance proof or a successful overall CI.

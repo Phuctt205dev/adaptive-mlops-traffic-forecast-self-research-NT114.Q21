@@ -65,6 +65,7 @@ class Suite:
             shutil.copytree(ROOT/name,self.source/name,ignore=shutil.ignore_patterns('__pycache__'))
         (self.source/'docs').mkdir();shutil.copy2(ROOT/'docs/index.html',self.source/'docs/index.html')
         self.profile()
+        self.progress('setup')
 
     def create(self,value):return self.cluster.call('create','-f','-','-o','json',value=value)
 
@@ -115,8 +116,21 @@ class Suite:
         return checked,out/'delivery.json'
 
     def operator(self,release,label,migration=False):
+        self.progress(label)
+        print(json.dumps({'isolated_case_started':label}),flush=True)
         return RolesDelivery(self.cluster,release[0],release[1],self.temp/(label+'.json'),commit=COMMIT,
                              kubeconfig=str(self.kubeconfig),migration='role-runtime-v1' if migration else None)
+
+    def progress(self,current_case):
+        # Persist before starting a case and after each completed case. A runner
+        # timeout may prevent the final exception handler from being executed.
+        # This distinct schema is evidence of progress, never acceptance.
+        proof={'schema':'traffic-isolated-delivery-progress/v1','complete':False,
+               'production_accessed':False,'current_case':current_case,'completed_cases':self.cases}
+        out=ROOT/'results/cicd/kubernetes-delivery-progress.json'
+        out.parent.mkdir(parents=True,exist_ok=True)
+        temporary=out.with_suffix('.tmp');temporary.write_text(json.dumps(proof,indent=2),encoding='utf-8')
+        temporary.replace(out)
 
     def simple(self,name,image,mode,port,*,env=None,init=None,volumes=None,mounts=None):
         pod={'restartPolicy':'Always','automountServiceAccountToken':False,
@@ -224,6 +238,7 @@ class Suite:
         self.cases.append({'case':name,**{k:op.state.get(k) for k in ('completed','up_to_date','deferred','rolled_back','recovery_required',
                            'guard_held','failed_phase','execution_failure','probe_failure','availability','flush_proofs')},
                            **queue})
+        self.progress(None)
         print(json.dumps({'isolated_case_passed':name}),flush=True)
 
     def assert_recovered(self,op):

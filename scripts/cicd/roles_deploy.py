@@ -96,11 +96,14 @@ class RolesDelivery:
             self.state['migration']=selected
 
     def save(self, **values):
+        previous_phase=self.state.get('phase')
         self.state.update(values, updated_at=now())
         self.path.parent.mkdir(parents=True, exist_ok=True)
         p = self.path.with_suffix('.tmp')
         p.write_text(json.dumps(self.state, indent=2), encoding='utf-8')
         p.replace(self.path)
+        if self.state.get('phase')!=previous_phase:
+            print(json.dumps({'delivery_phase':self.state['phase'],'updated_at':self.state['updated_at']}),flush=True)
 
     def get(self, kind, name):
         return self.cluster.call('get',kind,name,'-o','json')

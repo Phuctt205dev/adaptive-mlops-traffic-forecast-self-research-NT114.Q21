@@ -217,8 +217,13 @@ class Suite:
             self.create(service(name,name,8080));self.cluster.wait(name)
 
     def record(self,name,op):
+        api=self.cluster.call('get','service','traffic-api','-o','json')['spec']['selector']['app']
+        source="from sqlalchemy import text;from backend.app.db.session import SessionLocal;import json\nwith SessionLocal() as db:\n n=db.execute(text(\"SELECT count(*) FROM training_runs r JOIN training_executions e ON e.training_run_id=r.id WHERE r.split_policy='ci-only-queue' AND r.status='queued' AND e.state='queued'\")).scalar_one()\nprint(json.dumps({'queued_database_rows':n}))"
+        queue=self.cluster.remote(self.cluster.deployment(api),source)
+        assert queue['queued_database_rows']==1,'Controller changed synthetic queued training metadata'
         self.cases.append({'case':name,**{k:op.state.get(k) for k in ('completed','up_to_date','deferred','rolled_back','recovery_required',
-                           'guard_held','failed_phase','execution_failure','probe_failure','availability','flush_proofs')}})
+                           'guard_held','failed_phase','execution_failure','probe_failure','availability','flush_proofs')},
+                           **queue})
         print(json.dumps({'isolated_case_passed':name}),flush=True)
 
     def assert_recovered(self,op):

@@ -56,6 +56,11 @@ def restore(root, *, max_bytes=4 * 1024**3 * 4 // 5):
 
 
 if __name__ == '__main__':
+    import signal
+    import sys
+    # Init containers run this process as PID 1. Honour pod cancellation so a
+    # failed staging attempt does not wait for the full serving grace period.
+    signal.signal(signal.SIGTERM,lambda *_:sys.exit(143))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['prepare', 'restore', 'wait'])
     parser.add_argument('--root', type=Path, default=Path('/cache'))
@@ -65,6 +70,7 @@ if __name__ == '__main__':
     if args.action=='wait':
         import socket,time
         if not args.host or not args.port:parser.error('wait requires host and port')
+        print('runtime_dependency_waiting',flush=True)
         deadline=time.monotonic()+180
         while True:
             try:

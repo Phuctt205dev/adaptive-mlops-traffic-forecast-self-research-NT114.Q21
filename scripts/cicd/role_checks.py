@@ -82,7 +82,15 @@ def check(directory):
         result=subprocess.run([sys.executable,'-B','-m','backend.app.services.artifact_sync_control','capabilities'],
                               capture_output=True,text=True,check=True,timeout=20)
         assert json.loads(result.stdout)['schema']=='traffic-artifact-sync/v1'
-        print(json.dumps({'role': role, 'source_verified': True, 'ml_dependencies_absent': True}))
+        child=subprocess.Popen([sys.executable,'-B','-m','backend.app.services.restore_cache','wait','--host','127.0.0.1','--port','1'],
+                               stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        try:
+            assert child.stdout.readline().strip()=='runtime_dependency_waiting'
+            child.terminate();child.communicate(timeout=5)
+            assert child.returncode==143,'Init helper did not handle SIGTERM explicitly'
+        finally:
+            if child.poll() is None:child.kill();child.communicate(timeout=5)
+        print(json.dumps({'role': role, 'source_verified': True, 'ml_dependencies_absent': True,'init_termination_verified':True}))
         return
     import joblib
     import numpy as np

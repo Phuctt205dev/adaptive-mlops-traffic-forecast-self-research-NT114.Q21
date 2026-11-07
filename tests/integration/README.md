@@ -32,10 +32,16 @@ The fixture process adds its generated public certificate to the disposable
 container's certifi bundle. This lets requests probes which ignore environment
 overrides validate the local HTTPS ingress without disabling certificate or
 hostname verification; production trust stores are unchanged.
+The replacement HTTP fixture also installs SIGTERM handlers because it runs as
+PID 1, matching the real ASGI/Airflow servers' ability to stop. Long requests
+must still finish before retirement; the controller's grace budgets are kept.
 
 Required cases include legacy preflight failure before mutation, actual
 migration with a long request finishing, idle-only deferral, verified no-op,
 preview smoke failure, real S3 upload denial after promotion with scheduler
 defaulting/rollback, manifest-only update without an image rebuild, and queue
-preservation. Only allowlisted receipt/error/pod facts are preserved in
+preservation. A synthetic queued TrainingRun/TrainingExecution is stored in real
+PostgreSQL and its unchanged queued state is checked after every case. Airflow's
+queue REST response is a fixture; no real scheduler is asked to dispatch it.
+Only allowlisted receipt/error/pod facts are preserved in
 `results/cicd/kubernetes-delivery-proof.json`.

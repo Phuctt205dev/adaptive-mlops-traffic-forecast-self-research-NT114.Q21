@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import signal
 import ssl
 import sys
 import threading
@@ -165,7 +166,12 @@ def seed():
         model=ModelVersion(region_id=region.id,training_run_id=run.id,variant='RandomForest',version='ci-v1',
                            mlflow_run_id='ci-only',mlflow_model_uri='/app/models/ci-probe.joblib',artifact_uri='/app/models/ci-probe.joblib',
                            cv_mean_mae=0,cv_std_mae=0,final_test_mae=0)
-        db.add(model);db.flush();region.active_model_version_id=model.id;db.commit()
+        db.add(model);db.flush();region.active_model_version_id=model.id
+        queued=TrainingRun(region_id=region.id,dataset_id=dataset.id,split_policy='ci-only-queue',
+                           requested_by=user.id,status=TrainingRunStatus.QUEUED)
+        db.add(queued);db.flush()
+        db.add(TrainingExecution(training_run_id=queued.id,backend='kaggle',state='queued'))
+        db.commit()
     client=boto3.client('s3',endpoint_url='http://minio:9000',aws_access_key_id=os.environ['MINIO_ROOT_USER'],
                         aws_secret_access_key=os.environ['MINIO_ROOT_PASSWORD'],region_name='us-east-1')
     for bucket in ('ci-runtime','mlflow-artifacts'):client.create_bucket(Bucket=bucket)
@@ -179,6 +185,10 @@ if __name__=='__main__':
     args=p.parse_args();MODE=args.mode
     if MODE=='seed':seed()
     else:
+        # This fixture replaces an ASGI/Airflow entrypoint and runs as PID 1.
+        # Install termination handlers explicitly, as the real servers do.
+        signal.signal(signal.SIGTERM,lambda *_:sys.exit(0))
+        signal.signal(signal.SIGINT,lambda *_:sys.exit(0))
         if MODE=='role':install_fixture_ca()
         if MODE=='role' and os.environ.get('REGION_CLEANUP_ROLE')=='api':inference()
         server=ThreadingHTTPServer(('0.0.0.0',args.port),Handler)

@@ -1,0 +1,325 @@
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "name": "${slot}",
+    "namespace": "traffic-mlops"
+  },
+  "spec": {
+    "replicas": 1,
+    "selector": {
+      "matchLabels": {
+        "app": "${slot}"
+      }
+    },
+    "strategy": {
+      "type": "Recreate"
+    },
+    "minReadySeconds": 5,
+    "progressDeadlineSeconds": 1200,
+    "template": {
+      "metadata": {
+        "labels": {
+          "app": "${slot}",
+          "traffic-role": "training",
+          "traffic-training-mode": "execution",
+          "traffic-training-role": "recurrent",
+          "traffic.mlops/role": "neural",
+          "traffic.mlops/managed-by": "cd"
+        },
+        "annotations": {
+          "traffic.mlops/source-id": "${source_id}"
+        }
+      },
+      "spec": {
+        "automountServiceAccountToken": false,
+        "containers": [
+          {
+            "command": [
+              "python",
+              "-B",
+              "/app/deployment/rke2/runtime/role_runtime.py"
+            ],
+            "env": [
+              {
+                "name": "NUMBA_NUM_THREADS",
+                "value": "1"
+              },
+              {
+                "name": "NUMBA_CACHE_DIR",
+                "value": "/tmp/traffic-shap-numba"
+              },
+              {
+                "name": "TRAINING_CONTROL_ENABLED",
+                "value": "true"
+              },
+              {
+                "name": "CLOUD_TRAINING_ENABLED",
+                "value": "true"
+              },
+              {
+                "name": "KAGGLE_USERNAME",
+                "value": "truongphucdev"
+              },
+              {
+                "name": "KAGGLE_TOKEN_FILE",
+                "value": "/var/run/traffic-kaggle/access_token"
+              },
+              {
+                "name": "PYTHONUNBUFFERED",
+                "value": "1"
+              },
+              {
+                "name": "PYTHONDONTWRITEBYTECODE",
+                "value": "1"
+              },
+              {
+                "name": "MLFLOW_TRACKING_URI",
+                "value": "http://mlflow:5000"
+              },
+              {
+                "name": "MLFLOW_S3_ENDPOINT_URL",
+                "value": "http://minio:9000"
+              },
+              {
+                "name": "S3_ENDPOINT_URL",
+                "value": "http://minio:9000"
+              },
+              {
+                "name": "AWS_ACCESS_KEY_ID",
+                "valueFrom": {
+                  "secretKeyRef": {
+                    "key": "MINIO_ROOT_USER",
+                    "name": "traffic-secrets"
+                  }
+                }
+              },
+              {
+                "name": "AWS_SECRET_ACCESS_KEY",
+                "valueFrom": {
+                  "secretKeyRef": {
+                    "key": "MINIO_ROOT_PASSWORD",
+                    "name": "traffic-secrets"
+                  }
+                }
+              },
+              {
+                "name": "TRAFFIC_TRAINING_ROLE",
+                "value": "recurrent"
+              },
+              {
+                "name": "POD_NAME",
+                "valueFrom": {
+                  "fieldRef": {
+                    "apiVersion": "v1",
+                    "fieldPath": "metadata.name"
+                  }
+                }
+              },
+              {
+                "name": "POD_NODE_NAME",
+                "valueFrom": {
+                  "fieldRef": {
+                    "apiVersion": "v1",
+                    "fieldPath": "spec.nodeName"
+                  }
+                }
+              },
+              {
+                "name": "OMP_NUM_THREADS",
+                "value": "1"
+              },
+              {
+                "name": "OPENBLAS_NUM_THREADS",
+                "value": "1"
+              },
+              {
+                "name": "MKL_NUM_THREADS",
+                "value": "1"
+              },
+              {
+                "name": "NUMEXPR_NUM_THREADS",
+                "value": "1"
+              },
+              {
+                "name": "TF_NUM_INTRAOP_THREADS",
+                "value": "1"
+              },
+              {
+                "name": "TF_NUM_INTEROP_THREADS",
+                "value": "1"
+              },
+              {
+                "name": "REGION_CLEANUP_ROLE",
+                "value": "recurrent"
+              },
+              {
+                "name": "REGION_CLEANUP_MLFLOW_BUCKET",
+                "value": "mlflow-artifacts"
+              }
+            ],
+            "envFrom": [
+              {
+                "configMapRef": {
+                  "name": "traffic-config"
+                }
+              },
+              {
+                "secretRef": {
+                  "name": "traffic-secrets"
+                }
+              }
+            ],
+            "image": "${image.neural}",
+            "imagePullPolicy": "IfNotPresent",
+            "livenessProbe": {
+              "httpGet": {
+                "path": "/health/live",
+                "port": 8000
+              },
+              "periodSeconds": 20,
+              "timeoutSeconds": 3,
+              "failureThreshold": 3
+            },
+            "name": "worker",
+            "ports": [
+              {
+                "containerPort": 8000,
+                "name": "http",
+                "protocol": "TCP"
+              }
+            ],
+            "readinessProbe": {
+              "httpGet": {
+                "path": "/health/ready",
+                "port": 8000
+              },
+              "periodSeconds": 5,
+              "timeoutSeconds": 5,
+              "failureThreshold": 3
+            },
+            "resources": {
+              "limits": {
+                "cpu": "1",
+                "ephemeral-storage": "3Gi",
+                "memory": "3Gi"
+              },
+              "requests": {
+                "cpu": "500m",
+                "ephemeral-storage": "256Mi",
+                "memory": "1Gi"
+              }
+            },
+            "startupProbe": {
+              "httpGet": {
+                "path": "/health/live",
+                "port": 8000
+              },
+              "periodSeconds": 5,
+              "timeoutSeconds": 3,
+              "failureThreshold": 60
+            },
+            "terminationMessagePath": "/dev/termination-log",
+            "terminationMessagePolicy": "File",
+            "volumeMounts": [
+              {
+                "mountPath": "/var/run/traffic-kaggle",
+                "name": "kaggle-credential",
+                "readOnly": true
+              },
+              {
+                "mountPath": "/app/models",
+                "name": "worker-cache",
+                "subPath": "models"
+              },
+              {
+                "mountPath": "/app/results",
+                "name": "worker-cache",
+                "subPath": "results"
+              },
+              {
+                "mountPath": "/app/monitoring",
+                "name": "worker-cache",
+                "subPath": "monitoring"
+              },
+              {
+                "mountPath": "/app/mlruns",
+                "name": "worker-cache",
+                "subPath": "mlruns"
+              },
+              {
+                "mountPath": "/app/data_versions",
+                "name": "worker-cache",
+                "subPath": "data_versions"
+              },
+              {
+                "mountPath": "/app/data",
+                "name": "worker-cache",
+                "subPath": "data"
+              },
+              {
+                "mountPath": "/opt/region-cleanup-airflow-logs",
+                "name": "region-cleanup-airflow-logs"
+              }
+            ],
+            "workingDir": "/app"
+          }
+        ],
+        "initContainers": [
+          {
+            "name": "prepare-cache",
+            "image": "${image.sync}",
+            "command": [
+              "python",
+              "-B",
+              "-m",
+              "backend.app.services.restore_cache",
+              "prepare"
+            ],
+            "volumeMounts": [
+              {
+                "name": "worker-cache",
+                "mountPath": "/cache"
+              }
+            ],
+            "resources": {
+              "requests": {
+                "cpu": "10m",
+                "memory": "32Mi"
+              },
+              "limits": {
+                "cpu": "100m",
+                "memory": "128Mi"
+              }
+            }
+          }
+        ],
+        "nodeSelector": {
+          "kubernetes.io/hostname": "mlops-node-03"
+        },
+        "terminationGracePeriodSeconds": 900,
+        "volumes": [
+          {
+            "name": "kaggle-credential",
+            "secret": {
+              "defaultMode": 256,
+              "secretName": "traffic-kaggle-credentials"
+            }
+          },
+          {
+            "emptyDir": {
+              "sizeLimit": "2Gi"
+            },
+            "name": "worker-cache"
+          },
+          {
+            "name": "region-cleanup-airflow-logs",
+            "persistentVolumeClaim": {
+              "claimName": "airflow-logs"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

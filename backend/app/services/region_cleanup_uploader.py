@@ -129,13 +129,15 @@ def upload_cycle(root='/cache', *, state=None):
 def main():
     import signal
     import threading
+    from backend.app.services.artifact_sync_control import exclusive,flush
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     state = UploadState(reconcile_seconds=max(300, int(os.environ.get('TRAFFIC_API_ARTIFACT_RECONCILE_SECONDS', '3600'))))
     while not stop.is_set():
         try:
-            uploaded = upload_cycle(state=state)
+            with exclusive():
+                uploaded = upload_cycle(state=state)
             print(json.dumps({'artifact_sync': {'uploaded': uploaded, 'unchanged': state.unchanged}}), flush=True)
         except UploadPaused:
             pass
@@ -143,8 +145,9 @@ def main():
             print('Artifact upload cycle deferred; no cleanup bypass.', flush=True)
         stop.wait(max(5, int(os.environ.get('TRAFFIC_API_ARTIFACT_SYNC_SECONDS', '30'))))
     try:
-        uploaded = upload_cycle(state=state)
-        print(json.dumps({'artifact_sync_stopped': True, 'final_uploaded': uploaded}), flush=True)
+        with exclusive():
+            proof=flush(module=__import__(__name__,fromlist=['upload_cycle']),state=state)
+        print(json.dumps({'artifact_sync_stopped': True, 'final_flush':proof}), flush=True)
     except Exception:
         print(json.dumps({'artifact_sync_stopped': True, 'final_upload_confirmed': False}), flush=True)
         raise

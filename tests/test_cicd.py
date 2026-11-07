@@ -256,6 +256,7 @@ class GateTests(unittest.TestCase):
         return [{"conclusion": "success", "status": "completed", "event": "push", "workflow_id": 1,
                  "head_branch": "master", "head_sha": COMMIT, "run_number": 1, "head_repository": {"full_name": "owner/repo"}},
                 {"id": 1}, {"default_branch": "master"}, {'type': 'file'},
+                {'type': 'file', 'encoding': 'base64', 'content': base64.b64encode(json.dumps({'schema': 'traffic-runtime-contract/v1'}).encode()).decode()},
                 {'type': 'file', 'encoding': 'base64', 'content': base64.b64encode(json.dumps(cd_state.initial()).encode()).decode()},
                 {"protection_rules": [{"type": "required_reviewers", "reviewers": [{"id": 1}]}],
                  'deployment_branch_policy': {'custom_branch_policies': True, 'protected_branches': False}},

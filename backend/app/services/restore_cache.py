@@ -57,7 +57,20 @@ def restore(root, *, max_bytes=4 * 1024**3 * 4 // 5):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['prepare', 'restore'])
+    parser.add_argument('action', choices=['prepare', 'restore', 'wait'])
     parser.add_argument('--root', type=Path, default=Path('/cache'))
+    parser.add_argument('--host')
+    parser.add_argument('--port',type=int)
     args = parser.parse_args()
-    (restore if args.action == 'restore' else prepare)(args.root)
+    if args.action=='wait':
+        import socket,time
+        if not args.host or not args.port:parser.error('wait requires host and port')
+        deadline=time.monotonic()+180
+        while True:
+            try:
+                with socket.create_connection((args.host,args.port),timeout=3):break
+            except OSError:
+                if time.monotonic()>=deadline:raise RuntimeError('Runtime service did not become reachable') from None
+                time.sleep(3)
+    else:
+        (restore if args.action == 'restore' else prepare)(args.root)

@@ -10,6 +10,12 @@ on:
         description: Successful default-branch Backend CI push run to deliver
         required: true
         type: string
+      operation:
+        description: Normal release, or the explicitly reviewed one-time runtime migration
+        required: true
+        default: release
+        type: choice
+        options: [release, migrate-role-runtime-v1]
 
 permissions:
   contents: read
@@ -36,6 +42,7 @@ jobs:
       epoch: ${{ steps.provenance.outputs.epoch }}
       environment: ${{ steps.provenance.outputs.environment }}
       ci_number: ${{ steps.provenance.outputs.ci_number }}
+      operation: ${{ steps.provenance.outputs.operation }}
     steps:
       # The validation code comes from the protected default branch, never a PR.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -47,6 +54,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CI_RUN_ID: ${{ inputs.ci_run_id || github.event.workflow_run.id }}
+          DELIVERY_OPERATION: ${{ inputs.operation || 'release' }}
         run: python -B scripts/cicd/github_gate.py --run-id "$CI_RUN_ID"
 
   deploy:
@@ -92,7 +100,9 @@ jobs:
           RKE2_IMAGE_PULL_SECRET: ${{ vars.RKE2_IMAGE_PULL_SECRET }}
           CI_RUN_ID: ${{ needs.inspect.outputs.run_id }}
           PUBLIC_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
-        run: ./scripts/cicd/deliver.ps1 -ArtifactDirectory ./delivery-artifact -ExpectedCommit $env:EXPECTED_COMMIT
+          DELIVERY_OPERATION: ${{ needs.inspect.outputs.operation }}
+          DELIVERY_MODE: ${{ needs.inspect.outputs.mode }}
+        run: ./scripts/cicd/deliver.ps1 -ArtifactDirectory ./delivery-artifact -ExpectedCommit $env:EXPECTED_COMMIT -Operation $env:DELIVERY_OPERATION
       - name: Summarize deployment and recovery separately
         if: always()
         shell: powershell
@@ -118,11 +128,11 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: write
-      actions: read
+      actions: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: master
+          ref: ${{ needs.inspect.outputs.sha }}
           persist-credentials: false
       - name: Download the sanitized receipt, if the runner could preserve it
         id: receipt
@@ -132,6 +142,7 @@ jobs:
           name: delivery-receipt-${{ needs.inspect.outputs.sha }}-${{ github.run_attempt }}
           path: receipt
       - name: Record outcome and block Auto after failure
+        id: finish
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_COMMIT: ${{ needs.inspect.outputs.sha }}
@@ -141,3 +152,11 @@ jobs:
           DELIVERY_RESULT: ${{ needs.deploy.result }}
           DELIVERY_BEGAN: ${{ needs.deploy.outputs.began }}
         run: python -B scripts/cicd/cd_state.py finish --receipt-directory receipt
+      - name: Release a dependent frontend only after backend verification
+        if: steps.finish.outputs.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_COMMIT: ${{ needs.inspect.outputs.sha }}
+          FRONTEND_API_URL: ${{ vars.VITE_API_BASE_URL }}
+          FRONTEND_BASE_PATH: ${{ vars.VITE_BASE_PATH }}
+        run: python -B scripts/cicd/frontend_release.py dispatch --commit "$EXPECTED_COMMIT" --backend-run "$GITHUB_RUN_ID"

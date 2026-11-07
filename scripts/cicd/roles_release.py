@@ -17,7 +17,8 @@ ROOTS = {
              'src.cloud_training.kaggle_rpc'],
     'neural': ['backend.app.services.worker_runtime', 'backend.app.services.region_cleanup_runtime',
                'src.cloud_training.kaggle_rpc'],
-    'sync': ['backend.app.services.region_cleanup_uploader', 'backend.app.services.restore_cache'],
+    'sync': ['backend.app.services.region_cleanup_uploader', 'backend.app.services.restore_cache',
+             'backend.app.services.artifact_sync_control'],
 }
 FORBIDDEN = {'src/pipeline.py', 'src/time_series_training.py', 'src/lstm_sequences.py',
              'backend/app/api/routes/internal_training.py'}
@@ -170,6 +171,12 @@ def build(root, output, commit):
         payload['requirements/' + path.name] = path.read_bytes().replace(b'\r\n', b'\n')
     payload['Dockerfile'] = dockerfile(baseline['python_base'])
     payload['.dockerignore'] = b'**\n!Dockerfile\n!release.json\n!roles/\n!roles/**\n!requirements/\n!requirements/**\n'
+    # Desired Kubernetes state and one-time migration metadata are release
+    # inputs, independently hashed from application image content.
+    for role in ('api','tree','neural'):
+        payload['deploy/'+role+'.json']=(root/'deployment/rke2/roles'/(role+'.json')).read_bytes().replace(b'\r\n',b'\n')
+    payload['deploy/runtime-contract.json']=(root/'deployment/rke2/runtime-contract.json').read_bytes().replace(b'\r\n',b'\n')
+    payload['deploy/migrations/role-runtime-v1.json']=(root/'deployment/rke2/migrations/role-runtime-v1.json').read_bytes().replace(b'\r\n',b'\n')
     # Keep the Airflow protocol source independent from application role images.
     for name, source in [('dag.py', 'deployment/rke2/runtime/traffic_region_training_cloud.py'),
                          ('legacy/traffic_region_training_worker.py', 'deployment/rke2/runtime/traffic_region_training_worker.py'),

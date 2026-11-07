@@ -1,5 +1,13 @@
 # Vận hành CI/CD backend trên RKE2
 
+> Rà soát 07/11/2026: xem [luồng CI/CD thống nhất](CICD_UNIFIED_FLOW.md).
+> Gói chuyển đổi role chưa được nghiệm thu; xác minh cuối tối06/11 ghi nhận đã
+> rollback bản cũ và tạm tắt CD theo yêu cầu người dùng. Các bước Enable/Apply
+> bên dưới là hướng dẫn, không phải yêu cầu tự tiếp tục triển khai. Đợt rà soát
+> 07/11 đã bắt đầu sửa workflow/controller theo kế hoạch thống nhất; chưa nghiệm
+> thu production. `deliver.ps1` mới chỉ nhận role release v2; gói v1 chỉ dùng
+> controller/artifact gốc cho phục hồi giao dịch lịch sử.
+
 Phương án đã được người dùng chốt ngày 05/11/2026: **CI kiểm chứng → duyệt một lần trên GitHub → runner Windows triển khai qua Tailscale → Verify**. Thiết lập ban đầu và nghiệm thu live vẫn là các bước riêng, không suy ra đã hoàn thành từ việc có workflow trong source.
 
 Bản nâng cấp 06/11 bổ sung lựa chọn Manual/Auto có trạng thái lưu lâu dài;

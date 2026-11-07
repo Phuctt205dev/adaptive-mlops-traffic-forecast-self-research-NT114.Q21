@@ -1,5 +1,10 @@
 # Kế hoạch tinh gọn API/worker và giữ phục vụ trong triển khai
 
+> Trạng thái 07/11/2026: gói này **tạm hoãn theo yêu cầu người dùng**, production
+> đã rollback ngày06/11. Đọc [luồng CI/CD thống nhất](CICD_UNIFIED_FLOW.md) trước
+> khi tiếp tục. Thiết kế chuẩn hóa tách migration một lần khỏi phát hành thường
+> ngày; nội dung lịch sử bên dưới không tự mở lại Auto hoặc việc triển khai.
+
 Ngày lập: **06/11/2026**, múi giờ Asia/Saigon.
 Trạng thái: **đã được giao thực hiện; đang kiểm thử, chưa phát hành gói role**. Người dùng yêu cầu tối thiểu
 dependency theo vai trò, giữ đầy đủ chức năng hiện hành và không downtime do

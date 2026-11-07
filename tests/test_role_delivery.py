@@ -9,45 +9,10 @@ import sys
 import unittest
 from unittest.mock import Mock, patch
 
-from scripts.cicd import role_blueprints as bp
 from scripts.cicd.roles_deploy import RolesDelivery, validate_delivery
 from scripts.cicd.release import canonical,digest
 from scripts.cicd import cd_state
 from tests.test_cd_control import MemoryAPI,transaction
-
-
-def pod_source(role='api'):
-    main={'name':'traffic-api' if role=='api' else 'worker','image':'old', 'command':bp.OLD_RUNTIME,
-          'ports':[{'containerPort':8000}], 'env':[{'name':'INTERNAL_TRAINING_TOKEN','valueFrom':{'secretKeyRef':{'name':'token','key':'token'}}}],
-          'volumeMounts':[{'name':'cache','mountPath':'/app/models'}, {'name':'runtime','mountPath':'/opt/traffic-cloud'}],
-          'resources':{'requests':{'memory':'1536Mi'}}}
-    return {'spec':{'template':{'metadata':{'labels':{'app':'traffic-api','traffic-region-cleanup-peer':'true'}},
-             'spec':{'containers':[main,{'name':'artifact-cache-sync','image':'old','command':['old'],
-                       'envFrom':[{'secretRef':{'name':'minio-env'}}], 'volumeMounts':[{'name':'cache','mountPath':'/cache'}]}],
-                      'volumes':[{'name':'cache','emptyDir':{}},{'name':'runtime','configMap':{'name':'old'}}],
-                      'affinity':{'podAntiAffinity':{'requiredDuringSchedulingIgnoredDuringExecution':[{'labelSelector':{'matchLabels':{'app':'traffic-api'}}}]}}}}}}
-
-
-class Blueprints(unittest.TestCase):
-    def test_api_has_ordered_native_sidecar_and_preserves_requests_and_secrets(self):
-        value=bp.deployment(pod_source(),'api','api',{r:{'image':r} for r in ('api','tree','neural','sync')},'id')
-        pod=value['spec']['template']['spec']; main=pod['containers'][0]
-        self.assertEqual(value['spec']['replicas'],0)
-        self.assertEqual(main['resources']['requests']['memory'],'1536Mi')
-        self.assertIn('valueFrom',main['env'][0])
-        self.assertEqual([c['name'] for c in pod['initContainers']],['restore-cache','artifact-sync'])
-        self.assertEqual(pod['initContainers'][-1]['restartPolicy'],'Always')
-        self.assertEqual(pod['terminationGracePeriodSeconds'],900)
-        self.assertNotIn('traffic-region-cleanup-peer',value['spec']['template']['metadata']['labels'])
-        self.assertEqual(pod['affinity']['podAntiAffinity']['requiredDuringSchedulingIgnoredDuringExecution'][0]['labelSelector']['matchLabels']['app'],'api')
-        self.assertEqual(len(pod['volumes']),1)
-
-    def test_blueprint_refuses_literals_and_wrong_role_names(self):
-        value=pod_source(); value['spec']['template']['spec']['containers'][0]['env'][0]={'name':'INTERNAL_TRAINING_TOKEN','value':'do-not-copy'}
-        with self.assertRaisesRegex(ValueError,'literal credential'):
-            bp.deployment(value,'api','api',{},'id')
-        with self.assertRaises(ValueError):
-            bp.deployment(pod_source(),'train-tree','neural',{},'id')
 
 
 class DeliveryOrdering(unittest.TestCase):
@@ -92,7 +57,7 @@ class DeliveryOrdering(unittest.TestCase):
                     current['spec']=spec
                 return {'spec':spec}
             op.patch=Mock(side_effect=patch_resource)
-            op.cluster=Mock();op.pause=Mock();op.resource_proof=Mock()
+            op.cluster=Mock();op.pause=Mock();op.resource_proof=Mock();op.wait_retired=Mock()
             op.state.update(dag_was_paused=False,drift_was_paused=False)
             op.change('deployment','airflow-scheduler',submitted)
             self.assertEqual(op.inverses[0]['after'],digest(canonical(admitted)))
@@ -148,7 +113,7 @@ class DeliveryOrdering(unittest.TestCase):
     def test_busy_training_defers_before_pause_or_cluster_mutation(self):
         with tempfile.TemporaryDirectory() as directory:
             op=self.operator(directory)
-            op.plan=Mock(return_value={'idle':{'active':1,'running':0}})
+            op.plan=Mock(return_value={'idle':{'active':1,'running':0},'changes':{'api':{}}})
             op.verify=Mock(side_effect=RuntimeError('Old version'))
             op.pause=Mock(); op.change=Mock()
             with patch.dict('os.environ',{'CI_RUN_ID':'123'}):

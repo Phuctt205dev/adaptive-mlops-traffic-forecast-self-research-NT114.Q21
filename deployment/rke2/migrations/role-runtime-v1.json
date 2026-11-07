@@ -1,0 +1,12 @@
+{
+  "schema": "traffic-runtime-migration/v1",
+  "id": "role-runtime-v1",
+  "from_image": "ghcr.io/phuctt205dev/adaptive-mlops-traffic-forecast-self-research-nt114.q21/backend@sha256:6ef8e1a3fb80c8e98c38b32a3050db083e3c37925d530d3e27614dda10fed033",
+  "roles": {"api": "traffic-api", "tree": "traffic-training-tree", "neural": "traffic-training-worker"},
+  "api_sidecar": "artifact-cache-sync",
+  "loader_path": "/opt/traffic-release/cache_sync.py",
+  "loader_sha256": "c15b39635dc056fad4adde801a1b4f31410477f571432519f3a05f5a3717a689",
+  "uploader_path": "/opt/traffic-release/sidecar/region_cleanup_uploader.py",
+  "uploader_sha256": "4691194d62df8feced60abca015e9ab25b231fcea78a3006eb8e1de3360ee06e",
+  "sync_contract": "acknowledged-files-v1"
+}

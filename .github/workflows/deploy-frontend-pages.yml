@@ -10,6 +10,14 @@ on:
       - ".github/workflows/deploy-frontend-pages.yml"
   workflow_dispatch:
     inputs:
+      source_sha:
+        description: Exact source commit; a dependent backend must already be verified
+        required: false
+        type: string
+      backend_run_id:
+        description: Verified backend deployment which requested this publication
+        required: false
+        type: string
       api_base_url:
         description: "Frontend API base URL, for example https://api.example.com/api/v1"
         required: false
@@ -29,15 +37,45 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  select:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    outputs:
+      publish: ${{ steps.source.outputs.publish }}
+      sha: ${{ steps.source.outputs.sha }}
+      deployment_id: ${{ steps.source.outputs.deployment_id }}
+      api_url: ${{ steps.source.outputs.api_url }}
+      base_path: ${{ steps.source.outputs.base_path }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check backend compatibility before building
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+          BACKEND_RUN: ${{ inputs.backend_run_id }}
+          FRONTEND_API_URL: ${{ inputs.api_base_url || vars.VITE_API_BASE_URL }}
+          FRONTEND_BASE_PATH: ${{ inputs.base_path || vars.VITE_BASE_PATH }}
+        run: python -B scripts/cicd/frontend_release.py select --commit "$SOURCE_SHA" --backend-run "$BACKEND_RUN"
+
   build:
     name: Build frontend
+    needs: select
+    if: needs.select.outputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.select.outputs.sha }}
+          persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -45,22 +83,21 @@ jobs:
 
       - name: Configure frontend environment
         shell: bash
+        env:
+          INPUT_API_URL: ${{ needs.select.outputs.api_url }}
+          INPUT_BASE_PATH: ${{ needs.select.outputs.base_path }}
         run: |
-          api_base_url="${{ inputs.api_base_url || vars.VITE_API_BASE_URL }}"
-          base_path="${{ inputs.base_path || vars.VITE_BASE_PATH }}"
-
-          if [ -z "$api_base_url" ]; then
-            api_base_url="https://api.example.com/api/v1"
-          fi
-
-          if [ -z "$base_path" ]; then
-            base_path="/${{ github.event.repository.name }}/"
-          fi
-
-          echo "VITE_API_BASE_URL=$api_base_url" >> "$GITHUB_ENV"
-          echo "VITE_BASE_PATH=$base_path" >> "$GITHUB_ENV"
-          echo "Frontend API: $api_base_url"
-          echo "Frontend base path: $base_path"
+          python - <<'PY'
+          import os,re
+          from urllib.parse import urlsplit
+          url=os.environ['INPUT_API_URL'];parsed=urlsplit(url)
+          base=os.environ['INPUT_BASE_PATH'] or '/'+os.environ['GITHUB_REPOSITORY'].split('/')[1]+'/'
+          if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or '\n' in url or '\r' in url:
+              raise ValueError('Configure the reviewed HTTPS frontend API URL')
+          if not re.fullmatch(r'/[A-Za-z0-9_./-]*',base):raise ValueError('Invalid frontend base path')
+          with open(os.environ['GITHUB_ENV'],'a') as f:
+              f.write('VITE_API_BASE_URL='+url+'\nVITE_BASE_PATH='+base+'\n')
+          PY
 
       - name: Install dependencies
         working-directory: frontend
@@ -71,21 +108,47 @@ jobs:
         run: npm run build
 
       - name: Setup Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: frontend/dist
 
   deploy:
     name: Deploy to GitHub Pages
-    needs: build
+    needs: [select, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Recheck source and backend immediately before publication
+        id: final
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.select.outputs.sha }}
+          BACKEND_RUN: ${{ inputs.backend_run_id }}
+          FRONTEND_API_URL: ${{ needs.select.outputs.api_url }}
+          FRONTEND_BASE_PATH: ${{ needs.select.outputs.base_path }}
+        run: python -B scripts/cicd/frontend_release.py select --commit "$SOURCE_SHA" --backend-run "$BACKEND_RUN"
       - name: Deploy
         id: deployment
-        uses: actions/deploy-pages@v4
+        if: steps.final.outputs.publish == 'true'
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+      - name: Record the content actually published
+        if: steps.deployment.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.select.outputs.sha }}
+          DEPLOYMENT_ID: ${{ needs.select.outputs.deployment_id }}
+        run: python -B scripts/cicd/frontend_release.py record --commit "$SOURCE_SHA" --deployment-id "$DEPLOYMENT_ID"

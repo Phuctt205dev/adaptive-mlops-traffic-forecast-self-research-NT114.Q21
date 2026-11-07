@@ -70,7 +70,8 @@ def build_app(root=ROOT):
     def release():
         return {'status': 'ok', 'commit': document['commit'], 'release_id': document['release_id'],
                 'bundle_id': document['bundle_id'], 'role': peer_role, 'image_role': role,
-                'base_image': document['base_image'], 'runtime_schema': document['schema'], 'source_id': document['source_id']}
+                'base_image': document['base_image'], 'runtime_schema': document['schema'], 'source_id': document['source_id'],
+                'runtime_contract':'traffic-runtime-contract/v1'}
     return app
 
 

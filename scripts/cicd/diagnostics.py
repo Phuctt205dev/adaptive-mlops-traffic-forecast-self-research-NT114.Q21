@@ -92,6 +92,12 @@ def report(directory, commit, run_id, attempt, outcome):
     lines = ['## Backend deployment: ' + ('DEFERRED: waiting for idle training; not deployed' if receipt.get('deferred') else 'SUCCEEDED' if success else 'SKIPPED' if outcome == 'skipped' else 'FAILED'),
              '', '- Commit: `' + commit + '`', '- Recovery: **' + recovery + '**',
              '- Evidence retention: 30 days (sanitized receipt/diagnostics artifact).']
+    if receipt.get('failed_phase') or receipt.get('phase'):
+        lines.append('- Phase: `'+identifier(receipt.get('failed_phase') or receipt.get('phase'))+'`')
+    execution=receipt.get('execution_failure',{})
+    if execution:
+        lines.append('- Runtime operation: `'+identifier(execution.get('container') or execution.get('workload'))+
+                     '`; '+identifier(execution.get('error_type')))
     failure=receipt.get('probe_failure',{})
     if failure:
         line='- Read-only check: **'+identifier(failure.get('target'))+' / '+identifier(failure.get('endpoint'))+'**'

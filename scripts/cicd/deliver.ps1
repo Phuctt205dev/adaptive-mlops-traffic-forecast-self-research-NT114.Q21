@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$ArtifactDirectory,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-f]{40}$')][string]$ExpectedCommit,
-    [ValidateSet('Plan', 'Apply', 'Verify')][string]$Action = 'Apply'
+    [ValidateSet('Plan', 'Apply', 'Verify', 'Rollback')][string]$Action = 'Apply',
+    [ValidateSet('release', 'migrate-role-runtime-v1')][string]$Operation = 'release'
 )
 $ErrorActionPreference = 'Stop'
 if (-not $env:RKE2_CONTEXT -or -not $env:RKE2_NAMESPACE_UID -or -not $env:RKE2_KUBECONFIG) {
@@ -30,17 +31,17 @@ if ($manifest.release_id -ne $delivery.release_id) { throw 'Image receipt and re
 $receiptDirectory = Join-Path (Get-Location).Path 'results\cicd'
 New-Item -ItemType Directory -Path $receiptDirectory -Force | Out-Null
 $journal = Join-Path $receiptDirectory ('delivery-' + $ExpectedCommit + '-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT + '.json')
-$deliveryArgs = @('--directory', $checkedRoot, '--image', $delivery.image, '--commit', $ExpectedCommit,
-    '--journal', $journal, '--kubectl', $kubectl, '--context', $env:RKE2_CONTEXT, '--namespace-uid', $env:RKE2_NAMESPACE_UID,
-    '--kubeconfig', $env:RKE2_KUBECONFIG)
-$deliveryScript = 'scripts/cicd/deploy.py'
-if ($manifest.schema -eq 'traffic-release/v2') {
-    if ($delivery.schema -ne 'traffic-delivery/v2') { throw 'Role image binding is required.' }
-    $deliveryScript = 'scripts/cicd/roles_deploy.py'
-    $deliveryArgs = @('--directory', $checkedRoot, '--binding', (Join-Path $artifactRoot 'delivery.json'),
-        '--commit', $ExpectedCommit, '--journal', $journal, '--kubectl', $kubectl,
-        '--context', $env:RKE2_CONTEXT, '--namespace-uid', $env:RKE2_NAMESPACE_UID, '--kubeconfig', $env:RKE2_KUBECONFIG)
-} elseif ($env:RKE2_IMAGE_PULL_SECRET) { $deliveryArgs += @('--pull-secret', $env:RKE2_IMAGE_PULL_SECRET) }
+if ($manifest.schema -ne 'traffic-release/v2' -or $delivery.schema -ne 'traffic-delivery/v2') {
+    throw 'The unified engine requires a checked role release. Recover a legacy transaction with its original controller/artifact.'
+}
+$deliveryScript = 'scripts/cicd/roles_deploy.py'
+$deliveryArgs = @('--directory', $checkedRoot, '--binding', (Join-Path $artifactRoot 'delivery.json'),
+    '--commit', $ExpectedCommit, '--journal', $journal, '--kubectl', $kubectl,
+    '--context', $env:RKE2_CONTEXT, '--namespace-uid', $env:RKE2_NAMESPACE_UID, '--kubeconfig', $env:RKE2_KUBECONFIG)
+if ($Operation -eq 'migrate-role-runtime-v1') {
+    if ($Action -eq 'Apply' -and $env:DELIVERY_MODE -ne 'manual') { throw 'Runtime migration requires the Manual gate.' }
+    $deliveryArgs += @('--migration', 'role-runtime-v1')
+}
 & $python -B $deliveryScript $Action @deliveryArgs
 if ($LASTEXITCODE -ne 0) { throw 'Delivery operation failed. Inspect its receipt before starting another release.' }
 if ($Action -eq 'Apply') {

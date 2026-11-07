@@ -51,11 +51,21 @@ class RolePackageTests(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes((ROOT / name).read_bytes())
             shutil.copytree(ROOT / 'requirements/roles', root / 'requirements/roles')
+            shutil.copytree(ROOT / 'deployment/rke2/roles', root / 'deployment/rke2/roles')
+            shutil.copytree(ROOT / 'deployment/rke2/migrations', root / 'deployment/rke2/migrations')
+            shutil.copy2(ROOT / 'deployment/rke2/runtime-contract.json', root / 'deployment/rke2/runtime-contract.json')
             a = roles_release.build(root, Path(directory) / 'a', 'a' * 40)
             b = roles_release.build(root, Path(directory) / 'b', 'b' * 40)
             self.assertNotEqual(a['release_id'], b['release_id'])
             self.assertEqual([a['roles'][r]['source_id'] for r in roles_release.ROLES],
                              [b['roles'][r]['source_id'] for r in roles_release.ROLES])
+            manifest=root/'deployment/rke2/roles/api.json'
+            value=json.loads(manifest.read_text());value['spec']['template']['spec']['containers'][0]['readinessProbe']['timeoutSeconds']=7
+            manifest.write_text(json.dumps(value))
+            configuration=roles_release.build(root,Path(directory)/'configuration','d'*40)
+            self.assertNotEqual(b['release_id'],configuration['release_id'])
+            self.assertEqual([b['roles'][r]['source_id'] for r in roles_release.ROLES],
+                             [configuration['roles'][r]['source_id'] for r in roles_release.ROLES])
             source = root / 'backend/app/services/worker_context.py'
             source.write_text(source.read_text(encoding='utf-8') + '\n# worker-only change\n', encoding='utf-8')
             changed = roles_release.build(root, Path(directory) / 'changed', 'c' * 40)

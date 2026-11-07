@@ -276,6 +276,7 @@ class PolicyTests(unittest.TestCase):
              'head_branch': 'master', 'head_sha': 'a' * 40, 'run_number': 10,
              'head_repository': {'full_name': 'owner/repo'}},
             {'id': 1}, {'default_branch': 'master'}, {'type': 'file'},
+            {'type':'file','encoding':'base64','content':base64.b64encode(json.dumps({'schema':'traffic-runtime-contract/v1'}).encode()).decode()},
             {'type': 'file', 'encoding': 'base64', 'content': base64.b64encode(json.dumps(state).encode()).decode()},
             {'protection_rules': [{'type': 'required_reviewers', 'reviewers': [{'id': 1}]}] if reviewers else [],
              'deployment_branch_policy': {'protected_branches': False, 'custom_branch_policies': True}},

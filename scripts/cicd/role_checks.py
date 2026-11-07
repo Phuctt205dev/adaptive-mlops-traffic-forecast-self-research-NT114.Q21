@@ -79,6 +79,9 @@ def check(directory):
         assert not installed('numpy') and not installed('pandas') and not installed('fastapi')
         from backend.app.services import region_cleanup_uploader
         assert callable(region_cleanup_uploader.upload_cycle)
+        result=subprocess.run([sys.executable,'-B','-m','backend.app.services.artifact_sync_control','capabilities'],
+                              capture_output=True,text=True,check=True,timeout=20)
+        assert json.loads(result.stdout)['schema']=='traffic-artifact-sync/v1'
         print(json.dumps({'role': role, 'source_verified': True, 'ml_dependencies_absent': True}))
         return
     import joblib
@@ -143,6 +146,7 @@ def check(directory):
             assert client.post('/api/v1/internal/training-runs/' + run + '/control/' + wrong + '/start', headers=valid).status_code == 409
             health = client.get('/health/release').json()
         assert health['commit'] == document['commit'] and health['release_id'] == document['source_id']
+        assert health['runtime_contract']=='traffic-runtime-contract/v1'
         forbidden = ['src.pipeline', 'src.time_series_training', 'src.models', 'src.lstm_sequences', 'src.shap_reporting']
         assert not any(name in sys.modules for name in forbidden)
     finally:

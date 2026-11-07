@@ -13,7 +13,8 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
 from scripts.cicd.deploy import Cluster
 from scripts.cicd.roles_release import verify
 from scripts.cicd.roles_deploy import validate_delivery, SERVICES
-from scripts.cicd.role_blueprints import deployment, headless, preview
+from scripts.cicd.role_blueprints import headless, preview
+from scripts.cicd.role_manifests import render
 
 COHORTS={'api':('api','api-next'),'tree':('train-tree','tree-next'),'neural':('train-neural','neural-next')}
 
@@ -25,9 +26,8 @@ def bootstrap(cluster, directory, binding, *, apply=False):
         raise RuntimeError('Wrong namespace')
     resources=[]
     for role,names in COHORTS.items():
-        source=cluster.deployment(release['baseline']['roles'][role]['legacy'])
         for name in names:
-            resources.append(deployment(source,name,role,images,images[role]['source_id']))
+            resources.append(render(role,name,images,directory=directory,inactive=True))
     active=cluster.call('get','service','traffic-api','-o','json')['spec']['selector']['app']
     resources += [headless('api-peers',active),preview(),
                   {'apiVersion':'policy/v1','kind':'PodDisruptionBudget','metadata':{'name':'api-availability','namespace':'traffic-mlops'},

@@ -1,0 +1,474 @@
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "name": "${slot}",
+    "namespace": "traffic-mlops"
+  },
+  "spec": {
+    "replicas": 2,
+    "selector": {
+      "matchLabels": {
+        "app": "${slot}"
+      }
+    },
+    "strategy": {
+      "type": "RollingUpdate",
+      "rollingUpdate": {
+        "maxSurge": 1,
+        "maxUnavailable": 0
+      }
+    },
+    "minReadySeconds": 20,
+    "progressDeadlineSeconds": 1200,
+    "template": {
+      "metadata": {
+        "labels": {
+          "app": "${slot}",
+          "traffic.mlops/role": "api",
+          "traffic.mlops/managed-by": "cd"
+        },
+        "annotations": {
+          "traffic.mlops/source-id": "${source_id}"
+        }
+      },
+      "spec": {
+        "affinity": {
+          "nodeAffinity": {
+            "requiredDuringSchedulingIgnoredDuringExecution": {
+              "nodeSelectorTerms": [
+                {
+                  "matchExpressions": [
+                    {
+                      "key": "kubernetes.io/hostname",
+                      "operator": "In",
+                      "values": [
+                        "mlops-node-02",
+                        "mlops-node-03"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "podAntiAffinity": {
+            "requiredDuringSchedulingIgnoredDuringExecution": [
+              {
+                "labelSelector": {
+                  "matchLabels": {
+                    "app": "${slot}"
+                  }
+                },
+                "topologyKey": "kubernetes.io/hostname"
+              }
+            ]
+          }
+        },
+        "containers": [
+          {
+            "command": [
+              "python",
+              "-B",
+              "/app/deployment/rke2/runtime/role_runtime.py"
+            ],
+            "env": [
+              {
+                "name": "TRAINING_CONTROL_ENABLED",
+                "value": "true"
+              },
+              {
+                "name": "CLOUD_TRAINING_ENABLED",
+                "value": "true"
+              },
+              {
+                "name": "PYTHONUNBUFFERED",
+                "value": "1"
+              },
+              {
+                "name": "MLFLOW_TRACKING_URI",
+                "value": "http://mlflow:5000"
+              },
+              {
+                "name": "MLFLOW_S3_ENDPOINT_URL",
+                "value": "http://minio:9000"
+              },
+              {
+                "name": "S3_ENDPOINT_URL",
+                "value": "http://minio:9000"
+              },
+              {
+                "name": "MINIO_HEALTH_URL",
+                "value": "http://minio:9000/minio/health/live"
+              },
+              {
+                "name": "MLFLOW_HEALTH_URL",
+                "value": "http://mlflow:5000/health"
+              },
+              {
+                "name": "AIRFLOW_API_URL",
+                "value": "http://airflow-webserver:8080/api/v1"
+              },
+              {
+                "name": "AWS_ACCESS_KEY_ID",
+                "valueFrom": {
+                  "secretKeyRef": {
+                    "key": "MINIO_ROOT_USER",
+                    "name": "traffic-secrets"
+                  }
+                }
+              },
+              {
+                "name": "AWS_SECRET_ACCESS_KEY",
+                "valueFrom": {
+                  "secretKeyRef": {
+                    "key": "MINIO_ROOT_PASSWORD",
+                    "name": "traffic-secrets"
+                  }
+                }
+              },
+              {
+                "name": "REGION_CLEANUP_ROLE",
+                "value": "api"
+              },
+              {
+                "name": "REGION_CLEANUP_MLFLOW_BUCKET",
+                "value": "mlflow-artifacts"
+              },
+              {
+                "name": "POD_NAME",
+                "valueFrom": {
+                  "fieldRef": {
+                    "apiVersion": "v1",
+                    "fieldPath": "metadata.name"
+                  }
+                }
+              }
+            ],
+            "envFrom": [
+              {
+                "configMapRef": {
+                  "name": "traffic-config"
+                }
+              },
+              {
+                "secretRef": {
+                  "name": "traffic-secrets"
+                }
+              }
+            ],
+            "image": "${image.api}",
+            "imagePullPolicy": "IfNotPresent",
+            "livenessProbe": {
+              "httpGet": {
+                "path": "/api/v1/health/live",
+                "port": 8000
+              },
+              "periodSeconds": 20,
+              "timeoutSeconds": 3,
+              "failureThreshold": 3
+            },
+            "name": "api",
+            "ports": [
+              {
+                "containerPort": 8000,
+                "protocol": "TCP"
+              }
+            ],
+            "readinessProbe": {
+              "httpGet": {
+                "path": "/api/v1/health/serving-ready",
+                "port": 8000
+              },
+              "periodSeconds": 5,
+              "timeoutSeconds": 5,
+              "failureThreshold": 3
+            },
+            "resources": {
+              "limits": {
+                "cpu": "1",
+                "ephemeral-storage": "4Gi",
+                "memory": "3Gi"
+              },
+              "requests": {
+                "cpu": "250m",
+                "ephemeral-storage": "3Gi",
+                "memory": "1536Mi"
+              }
+            },
+            "startupProbe": {
+              "httpGet": {
+                "path": "/api/v1/health/live",
+                "port": 8000
+              },
+              "periodSeconds": 5,
+              "timeoutSeconds": 3,
+              "failureThreshold": 60
+            },
+            "terminationMessagePath": "/dev/termination-log",
+            "terminationMessagePolicy": "File",
+            "volumeMounts": [
+              {
+                "mountPath": "/app/models",
+                "name": "artifact-cache",
+                "subPath": "models"
+              },
+              {
+                "mountPath": "/app/results",
+                "name": "artifact-cache",
+                "subPath": "results"
+              },
+              {
+                "mountPath": "/app/monitoring",
+                "name": "artifact-cache",
+                "subPath": "monitoring"
+              },
+              {
+                "mountPath": "/app/mlruns",
+                "name": "artifact-cache",
+                "subPath": "mlruns"
+              },
+              {
+                "mountPath": "/app/data_versions",
+                "name": "artifact-cache",
+                "subPath": "data_versions"
+              },
+              {
+                "mountPath": "/app/data",
+                "name": "artifact-cache",
+                "subPath": "data"
+              }
+            ],
+            "lifecycle": {
+              "preStop": {
+                "exec": {
+                  "command": [
+                    "python",
+                    "-B",
+                    "-m",
+                    "backend.app.services.lifecycle"
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "initContainers": [
+          {
+            "command": [
+              "python",
+              "-B",
+              "-m",
+              "backend.app.services.restore_cache",
+              "wait",
+              "--host",
+              "postgres",
+              "--port",
+              "5432"
+            ],
+            "image": "${image.sync}",
+            "name": "wait-postgres",
+            "resources": {
+              "limits": {
+                "ephemeral-storage": "64Mi",
+                "memory": "64Mi"
+              },
+              "requests": {
+                "cpu": "10m",
+                "ephemeral-storage": "16Mi",
+                "memory": "16Mi"
+              }
+            },
+            "terminationMessagePath": "/dev/termination-log",
+            "terminationMessagePolicy": "File"
+          },
+          {
+            "command": [
+              "python",
+              "-B",
+              "-m",
+              "backend.app.services.restore_cache",
+              "wait",
+              "--host",
+              "minio",
+              "--port",
+              "9000"
+            ],
+            "image": "${image.sync}",
+            "name": "wait-minio",
+            "resources": {
+              "limits": {
+                "ephemeral-storage": "64Mi",
+                "memory": "64Mi"
+              },
+              "requests": {
+                "cpu": "10m",
+                "ephemeral-storage": "16Mi",
+                "memory": "16Mi"
+              }
+            },
+            "terminationMessagePath": "/dev/termination-log",
+            "terminationMessagePolicy": "File"
+          },
+          {
+            "command": [
+              "python",
+              "-B",
+              "-m",
+              "backend.app.services.restore_cache",
+              "wait",
+              "--host",
+              "mlflow",
+              "--port",
+              "5000"
+            ],
+            "image": "${image.sync}",
+            "name": "wait-mlflow",
+            "resources": {
+              "limits": {
+                "ephemeral-storage": "64Mi",
+                "memory": "64Mi"
+              },
+              "requests": {
+                "cpu": "10m",
+                "ephemeral-storage": "16Mi",
+                "memory": "16Mi"
+              }
+            },
+            "terminationMessagePath": "/dev/termination-log",
+            "terminationMessagePolicy": "File"
+          },
+          {
+            "name": "restore-cache",
+            "image": "${image.sync}",
+            "command": [
+              "python",
+              "-B",
+              "-m",
+              "backend.app.services.restore_cache",
+              "restore"
+            ],
+            "envFrom": [
+              {
+                "configMapRef": {
+                  "name": "traffic-config"
+                }
+              },
+              {
+                "secretRef": {
+                  "name": "traffic-secrets"
+                }
+              }
+            ],
+            "env": [
+              {
+                "name": "REGION_CLEANUP_ROLE",
+                "value": "sidecar"
+              },
+              {
+                "name": "REGION_CLEANUP_MLFLOW_BUCKET",
+                "value": "mlflow-artifacts"
+              },
+              {
+                "name": "POD_NAME",
+                "valueFrom": {
+                  "fieldRef": {
+                    "apiVersion": "v1",
+                    "fieldPath": "metadata.name"
+                  }
+                }
+              }
+            ],
+            "volumeMounts": [
+              {
+                "mountPath": "/cache",
+                "name": "artifact-cache"
+              }
+            ],
+            "resources": {
+              "requests": {
+                "cpu": "25m",
+                "memory": "64Mi"
+              },
+              "limits": {
+                "cpu": "500m",
+                "memory": "256Mi"
+              }
+            }
+          },
+          {
+            "command": [
+              "python",
+              "-B",
+              "/app/deployment/rke2/runtime/role_runtime.py"
+            ],
+            "env": [
+              {
+                "name": "REGION_CLEANUP_ROLE",
+                "value": "sidecar"
+              },
+              {
+                "name": "REGION_CLEANUP_MLFLOW_BUCKET",
+                "value": "mlflow-artifacts"
+              },
+              {
+                "name": "POD_NAME",
+                "valueFrom": {
+                  "fieldRef": {
+                    "apiVersion": "v1",
+                    "fieldPath": "metadata.name"
+                  }
+                }
+              }
+            ],
+            "envFrom": [
+              {
+                "configMapRef": {
+                  "name": "traffic-config"
+                }
+              },
+              {
+                "secretRef": {
+                  "name": "traffic-secrets"
+                }
+              }
+            ],
+            "image": "${image.sync}",
+            "name": "artifact-sync",
+            "resources": {
+              "limits": {
+                "cpu": "500m",
+                "ephemeral-storage": "1Gi",
+                "memory": "512Mi"
+              },
+              "requests": {
+                "cpu": "50m",
+                "ephemeral-storage": "256Mi",
+                "memory": "128Mi"
+              }
+            },
+            "terminationMessagePath": "/dev/termination-log",
+            "terminationMessagePolicy": "File",
+            "volumeMounts": [
+              {
+                "mountPath": "/cache",
+                "name": "artifact-cache"
+              }
+            ],
+            "restartPolicy": "Always"
+          }
+        ],
+        "terminationGracePeriodSeconds": 900,
+        "volumes": [
+          {
+            "emptyDir": {
+              "sizeLimit": "4Gi"
+            },
+            "name": "artifact-cache"
+          }
+        ],
+        "automountServiceAccountToken": false
+      }
+    }
+  }
+}

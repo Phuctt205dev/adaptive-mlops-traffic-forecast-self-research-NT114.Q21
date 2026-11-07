@@ -34,7 +34,9 @@ def get(path):
         raise RuntimeError("GitHub API check failed (HTTP " + str(error.code) + "); token/body omitted.") from None
 
 
-def validate(repository, run_id, *, fetch=get):
+def validate(repository, run_id, *, fetch=get, operation='release'):
+    if operation not in {'release','migrate-role-runtime-v1'}:
+        raise ValueError('Unsupported deployment operation')
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or not str(run_id).isdigit():
         raise ValueError("Invalid repository or workflow run identity.")
     run = fetch(f"repos/{repository}/actions/runs/{run_id}")
@@ -48,6 +50,10 @@ def validate(repository, run_id, *, fetch=get):
     controller = fetch(f'repos/{repository}/contents/scripts/cicd/cd_state.py?ref={run["head_sha"]}')
     if controller.get('type') != 'file':
         raise ValueError('This CI does not contain the mode-aware delivery controller.')
+    runtime=fetch(f'repos/{repository}/contents/deployment/rke2/runtime-contract.json?ref={run["head_sha"]}')
+    if (runtime.get('type')!='file' or runtime.get('encoding')!='base64'
+            or json.loads(base64.b64decode(''.join(runtime.get('content','').split()),validate=True)).get('schema')!='traffic-runtime-contract/v1'):
+        raise ValueError('This CI predates the unified runtime delivery contract; use its original controller for recovery only.')
     try:
         config = fetch(f'repos/{repository}/contents/{FILE}?ref={BRANCH}')
         raw = base64.b64decode(''.join(config['content'].split()), validate=True)
@@ -57,6 +63,8 @@ def validate(repository, run_id, *, fetch=get):
     except MissingResource:
         state = initial()
     mode = state['mode']
+    if operation!='release' and mode!='manual':
+        raise ValueError('Runtime migration requires the reviewed Manual gate')
     if state['active'] is not None:
         raise ValueError('An earlier delivery needs completion or verified recovery.')
     if mode == 'auto' and state['blocked']:
@@ -77,14 +85,15 @@ def validate(repository, run_id, *, fetch=get):
     if type(run.get('run_number')) is not int or run['run_number'] < 1:
         raise ValueError('CI sequence is missing.')
     return {"sha": run["head_sha"], "run_id": str(run_id), "artifact": "backend-release-" + run["head_sha"],
-            'mode': mode, 'epoch': str(state['epoch']), 'environment': environment_name, 'ci_number': str(run['run_number'])}
+            'mode': mode, 'epoch': str(state['epoch']), 'environment': environment_name, 'ci_number': str(run['run_number']),
+            'operation':operation}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", required=True)
     args = parser.parse_args()
-    result = validate(os.environ["GITHUB_REPOSITORY"], args.run_id)
+    result = validate(os.environ["GITHUB_REPOSITORY"], args.run_id,operation=os.environ.get('DELIVERY_OPERATION','release'))
     with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as stream:
         for key, value in result.items():
             stream.write(key + "=" + value + "\n")

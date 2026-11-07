@@ -8,6 +8,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.cicd.roles_release import verify, ROLES
+from scripts.cicd.role_manifests import render,deployment_id,SLOTS,CONTRACT
 
 
 def bind(directory, bindings, commit):
@@ -25,7 +26,8 @@ def bind(directory, bindings, commit):
     if set(found) != set(ROLES):
         raise ValueError('A checked role image is missing')
     result = {'schema': 'traffic-delivery/v2', 'commit': commit, 'release_id': release['release_id'],
-              'image': found['api']['image'], 'images': found}
+              'image': found['api']['image'], 'images': found,'runtime_contract':CONTRACT,
+              'deployments':{role:deployment_id(render(role,slots[0],found,directory=root)) for role,slots in SLOTS.items()}}
     (root / 'delivery.json').write_text(json.dumps(result), encoding='utf-8')
     return result
 

@@ -1,5 +1,11 @@
 # Role images and delivery
 
+> Status, 07 November 2026: the role design below has not passed production
+> migration acceptance. Production was restored to legacy workloads on
+> 06 November and deployment was paused. See the
+> [unified CI/CD flow](CICD_UNIFIED_FLOW.md). Its implementation is under
+> validation; production migration remains a separate reviewed operation.
+
 The application release has four immutable images in the existing public GHCR
 `backend` package. CI builds only a changed content identity and checks every
 image, including a reused image, against the current offline producer fixtures.

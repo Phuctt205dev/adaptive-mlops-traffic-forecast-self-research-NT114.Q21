@@ -1,0 +1,12 @@
+{
+  "schema": "traffic-runtime-contract/v1",
+  "roles": {
+    "api": {"slots": ["api", "api-next"], "replicas": 2, "service": "traffic-api"},
+    "tree": {"slots": ["train-tree", "tree-next"], "replicas": 1, "service": "traffic-training-tree"},
+    "neural": {"slots": ["train-neural", "neural-next"], "replicas": 1, "service": "traffic-training-worker"}
+  },
+  "sync_cli": ["python", "-B", "-m", "backend.app.services.artifact_sync_control"],
+  "lifecycle_prefix": "/api/v1/internal/lifecycle",
+  "budgets": {"drain_seconds": 840, "flush_seconds": 600, "propagation_seconds": 10},
+  "capacity": {"minimum_disk_bytes": 12884901888}
+}

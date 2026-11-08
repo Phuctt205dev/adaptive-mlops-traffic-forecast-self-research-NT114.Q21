@@ -1,10 +1,11 @@
 # Luồng CI/CD thống nhất
 
-Ngày rà soát: **07/11/2026**, Asia/Saigon.
-Trạng thái: **đã thực hiện source theo yêu cầu ngày07/11, đang kiểm chứng**.
-Workflow/controller, manifest Git, hợp đồng flush và kiểm thử Kubernetes đã được
-bổ sung. Chưa nghiệm thu production; CD vẫn tạm tắt trong quá trình kiểm thử.
-Đợt chuyển runtime/đổi tên đầu tiên cần migration Manual được duyệt riêng.
+Ngày rà soát: **08/11/2026**, Asia/Saigon.
+Runtime thống nhất đã nghiệm thu production ngày 07/11; Auto đang bật theo lựa
+chọn của người dùng. Bản sửa training 35df07d đã Verify và người dùng xác nhận.
+Gói tối ưu phạm vi kiểm CI ở mục 8 đang kiểm chứng, chưa có nghiệm thu mới.
+Các mô tả migration bên dưới giữ lý do thiết kế và điều kiện cho lần chuyển
+runtime; release thường không chạy lại migration trên production.
 
 ## 1. Một quy trình phát hành
 
@@ -176,8 +177,9 @@ lập ở ingress, mạng hoặc dịch vụ dữ liệu đơn lẻ.
 
 1. Sửa source/test và manifest Git nếu cần đổi cấu hình. Push nhánh mặc định.
    Không thêm một workflow deploy riêng cho từng tính năng.
-2. Backend CI phải đạt toàn bộ tests, image checks, package và
-   `isolated-delivery`. Gói theo SHA giữ cả image digest và cấu hình mong muốn.
+2. Backend CI phải đạt toàn bộ tests, bốn image checks, package, bộ Kubernetes
+   hiện hành và bộ migration khi phạm vi yêu cầu. Job `acceptance` kiểm đủ bằng
+   chứng theo SHA; CD kiểm lại proof và kết quả từng job trước chọn release.
 3. Khi CD được bật, `Deploy Backend RKE2` nhận gói đó. Manual yêu cầu duyệt
    environment; Auto giữ mode đã lưu qua nhiều push. Cả hai chọn operation
    `release` và đi cùng controller. Thiếu training idle thì DEFERRED, không
@@ -194,10 +196,47 @@ dữ liệu ứng dụng. Artifact v1/controller cũ chỉ phục hồi transact
 không gửi vào engine mới. Trạng thái tạm dừng CD hiện tại không tự được mở lại
 bằng commit tài liệu hoặc bật công tắc Auto.
 
-Theo xác minh chỉ đọc sáng07/11, production vẫn là hai traffic-api và hai worker cũ;
+Mốc lịch sử trước migration: theo xác minh chỉ đọc sáng 07/11, production vẫn là hai traffic-api và hai worker cũ;
 DAG mở/guard nhả, CD_ENABLED=false, Manual/blocked=true/active=null. Đây là mốc
 đã ghi nhận, chưa áp dụng controller mới lên production. Handoff tại
 My-worklog/hand-offs/2026-11-05-system-optimization.md tiếp tục giữ điểm tiếp nhận.
+
+## 8. Phạm vi kiểm CI và bằng chứng
+
+`scope` so toàn bộ thay đổi với commit production gần nhất đã Verify trong
+CD state. Không dùng riêng commit cuối. File bị xóa hoặc đổi tên vẫn giữ cả
+đường dẫn cũ trong phạm vi kiểm. Thiếu baseline, lịch sử phân nhánh/không đầy
+đủ hoặc đường dẫn chưa biết ảnh hưởng đều chọn full.
+
+| Thay đổi | Các kiểm bắt buộc |
+| --- | --- |
+| App/ML thông thường | Regression, bốn image checks, package, `current-runtime`, `acceptance` |
+| Controller, workflow, contract, manifest, dependency, DB migration, sync/lifecycle hoặc fixture Kubernetes | Các kiểm thường và `legacy-migration` |
+| Không xác định, thiếu lịch sử | Full như thay đổi nền |
+| Run workflow thủ công hoặc lịch tuần | Full, chỉ kiểm định; không triển khai production |
+
+`current-runtime` dựng trực tiếp các slot quản lý bằng role image thật, cache
+restore thật và PostgreSQL/MinIO riêng. Kiểm cập nhật API với request dài, cập
+nhật worker giữ API, queue bền vững, defer khi training bận, rollback preview,
+rollback sau promote khi upload S3 bị từ chối, cập nhật manifest và no-op.
+`legacy-migration` giữ nguyên ca migration thật cùng các ca phục hồi phía sau.
+Hai suite chạy độc lập khi full, không nối tiếp nhau và không hạ grace production.
+
+`acceptance` phải chạy kể cả dependency lỗi/skip. Proof ràng buộc commit, CI run,
+attempt, release ID, bốn image digest và đủ ca bắt buộc. CD không chỉ dựa vào
+màu xanh tổng thể: kiểm artifact `ci-acceptance-<SHA>` và từng job của attempt đó.
+Thiếu/fail/skip một job bắt buộc thì dừng trước runner production; full phải chờ
+`legacy-migration` đạt. Progress của job timeout chỉ là bằng chứng điều tra.
+
+Xem Summary của `acceptance` để biết lý do chọn phạm vi và thời gian mỗi suite.
+Muốn kiểm full: Actions → Backend CI → Run workflow ở nhánh mặc định. Lịch tuần
+chạy lúc 03:17 thứ Hai (UTC+7). Các lượt này có event khác push nên không qua CD.
+Nếu chạy lại CI sau lỗi, chọn **Re-run all jobs**: proof attempt cũ không được
+ghép với proof attempt mới. Không tái dùng bằng chứng định kỳ cho release khác.
+
+Không thay engine CD, topology, Auto/Manual, guard, flush, Verify hay rollback
+trong gói tối ưu này. Thời gian thực tế và trạng thái nghiệm thu ghi trong
+handoff, không dùng dự tính thay số đo.
 
 Đối chiếu tài liệu chính thức:
 [Deployment/rollout](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/),

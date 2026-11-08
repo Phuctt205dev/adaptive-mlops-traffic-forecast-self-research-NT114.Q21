@@ -47,7 +47,9 @@ def service(name,app,port=8000):
 
 
 class Suite:
-    def __init__(self,kubeconfig,release,fixtures):
+    def __init__(self,kubeconfig,release,fixtures,mode='migration'):
+        if mode not in {'current','migration'}:raise ValueError('Unknown isolated suite')
+        self.mode=mode;self.started=time.monotonic();self.case_started=self.started
         if os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted':
             raise RuntimeError('This fixture may run only on a GitHub-hosted disposable runner')
         context=command('kubectl','--kubeconfig',str(kubeconfig),'config','current-context').strip()
@@ -93,7 +95,7 @@ class Suite:
         # Only kilobytes of synthetic data are restored in this test profile.
         c['capacity']['minimum_disk_bytes']=1024**3;p.write_text(json.dumps(c))
 
-    def release(self,label,*,revision='one',bad_legacy=False,smoke=False,airflow_change=False):
+    def release(self,label,*,revision='one',worker_revision=None,bad_legacy=False,smoke=False,airflow_change=False):
         path=self.source/'deployment/rke2/roles/api.json';original=path.read_text();value=json.loads(original)
         env=value['spec']['template']['spec']['containers'][0]['env']
         env.append({'name':'CI_CONFIG_REVISION','value':revision})
@@ -104,10 +106,18 @@ class Suite:
             m=json.loads(migration_original);m['uploader_sha256']='0'*64;migration.write_text(json.dumps(m))
         dag=self.source/'deployment/rke2/runtime/traffic_region_training_cloud.py';dag_original=dag.read_text()
         if airflow_change:dag.write_text(dag_original+'\n# isolated changed Airflow source\n')
+        worker_originals={}
+        if worker_revision is not None:
+            for role in ('tree','neural'):
+                p=self.source/'deployment/rke2/roles'/(role+'.json');worker_originals[p]=p.read_text()
+                v=json.loads(worker_originals[p]);v['spec']['template']['spec']['containers'][0]['env'].append(
+                    {'name':'CI_WORKER_REVISION','value':worker_revision})
+                p.write_text(json.dumps(v))
         out=self.temp/label
         try:build(self.source,out,COMMIT)
         finally:
             path.write_text(original);migration.write_text(migration_original);dag.write_text(dag_original)
+            for p,original in worker_originals.items():p.write_text(original)
         binding_dir=self.temp/(label+'-bindings');binding_dir.mkdir()
         for role,v in self.bindings['images'].items():
             (binding_dir/('image-'+role+'.json')).write_text(json.dumps(v))
@@ -116,6 +126,7 @@ class Suite:
         return checked,out/'delivery.json'
 
     def operator(self,release,label,migration=False):
+        self.case_started=time.monotonic()
         self.progress(label)
         print(json.dumps({'isolated_case_started':label}),flush=True)
         return RolesDelivery(self.cluster,release[0],release[1],self.temp/(label+'.json'),commit=COMMIT,
@@ -188,7 +199,16 @@ class Suite:
                'volumeMounts':[{'name':'fixtures','mountPath':'/fixtures'}]}],'volumes':[{'name':'fixtures','configMap':{'name':'fixture-runtime'}}]}}}}
         self.create(seed);self.cluster.call('wait','--for=condition=complete','job/seed','--timeout=180s',json_output=False,timeout=190)
         self.airflow(release)
-        print(json.dumps({'isolated_setup':'legacy_cohorts'}),flush=True)
+        print(json.dumps({'isolated_setup':self.mode+'_cohorts'}),flush=True)
+        if self.mode=='current':
+            for role,slots in SLOTS.items():
+                for index,slot in enumerate(slots):
+                    self.create(render(role,slot,images,directory=release[0],inactive=index!=0))
+                self.cluster.wait(slots[0])
+            routes=[('traffic-api','api'),('traffic-api-training','api'),('api-peers','api'),
+                    ('api-preview','api'),('traffic-training-tree','train-tree'),('traffic-training-worker','train-neural')]
+            self.routes(routes,sync_image)
+            return
         baseline=json.loads((release[0]/'release.json').read_text())['baseline']['legacy_application_image']
         for role,legacy in [('api','traffic-api'),('tree','traffic-training-tree'),('neural','traffic-training-worker')]:
             first=SLOTS[role][0];value=render(role,first,images,directory=release[0])
@@ -207,17 +227,21 @@ class Suite:
             for slot in SLOTS[role]:self.create(render(role,slot,images,directory=release[0],inactive=True))
             self.cluster.wait(legacy)
             print(json.dumps({'isolated_legacy_ready':role}),flush=True)
-        for name,app in [('traffic-api','traffic-api'),('traffic-api-training','traffic-api'),('api-peers','traffic-api'),
-                         ('api-preview','api'),('traffic-training-tree','traffic-training-tree'),('traffic-training-worker','traffic-training-worker')]:
+        self.routes([('traffic-api','traffic-api'),('traffic-api-training','traffic-api'),('api-peers','traffic-api'),
+                     ('api-preview','api'),('traffic-training-tree','traffic-training-tree'),('traffic-training-worker','traffic-training-worker')],sync_image)
+
+    def routes(self,routes,sync_image):
+        for name,app in routes:
             self.create(service(name,app))
         self.simple('ingress',sync_image,'proxy',8443);self.create(service('ingress','ingress',8443));self.cluster.wait('ingress')
         os.environ['PUBLIC_API_BASE_URL']='https://ingress.traffic-mlops.svc.cluster.local:8443/api/v1'
         os.environ['CI_RUN_ID']=os.environ['GITHUB_RUN_ID']
 
     def airflow(self,release):
-        files={'dag.py':(release[0]/'airflow/dag.py').read_text()+'\n# initial fixture\n',
-               'airflow_control.py':(release[0]/'airflow/airflow_control.py').read_text()+'\n# initial fixture\n',
-               'legacy.py':(release[0]/'airflow/legacy/traffic_region_training_worker.py').read_text()+'\n# initial fixture\n'}
+        suffix='\n# initial fixture\n' if self.mode=='migration' else ''
+        files={'dag.py':(release[0]/'airflow/dag.py').read_text()+suffix,
+               'airflow_control.py':(release[0]/'airflow/airflow_control.py').read_text()+suffix,
+               'legacy.py':(release[0]/'airflow/legacy/traffic_region_training_worker.py').read_text()+suffix}
         self.create({'apiVersion':'v1','kind':'ConfigMap','metadata':{'name':'initial-airflow','namespace':NAMESPACE},'data':files})
         image=json.loads((release[0]/'release.json').read_text())['baseline']['airflow_image']
         volume={'name':'dag-source','configMap':{'name':'initial-airflow','items':[{'key':'dag.py','path':'dag.py'},
@@ -237,7 +261,7 @@ class Suite:
         assert queue['queued_database_rows']==1,'Controller changed synthetic queued training metadata'
         self.cases.append({'case':name,**{k:op.state.get(k) for k in ('completed','up_to_date','deferred','rolled_back','recovery_required',
                            'guard_held','failed_phase','execution_failure','probe_failure','availability','flush_proofs')},
-                           **queue})
+                           **queue,'duration_seconds':round(time.monotonic()-self.case_started,3)})
         self.progress(None)
         print(json.dumps({'isolated_case_passed':name}),flush=True)
 
@@ -246,7 +270,7 @@ class Suite:
         confirm_roles(self.cluster,op.state)
 
     def long_request(self,op):
-        pod=self.cluster.pod(self.cluster.deployment('traffic-api'))
+        pod=self.cluster.pod(self.active_api())
         with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
         log=(self.temp/'port-forward.log').open('w')
         process=subprocess.Popen(['kubectl','--kubeconfig',str(self.kubeconfig),'-n',NAMESPACE,'port-forward',
@@ -279,8 +303,42 @@ class Suite:
         code="import requests,json;r=requests.post('http://airflow-webserver:8080/_fixture/busy',json={'busy':VALUE},timeout=5);r.raise_for_status();print(json.dumps(r.json()))"
         self.cluster.remote(api,code.replace('VALUE',repr(value)))
 
+    def active_api(self):
+        app=self.cluster.call('get','service','traffic-api','-o','json')['spec']['selector']['app']
+        return self.cluster.deployment(app)
+
+    def api_snapshot(self):
+        deployment=self.active_api()
+        pods=ready_pods(deployment,self.cluster.call('get','pods','-o','json')['items'])
+        return {'deployment':deployment['metadata']['name'],'spec':deployment['spec'],
+                'pods':sorted((p['metadata']['uid'],tuple((s['name'],s.get('restartCount',0))
+                         for s in p['status']['containerStatuses'])) for p in pods)}
+
     def run(self):
         base=self.release('base');self.setup(base)
+        if self.mode=='current':
+            # Start from the managed topology directly, using real role images,
+            # native sync sidecars and restored objects; no migration shortcut.
+            bootstrap=self.operator(base,'current-bootstrap');bootstrap.apply()
+            assert bootstrap.state['up_to_date'] and bootstrap.state['patched']==[]
+            self.record('current_runtime_verified',bootstrap)
+            update=self.operator(self.release('managed-update',revision='warm'),'managed-update')
+            self.long_request(update);update.verify()
+            assert update.state['completed'] and update.state['flush_proofs']
+            self.record('managed_update_with_long_request',update)
+            before=self.api_snapshot()
+            workers=self.operator(self.release('worker-update',revision='warm',worker_revision='two'),'worker-update')
+            workers.apply();workers.verify()
+            assert workers.state['completed'] and self.api_snapshot()==before
+            assert {'tree-next','neural-next'} <= set(workers.state['patched'])
+            self.record('worker_only_update_preserves_api',workers)
+            # Keep the worker desired manifests steady during subsequent API cases.
+            for role in ('tree','neural'):
+                p=self.source/'deployment/rke2/roles'/(role+'.json');v=json.loads(p.read_text())
+                v['spec']['template']['spec']['containers'][0]['env'].append({'name':'CI_WORKER_REVISION','value':'two'})
+                p.write_text(json.dumps(v))
+            steady=self.release('steady',revision='warm')
+            return self.regular_cases(steady,update)
         normal=self.operator(base,'regular-before-migration')
         try:normal.apply()
         except ValueError:pass
@@ -295,6 +353,9 @@ class Suite:
         self.record('legacy_preflight_failure_before_mutation',bad)
         migration=self.operator(base,'migration',True);self.long_request(migration);migration.verify()
         assert migration.state['completed'] and migration.state['legacy_drain']['cache_flush_confirmed'];self.record('actual_migration',migration)
+        return self.regular_cases(base,migration)
+
+    def regular_cases(self,base,long_operation):
         noop=self.operator(base,'noop');noop.apply()
         assert noop.state['up_to_date'] and noop.state['patched']==[] and not noop.state.get('guard_job');self.record('verified_noop',noop)
         self.busy(True)
@@ -313,19 +374,22 @@ class Suite:
         assert updated.state['completed'] and updated.state['flush_proofs'];self.record('manifest_only_update',updated)
         final=self.operator((updated.directory,self.temp/'manifest-change/delivery.json'),'final-noop');final.apply()
         assert final.state['up_to_date'];self.record('post_update_noop',final)
-        queue=self.cluster.remote(self.cluster.deployment('api-next'),
+        queue=self.cluster.remote(self.active_api(),
             "import json,requests;print(json.dumps(requests.get('http://airflow-webserver:8080/_fixture/state',timeout=5).json()))")
         assert queue['queued']==1 and queue['provider_calls']==0 and not any(queue['paused'].values())
-        return {'schema':'traffic-isolated-delivery-proof/v1','kubernetes_context':CONTEXT,
+        return {'schema':'traffic-isolated-delivery-proof/v2','suite':self.mode,'source_commit':os.environ['GITHUB_SHA'],
+                'ci_run_id':os.environ['GITHUB_RUN_ID'],'ci_attempt':os.environ['GITHUB_RUN_ATTEMPT'],
+                'release_id':self.bindings['release_id'],'images':self.bindings['images'],
+                'duration_seconds':round(time.monotonic()-self.started,3),'kubernetes_context':CONTEXT,
                 'production_accessed':False,'real_baseline_and_role_images':True,'business_http_is_fixture':True,
                 'real_rf_inference':True,'real_database_and_object_storage':True,'provider_called':False,
-                'long_request_completed':migration.state['long_request_completed_before_retirement'],
+                'long_request_completed':long_operation.state['long_request_completed_before_retirement'],
                 'queue_preserved':True,'cases':self.cases}
 
     def retirement_failure(self):
         # The fixture proxy rejects one synthetic object only. Genuine boto3
         # upload fails; no monkeypatch of the engine, sync CLI or rollback.
-        api=self.cluster.deployment('api');pod=self.cluster.pod(api)
+        api=self.active_api();pod=self.cluster.pod(api)
         control="import requests,json;r=requests.post('http://minio:9000/_fixture/deny',json={'deny':VALUE},timeout=5);r.raise_for_status();print(json.dumps({'fixture_s3_control':True}))"
         self.cluster.remote(api,control.replace('VALUE','True'))
         self.cluster.call('exec',pod,'-c','api','--','python','-B','-c',"from pathlib import Path;Path('/app/models/unacknowledged.txt').write_text('synthetic only')",json_output=False)
@@ -338,12 +402,13 @@ class Suite:
             assert op.state['failed_phase']=='retire' and op.state['execution_failure']['error_type']=='S3UploadFailedError'
             assert any(p['name']=='airflow-scheduler' for p in op.inverses)
             self.record('post_promote_flush_failure_and_server_default_rollback',op)
-        finally:self.cluster.remote(self.cluster.deployment('api'),control.replace('VALUE','False'))
+        finally:self.cluster.remote(self.active_api(),control.replace('VALUE','False'))
 
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--kubeconfig',required=True);p.add_argument('--release',required=True);p.add_argument('--fixtures',required=True)
-    args=p.parse_args();suite=Suite(args.kubeconfig,args.release,args.fixtures)
+    p.add_argument('--suite',choices=['current','migration'],default='migration')
+    args=p.parse_args();suite=Suite(args.kubeconfig,args.release,args.fixtures,args.suite)
     try:
         proof=suite.run();out=ROOT/'results/cicd/kubernetes-delivery-proof.json';out.parent.mkdir(parents=True,exist_ok=True)
         out.write_text(json.dumps(proof,indent=2));print(json.dumps({'isolated_cases_passed':len(proof['cases']),'production_accessed':False}))

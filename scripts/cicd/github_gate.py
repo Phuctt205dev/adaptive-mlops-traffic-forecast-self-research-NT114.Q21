@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.cicd.cd_state import BRANCH, FILE, ENVIRONMENTS, initial, validate as validate_state
+from scripts.cicd.ci_coverage import check_run
 
 
 class MissingResource(RuntimeError):
@@ -34,7 +35,7 @@ def get(path):
         raise RuntimeError("GitHub API check failed (HTTP " + str(error.code) + "); token/body omitted.") from None
 
 
-def validate(repository, run_id, *, fetch=get, operation='release'):
+def validate(repository, run_id, *, fetch=get, operation='release', coverage=check_run):
     if operation not in {'release','migrate-role-runtime-v1'}:
         raise ValueError('Unsupported deployment operation')
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or not str(run_id).isdigit():
@@ -84,6 +85,9 @@ def validate(repository, run_id, *, fetch=get, operation='release'):
         raise ValueError('Deployment environment must allow only the default branch.')
     if type(run.get('run_number')) is not int or run['run_number'] < 1:
         raise ValueError('CI sequence is missing.')
+    if str(run.get('id'))!=str(run_id) or type(run.get('run_attempt')) is not int or run['run_attempt']<1:
+        raise ValueError('CI run attempt identity is missing.')
+    coverage(repository,run,fetch)
     return {"sha": run["head_sha"], "run_id": str(run_id), "artifact": "backend-release-" + run["head_sha"],
             'mode': mode, 'epoch': str(state['epoch']), 'environment': environment_name, 'ci_number': str(run['run_number']),
             'operation':operation}

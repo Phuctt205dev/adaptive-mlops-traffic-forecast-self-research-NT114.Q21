@@ -254,7 +254,7 @@ class PatchTests(unittest.TestCase):
 class GateTests(unittest.TestCase):
     def responses(self):
         return [{"conclusion": "success", "status": "completed", "event": "push", "workflow_id": 1,
-                 "head_branch": "master", "head_sha": COMMIT, "run_number": 1, "head_repository": {"full_name": "owner/repo"}},
+                 "head_branch": "master", "head_sha": COMMIT, "run_number": 1, "id": 1, "run_attempt": 1, "head_repository": {"full_name": "owner/repo"}},
                 {"id": 1}, {"default_branch": "master"}, {'type': 'file'},
                 {'type': 'file', 'encoding': 'base64', 'content': base64.b64encode(json.dumps({'schema': 'traffic-runtime-contract/v1'}).encode()).decode()},
                 {'type': 'file', 'encoding': 'base64', 'content': base64.b64encode(json.dumps(cd_state.initial()).encode()).decode()},
@@ -263,21 +263,21 @@ class GateTests(unittest.TestCase):
                 {'branch_policies': [{'name': 'master', 'type': 'branch'}]}]
 
     def test_trusted_push_and_real_review_gate(self):
-        result = github_gate.validate("owner/repo", "1", fetch=Mock(side_effect=self.responses()))
+        result = github_gate.validate("owner/repo", "1", fetch=Mock(side_effect=self.responses()), coverage=Mock())
         self.assertEqual(result["sha"], COMMIT)
         self.assertEqual(result["artifact"], "backend-release-" + COMMIT)
 
     def test_no_reviewers_fails_before_self_hosted_job(self):
         values = self.responses(); values[-2] = {"protection_rules": []}
         with self.assertRaisesRegex(ValueError, "reviewers"):
-            github_gate.validate("owner/repo", "1", fetch=Mock(side_effect=values))
+            github_gate.validate("owner/repo", "1", fetch=Mock(side_effect=values), coverage=Mock())
 
     def test_pr_failed_wrong_workflow_branch_and_foreign_repo_are_rejected(self):
         for field, value in (("event", "pull_request"), ("conclusion", "failure"), ("workflow_id", 2),
                              ("head_branch", "feature"), ("head_repository", {"full_name": "attacker/repo"})):
             values = self.responses(); values[0][field] = value
             with self.subTest(field=field), self.assertRaises(ValueError):
-                github_gate.validate("owner/repo", "1", fetch=Mock(side_effect=values))
+                github_gate.validate("owner/repo", "1", fetch=Mock(side_effect=values), coverage=Mock())
 
 
 class StartupTests(unittest.TestCase):

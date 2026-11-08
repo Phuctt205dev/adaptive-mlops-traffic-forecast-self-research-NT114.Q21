@@ -273,7 +273,7 @@ class PolicyTests(unittest.TestCase):
     def fetch(self, state, *, reviewers=False, branch='master'):
         values = iter([
             {'status': 'completed', 'conclusion': 'success', 'event': 'push', 'workflow_id': 1,
-             'head_branch': 'master', 'head_sha': 'a' * 40, 'run_number': 10,
+             'head_branch': 'master', 'head_sha': 'a' * 40, 'run_number': 10, 'id': 1, 'run_attempt': 1,
              'head_repository': {'full_name': 'owner/repo'}},
             {'id': 1}, {'default_branch': 'master'}, {'type': 'file'},
             {'type':'file','encoding':'base64','content':base64.b64encode(json.dumps({'schema':'traffic-runtime-contract/v1'}).encode()).decode()},
@@ -286,19 +286,19 @@ class PolicyTests(unittest.TestCase):
 
     def test_auto_selects_only_auto_environment(self):
         state = cd.initial(); state['mode'] = 'auto'
-        result = github_gate.validate('owner/repo', '1', fetch=self.fetch(state))
+        result = github_gate.validate('owner/repo', '1', fetch=self.fetch(state), coverage=Mock())
         self.assertEqual(result['environment'], 'rke2-production-auto')
 
     def test_auto_rejects_unexpected_reviewers_and_broad_branch_policy(self):
         state = cd.initial(); state['mode'] = 'auto'
         for kwargs in ({'reviewers': True}, {'branch': '*'}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
-                github_gate.validate('owner/repo', '1', fetch=self.fetch(state, **kwargs))
+                github_gate.validate('owner/repo', '1', fetch=self.fetch(state, **kwargs), coverage=Mock())
 
     def test_blocked_auto_never_reaches_a_runner(self):
         state = cd.initial(); state.update(mode='auto', blocked=True)
         with self.assertRaisesRegex(ValueError, 'blocked'):
-            github_gate.validate('owner/repo', '1', fetch=self.fetch(state))
+            github_gate.validate('owner/repo', '1', fetch=self.fetch(state), coverage=Mock())
 
 
 class DiagnosticTests(unittest.TestCase):

@@ -3,7 +3,8 @@
 Ngày rà soát: **08/11/2026**, Asia/Saigon.
 Runtime thống nhất đã nghiệm thu production ngày 07/11; Auto đang bật theo lựa
 chọn của người dùng. Bản sửa training 35df07d đã Verify và người dùng xác nhận.
-Gói tối ưu phạm vi kiểm CI ở mục 8 đang kiểm chứng, chưa có nghiệm thu mới.
+Gói tối ưu phạm vi kiểm CI ở mục 8 đã nghiệm thu ngày 08/11: CI 42466602689
+và Auto 42469311441 thành công. Production no-op giữ UID/spec/restart.
 Các mô tả migration bên dưới giữ lý do thiết kế và điều kiện cho lần chuyển
 runtime; release thường không chạy lại migration trên production.
 
@@ -14,10 +15,16 @@ dùng chung cho Plan, Apply, Verify và Rollback. Manual/Auto chỉ khác cổng
 
 ```mermaid
 flowchart TD
-    A[Push nhánh mặc định] --> B[Test source và hợp đồng runtime]
+    A[Push nhánh mặc định] --> B[Test source và phân loại phạm vi kiểm]
     B --> C[Build hoặc reuse image bất biến]
     C --> D[Kiểm image và đóng gói release đúng commit]
-    D --> E{Chế độ đã lưu}
+    D --> T[Cụm thử runtime hiện hành]
+    D --> Q{Phạm vi full?}
+    Q -->|Có| U[Cụm thử legacy và migration]
+    Q -->|Không| V[Cổng kiểm đủ job và proof bắt buộc đúng commit]
+    U --> V
+    T --> V
+    V --> E{Chế độ đã lưu}
     E -->|Manual| F[Người dùng duyệt trên GitHub]
     E -->|Auto| G[Kiểm chính sách Auto]
     F --> H[Claim độc quyền và Plan/preflight]
@@ -242,6 +249,14 @@ ghép với proof attempt mới. Không tái dùng bằng chứng định kỳ c
 Không thay engine CD, topology, Auto/Manual, guard, flush, Verify hay rollback
 trong gói tối ưu này. Thời gian thực tế và trạng thái nghiệm thu ghi trong
 handoff, không dùng dự tính thay số đo.
+
+Nghiệm thu 08/11: 541 test Linux, bốn image checks, hai suite đều 9/9 và gate
+coverage đạt. Trên cùng bốn image, job thường mất **18 phút 45 giây**, job sâu
+**34 phút 05 giây**; chênh **15 phút 20 giây, khoảng 45%**. CI chuyển đổi full
+mất 38 phút 40; Auto no-op mất 2 phút 11. Không dùng thời gian no-op để dự báo
+CD của một cập nhật có rollout. Tổng thời gian đường thường còn được đối chiếu
+ở lần cập nhật ứng dụng thật tiếp theo, không tạo chức năng giả hoặc train thật
+để ép benchmark. Chi tiết/bằng chứng nằm trong handoff mục 66.
 
 Đối chiếu tài liệu chính thức:
 [Deployment/rollout](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/),

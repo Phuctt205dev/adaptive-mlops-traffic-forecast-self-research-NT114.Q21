@@ -280,6 +280,36 @@ CD của một cập nhật có rollout. Tổng thời gian đường thường 
 ở lần cập nhật ứng dụng thật tiếp theo, không tạo chức năng giả hoặc train thật
 để ép benchmark. Chi tiết/bằng chứng nằm trong handoff mục 66.
 
+### Nghiệm thu profile kiểm gọn — 08/11/2026
+
+[CI #25](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/42492000347)
+kiểm source `7438b07`: **546 test Linux**, bốn image checks, **6/6 current**,
+**3/3 migration** và gate acceptance đạt. Đây là lượt full vì thay chính
+scope/proof/harness; cập nhật app/controller/workflow thông thường sau đó
+không chờ migration legacy. Các trường hợp full trong bảng trên vẫn giữ nguyên.
+
+| Số đo job/CI | Profile cũ, CI #24 | Profile gọn, CI #25 |
+| --- | --- | --- |
+| current-runtime | 19 phút 14 | 15 phút 04 |
+| legacy-migration | 34 phút 05 | 25 phút 07 |
+| Tổng CI full | 37 phút 32 | 28 phút 56 |
+
+Hai suite chạy song song; không cộng hai thời gian job thành tổng CI. Các số
+trên là hai lượt thực, có biến động setup/pull; chưa phải benchmark nhiều lần
+hoặc số đo end-to-end của một cập nhật ứng dụng thật qua đường regular.
+
+[Auto CD #37](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/42494467501)
+được CI #25 tự kích hoạt và thành công. Receipt có proof Verify, up_to_date=true,
+patched=[], không giữ guard hoặc yêu cầu recovery. UID/spec/restart của 5
+Deployment/6 pod theo dõi giữ nguyên, Auto epoch 5 không bị chặn và không còn
+transaction active. Bốn image tái dùng từ production. Frontend content/config
+không đổi nên callback không publish trùng.
+
+CD tổng 6 phút 03 có khoảng chờ runner offline; job deploy thực thi 2 phút 28.
+Đã bật lại runner nền hiện có để cùng lượt queued tiếp tục, không đăng ký
+runner mới hoặc đổi gate. Không dùng thời gian CD có queue này như số đo build
+hay rollout mới. Bằng chứng gốc và so sánh nằm trong handoff mục 71.
+
 Đối chiếu tài liệu chính thức:
 [Deployment/rollout](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/),
 [placement/anti-affinity](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/),

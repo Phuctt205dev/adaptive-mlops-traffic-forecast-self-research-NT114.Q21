@@ -40,7 +40,19 @@ Nên mở sẵn một cặp CI/CD đã hoàn tất và cùng nguồn để trìn
 Summary và artifact cần thiết; không cần bấm **Run workflow** để chứng minh một
 lượt lịch sử. Không đổi mode hoặc tạo training/triển khai mới chỉ để xem màn hình.
 
-## Cặp minh họa đã nghiệm thu ngày 08/11/2026
+## Cặp minh họa profile kiểm gọn — 08/11/2026
+
+- [Backend CI #25 | push | master](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/42492000347): 546 test đạt, bốn image checks đạt, current **6/6**, migration **3/3** và gate acceptance thành công.
+- [Backend CD #37 | CI #25 | release](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/42494467501): CI tự kích hoạt Auto CD, cả ba job thành công; receipt no-op đã Verify, pod giữ nguyên.
+
+Source `7438b07`. Current mất 15 phút 04, migration 25 phút 07; CI full mất
+28 phút 56. Bộ thường gộp manifest-only vào cập nhật API và giữ một no-op cuối;
+bộ legacy chỉ kiểm ba ca riêng về chuyển kiến trúc cũ. Lượt này sửa chính bộ
+kiểm nên chạy cả hai. App/controller/workflow thông thường chỉ cần current;
+legacy/bộ kiểm/lịch sử chưa rõ và kiểm định kỳ/thủ công vẫn yêu cầu full.
+Chi tiết điều kiện và giới hạn số đo: [luồng CI/CD](CICD_UNIFIED_FLOW.md#8-phạm-vi-kiểm-ci-và-bằng-chứng).
+
+## Mốc sắp xếp Actions trước khi rút gọn — 08/11/2026
 
 - [Backend CI #24 | push | master](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/42471585676): 544 test đạt, bốn image checks đạt, cả `current-runtime` và `legacy-migration` đạt 9/9, gate `acceptance` thành công.
 - [Backend CD #36 | CI #24 | release](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/42474256701): được CI #24 tự kích hoạt qua `workflow_run`; `inspect`, `deploy` và `record-result` thành công ở chế độ Auto.

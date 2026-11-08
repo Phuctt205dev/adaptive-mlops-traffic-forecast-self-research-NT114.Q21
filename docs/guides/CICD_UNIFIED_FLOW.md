@@ -53,12 +53,12 @@ artifact/receipt và quy trình phục hồi, không tạo đường triển kha
 | plan kiểm thay đổi chủ yếu bằng health/source image identity | Bổ sung so sánh manifest: probe/resource/config đổi cũng phải được triển khai dù image giữ nguyên. |
 | drain_legacy gọi file nội bộ của sidecar cũ | Tách adapter migration có version; kiểm import/capability trước mutation. |
 | Test hiện có chưa tái hiện Kubernetes migration toàn luồng | Thêm ca chạy đến flush/retire/rollback thực trên môi trường kiểm thử riêng. |
-| Frontend CI và Pages build/publish độc lập | Đã thêm gate nội dung backend đã Verify và nội dung frontend hiện hành; chờ kiểm chứng CI. |
+| Frontend CI và Pages build/publish độc lập | Gate đã nghiệm thu: backend phụ thuộc phải Verify trước publish frontend tương thích. |
 
-Lỗi exec đầu tiên còn thiếu bằng chứng. Hash thiếu server defaulting đã sửa;
-adapter legacy đã kiểm chỉ đọc thành công trên hai API cũ ngày07/11, gồm đúng
-loader/import hooks và uploader đã ghim hash. Điều đó chưa thay bằng chứng
-nghiệm thu migration. Bộ CD mới chưa được coi là ổn định production.
+Hash thiếu server defaulting và lỗi exec/flush đã được sửa, có bằng chứng
+Kubernetes tách biệt và migration production ngày 07/11. Adapter legacy giữ
+loader/import hooks và uploader ghim hash để phục hồi layout cũ; không dùng
+thay engine cập nhật thường.
 
 ## 3. Hợp đồng release và ranh giới thay đổi
 
@@ -83,7 +83,7 @@ namespace hoặc cập nhật PostgreSQL/MinIO/MLflow/PVC ngoài phạm vi ứng
 
 Health/lifecycle dùng hợp đồng có version: identity, serving-ready,
 drain/status/resume và sync flush/ack. Giữ lifecycle HTTP API hiện có; sync cần
-CLI/module công khai cố định, JSON kết quả và deadline (chưa thực hiện). CD gọi
+CLI/module công khai cố định, JSON kết quả và deadline. CD gọi
 giao thức này, không importlib vào file nội bộ từng image hay helper của một
 tính năng. Flush phải xác nhận hoàn tất, không chỉ trả số file vừa upload.
 
@@ -122,14 +122,14 @@ của Kubernetes.
 
 ## 5. Migration một lần, Manual/Auto và frontend
 
-Chuyển bản cũ sang runtime chuẩn là **migration riêng chưa hoàn tất**. Tách nhận
+Chuyển bản cũ sang runtime chuẩn là **migration riêng, đã hoàn tất ngày 07/11**. Tách nhận
 biết layout cũ, bootstrap/đổi tên, flush legacy và inverse vào kế hoạch có
 version/baseline rõ ràng. Engine thường ngày không tự chuyển layout không hiểu
 hoặc chạy hook tùy ý từ metadata. Trước mutation, kiểm cả module/capability cũ
 và mới, gồm uploader và DAG: lỗi đường dẫn vừa gặp phải dừng ngay tại đây.
 
-Đợt chuyển đổi đầu cần Manual vì có chốt lỗi hiện hành. Sau nghiệm thu, release
-thường ngày chỉ dùng runtime chuẩn. Adapter cũ giữ trong hồ sơ recovery đến hết
+Đợt chuyển đổi đầu đã dùng Manual để nghiệm thu và gỡ chốt lỗi. Release
+thường ngày hiện chỉ dùng runtime chuẩn. Adapter cũ giữ trong hồ sơ recovery đến hết
 thời hạn hỗ trợ đã chốt, không gọi lại trong mọi release và không xóa sớm khả
 năng phục hồi. Dependency tương thích vẫn được nâng qua cùng CI/image checks.
 
@@ -193,8 +193,8 @@ lập ở ingress, mạng hoặc dịch vụ dữ liệu đơn lẻ.
 Lần đầu từ legacy phải chọn `migrate-role-runtime-v1` trong workflow dispatch,
 đúng CI thành công và qua Manual. Đây là chuyển runtime, không phải migration
 dữ liệu ứng dụng. Artifact v1/controller cũ chỉ phục hồi transaction lịch sử;
-không gửi vào engine mới. Trạng thái tạm dừng CD hiện tại không tự được mở lại
-bằng commit tài liệu hoặc bật công tắc Auto.
+không gửi vào engine mới. Commit tài liệu hoặc đổi công tắc không gỡ chốt lỗi;
+việc phục hồi vẫn cần đủ bằng chứng theo chính sách.
 
 Mốc lịch sử trước migration: theo xác minh chỉ đọc sáng 07/11, production vẫn là hai traffic-api và hai worker cũ;
 DAG mở/guard nhả, CD_ENABLED=false, Manual/blocked=true/active=null. Đây là mốc
@@ -207,6 +207,11 @@ My-worklog/hand-offs/2026-11-05-system-optimization.md tiếp tục giữ điể
 CD state. Không dùng riêng commit cuối. File bị xóa hoặc đổi tên vẫn giữ cả
 đường dẫn cũ trong phạm vi kiểm. Thiếu baseline, lịch sử phân nhánh/không đầy
 đủ hoặc đường dẫn chưa biết ảnh hưởng đều chọn full.
+
+Frontend và tài liệu đi kèm đã được nhận diện để không vô tình kéo kiểm sâu
+vào một cập nhật ứng dụng thường. Khi có thay đổi backend, regression và kiểm
+image vẫn bắt buộc; `docs/index.html` là nội dung API nên vẫn được tính vào
+source ID image như trước. Frontend giữ workflow kiểm/phát hành riêng hiện có.
 
 | Thay đổi | Các kiểm bắt buộc |
 | --- | --- |

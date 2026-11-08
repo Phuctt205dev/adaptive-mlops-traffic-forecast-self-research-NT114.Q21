@@ -20,7 +20,7 @@ FOUNDATION=('scripts/cicd/','tests/integration/','tests/fixtures/legacy_region_c
             'deployment/','requirements/','alembic/','.github/',
             'backend/app/services/artifact_sync_control.py','backend/app/services/region_cleanup_uploader.py',
             'backend/app/services/restore_cache.py','backend/app/services/lifecycle.py')
-ORDINARY=('backend/','src/','tests/','scripts/cloud_training/')
+ORDINARY=('backend/','src/','tests/','scripts/cloud_training/','frontend/','docs/')
 
 
 def classify(paths,*,baseline,commit,force=False):
@@ -30,7 +30,7 @@ def classify(paths,*,baseline,commit,force=False):
     if force:reason='explicit_full_validation'
     elif not isinstance(baseline,str) or not SHA.fullmatch(baseline):reason='missing_verified_baseline'
     elif any(p.startswith(FOUNDATION) for p in paths):reason='delivery_foundation_changed'
-    elif any(not p.startswith(ORDINARY) and p!='app.py' for p in paths):reason='unknown_impact'
+    elif any(not p.startswith(ORDINARY) and p not in {'app.py','README.md'} for p in paths):reason='unknown_impact'
     return {'schema':SCHEMA,'commit':commit,'baseline':baseline if isinstance(baseline,str) and SHA.fullmatch(baseline) else None,
             'full':reason!='ordinary_source_change','reason':reason,'paths':paths}
 

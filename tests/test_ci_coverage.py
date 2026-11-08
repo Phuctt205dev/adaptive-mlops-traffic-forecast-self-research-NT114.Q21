@@ -42,7 +42,9 @@ def acceptance(full=False):
 
 class ScopeTests(unittest.TestCase):
     def test_ordinary_application_changes_keep_all_regular_safety_tests(self):
-        for paths in (['backend/app/main.py'],['src/features.py','tests/test_features.py'],['scripts/cloud_training/execute_branch.py'],[]):
+        for paths in (['backend/app/main.py'],['src/features.py','tests/test_features.py'],['scripts/cloud_training/execute_branch.py'],
+                      ['frontend/src/TrainingMonitor.tsx','docs/guides/TRAINING.md','README.md','backend/app/main.py'],
+                      ['docs/index.html'],[]):
             with self.subTest(paths=paths):
                 result=scope.classify(paths,baseline=BASE,commit=SHA)
                 self.assertFalse(result['full']);scope.validate(result,SHA)

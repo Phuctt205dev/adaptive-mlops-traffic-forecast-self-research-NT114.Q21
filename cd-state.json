@@ -3,7 +3,14 @@
   "mode": "auto",
   "epoch": 5,
   "blocked": false,
-  "active": null,
+  "active": {
+    "run_id": "42494467501",
+    "attempt": 1,
+    "commit": "7438b074005c041ec8253e2637f00111b40b47b0",
+    "ci_number": 25,
+    "mode": "auto",
+    "epoch": 5
+  },
   "failure": null,
   "last_success": {
     "run_id": "42474256701",
@@ -14,5 +21,5 @@
     "epoch": 5
   },
   "last_control": 42356723797,
-  "updated_by": "delivery-result"
+  "updated_by": "delivery"
 }

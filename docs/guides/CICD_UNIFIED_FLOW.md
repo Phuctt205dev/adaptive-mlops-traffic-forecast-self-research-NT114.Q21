@@ -227,21 +227,39 @@ source ID image như trước. Frontend giữ workflow kiểm/phát hành riêng
 | Thay đổi | Các kiểm bắt buộc |
 | --- | --- |
 | App/ML thông thường | Regression, bốn image checks, package, `current-runtime`, `acceptance` |
-| Controller, workflow, contract, manifest, dependency, DB migration, sync/lifecycle hoặc fixture Kubernetes | Các kiểm thường và `legacy-migration` |
-| Không xác định, thiếu lịch sử | Full như thay đổi nền |
+| Controller, workflow, runtime contract, manifest, dependency, DB migration hoặc sync/lifecycle | Các kiểm thường trên runtime hiện hành |
+| Adapter/metadata migration legacy, baseline image, uploader cũ hoặc hợp đồng/bộ chạy kiểm CI | Các kiểm thường và `legacy-migration` |
+| Không xác định, thiếu lịch sử | Full gồm cả hai suite |
 | Run workflow thủ công hoặc lịch tuần | Full, chỉ kiểm định; không triển khai production |
 
 `current-runtime` dựng trực tiếp các slot quản lý bằng role image thật, cache
 restore thật và PostgreSQL/MinIO riêng. Kiểm cập nhật API với request dài, cập
 nhật worker giữ API, queue bền vững, defer khi training bận, rollback preview,
 rollback sau promote khi upload S3 bị từ chối, cập nhật manifest và no-op.
-`legacy-migration` giữ nguyên ca migration thật cùng các ca phục hồi phía sau.
-Hai suite chạy độc lập khi full, không nối tiếp nhau và không hạ grace production.
+Profile kiểm gọn giữ **6 ca current**: cập nhật API cùng request dài và manifest
+đổi nhưng image giữ nguyên; cập nhật worker giữ API; training bận; rollback
+trước promote; rollback sau promote do lỗi upload; no-op sau phục hồi. Không
+lặp thêm hai no-op và một rollout chỉ để kiểm manifest. Các cohort độc lập
+được tạo cùng đợt rồi vẫn phải qua đầy đủ readiness trước khi kiểm.
+
+`legacy-migration` giữ **3 ca riêng**: chặn đường release thường trên runtime
+cũ, từ chối uploader sai hash trước mutation và migration thật có request dài/
+flush. Các ca phục hồi chung được kiểm một lần trong current, không chạy lại
+sau migration. Hai suite độc lập khi full, không hạ grace production.
+
+Migration không còn là kiểm bắt buộc cho mọi lần sửa controller/workflow hay
+dependency: hiện production đã dùng runtime mới. Các thay đổi dùng chung được
+kiểm trên runtime hiện hành mỗi release; khả năng tương thích với topology cũ
+được kiểm sâu theo lịch/thủ công. Sửa trực tiếp phần legacy, hợp đồng/bộ chạy
+kiểm CI hoặc không rõ phạm vi vẫn yêu cầu full. Đợt rút gọn chính bộ kiểm này
+vẫn phải nghiệm thu cả hai profile một lần. Đây là lựa chọn giảm phạm vi kiểm lịch sử, không phải
+khẳng định mọi sửa đổi dùng chung đều không thể ảnh hưởng migration.
 
 `acceptance` phải chạy kể cả dependency lỗi/skip. Proof ràng buộc commit, CI run,
 attempt, release ID, bốn image digest và đủ ca bắt buộc. CD không chỉ dựa vào
 màu xanh tổng thể: kiểm artifact `ci-acceptance-<SHA>` và từng job của attempt đó.
-Thiếu/fail/skip một job bắt buộc thì dừng trước runner production; full phải chờ
+Proof suite dùng schema v3 để phân biệt profile gọn; proof v2 của profile cũ
+không thay được ca kiểm mới. Thiếu/fail/skip một job bắt buộc thì dừng trước runner production; full phải chờ
 `legacy-migration` đạt. Progress của job timeout chỉ là bằng chứng điều tra.
 
 Xem Summary của `acceptance` để biết lý do chọn phạm vi và thời gian mỗi suite.
@@ -254,7 +272,7 @@ Không thay engine CD, topology, Auto/Manual, guard, flush, Verify hay rollback
 trong gói tối ưu này. Thời gian thực tế và trạng thái nghiệm thu ghi trong
 handoff, không dùng dự tính thay số đo.
 
-Nghiệm thu 08/11: 541 test Linux, bốn image checks, hai suite đều 9/9 và gate
+Mốc nghiệm thu profile trước khi rút gọn ngày 08/11: 541 test Linux, bốn image checks, hai suite đều 9/9 và gate
 coverage đạt. Trên cùng bốn image, job thường mất **18 phút 45 giây**, job sâu
 **34 phút 05 giây**; chênh **15 phút 20 giây, khoảng 45%**. CI chuyển đổi full
 mất 38 phút 40; Auto no-op mất 2 phút 11. Không dùng thời gian no-op để dự báo

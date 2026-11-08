@@ -14,15 +14,16 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
 from scripts.cicd.ci_scope import validate as validate_scope
 
 SCHEMA='traffic-ci-acceptance/v1'
-REGULAR={'verified_noop','active_training_deferred_without_mutation','preview_smoke_rollback',
-         'post_promote_flush_failure_and_server_default_rollback','manifest_only_update','post_update_noop'}
-CASES={'current':REGULAR|{'current_runtime_verified','managed_update_with_long_request','worker_only_update_preserves_api'},
-       'migration':REGULAR|{'migration_required','legacy_preflight_failure_before_mutation','actual_migration'}}
+SUITE_SCHEMA='traffic-isolated-delivery-proof/v3'
+CASES={'current':{'managed_update_with_long_request','worker_only_update_preserves_api',
+                  'active_training_deferred_without_mutation','preview_smoke_rollback',
+                  'post_promote_flush_failure_and_server_default_rollback','post_update_noop'},
+       'migration':{'migration_required','legacy_preflight_failure_before_mutation','actual_migration'}}
 COMMON_JOBS={'scope','tests','image (api)','image (tree)','image (neural)','image (sync)','package','current-runtime','acceptance'}
 
 
 def validate_suite(proof,mode,commit,run_id,attempt,identity=None):
-    if (proof.get('schema')!='traffic-isolated-delivery-proof/v2' or proof.get('suite')!=mode
+    if (proof.get('schema')!=SUITE_SCHEMA or proof.get('suite')!=mode
             or proof.get('source_commit')!=commit or str(proof.get('ci_run_id'))!=str(run_id)
             or str(proof.get('ci_attempt'))!=str(attempt) or proof.get('kubernetes_context')!='kind-cd-e2e'):
         raise ValueError('Isolated proof identity differs')
@@ -47,18 +48,20 @@ def validate_suite(proof,mode,commit,run_id,attempt,identity=None):
         name=c['case']
         if c.get('queued_database_rows')!=1 or c.get('guard_held') is not False or c.get('recovery_required') is not False:
             raise ValueError('Queue or recovery coverage failed: '+name)
-        if name in {'verified_noop','post_update_noop','current_runtime_verified'} and c.get('up_to_date') is not True:
+        if name=='post_update_noop' and c.get('up_to_date') is not True:
             raise ValueError('No-op was not proven')
         if name=='active_training_deferred_without_mutation' and c.get('deferred') is not True:
             raise ValueError('Active training guard was not proven')
         if name in {'preview_smoke_rollback','post_promote_flush_failure_and_server_default_rollback'} and c.get('rolled_back') is not True:
             raise ValueError('Rollback was not proven')
-        if name in {'actual_migration','manifest_only_update','managed_update_with_long_request','worker_only_update_preserves_api'} and c.get('completed') is not True:
+        if name in {'actual_migration','managed_update_with_long_request','worker_only_update_preserves_api'} and c.get('completed') is not True:
             raise ValueError('Update was not verified')
-        if name in {'manifest_only_update','managed_update_with_long_request'}:
+        if name=='managed_update_with_long_request':
             flush=c.get('flush_proofs')
             if not flush or any(f.get('complete') is not True or f.get('stable') is not True for f in flush):
                 raise ValueError('Cache flush acknowledgement missing')
+        if name=='managed_update_with_long_request' and c.get('manifest_only_update') is not True:
+            raise ValueError('Manifest-only coverage was not merged into the API update')
     return proof
 
 

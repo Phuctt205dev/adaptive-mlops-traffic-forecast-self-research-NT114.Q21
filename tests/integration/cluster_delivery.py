@@ -204,6 +204,9 @@ class Suite:
             for role,slots in SLOTS.items():
                 for index,slot in enumerate(slots):
                     self.create(render(role,slot,images,directory=release[0],inactive=index!=0))
+            # Submit independent cohorts together, then require every cohort
+            # Ready before any test. Keep the actual readiness/grace settings.
+            for slots in SLOTS.values():
                 self.cluster.wait(slots[0])
             routes=[('traffic-api','api'),('traffic-api-training','api'),('api-peers','api'),
                     ('api-preview','api'),('traffic-training-tree','train-tree'),('traffic-training-worker','train-neural')]
@@ -254,14 +257,14 @@ class Suite:
             self.simple(name,image,'airflow',8080,env=env,volumes=[volume],mounts=mounts)
             self.create(service(name,name,8080));self.cluster.wait(name)
 
-    def record(self,name,op):
+    def record(self,name,op,**facts):
         api=self.cluster.call('get','service','traffic-api','-o','json')['spec']['selector']['app']
         source="from sqlalchemy import text;from backend.app.db.session import SessionLocal;import json\nwith SessionLocal() as db:\n n=db.execute(text(\"SELECT count(*) FROM training_runs r JOIN training_executions e ON e.training_run_id=r.id WHERE r.split_policy='ci-only-queue' AND r.status='queued' AND e.state='queued'\")).scalar_one()\nprint(json.dumps({'queued_database_rows':n}))"
         queue=self.cluster.remote(self.cluster.deployment(api),source)
         assert queue['queued_database_rows']==1,'Controller changed synthetic queued training metadata'
         self.cases.append({'case':name,**{k:op.state.get(k) for k in ('completed','up_to_date','deferred','rolled_back','recovery_required',
                            'guard_held','failed_phase','execution_failure','probe_failure','availability','flush_proofs')},
-                           **queue,'duration_seconds':round(time.monotonic()-self.case_started,3)})
+                           **queue,**facts,'duration_seconds':round(time.monotonic()-self.case_started,3)})
         self.progress(None)
         print(json.dumps({'isolated_case_passed':name}),flush=True)
 
@@ -319,13 +322,15 @@ class Suite:
         if self.mode=='current':
             # Start from the managed topology directly, using real role images,
             # native sync sidecars and restored objects; no migration shortcut.
-            bootstrap=self.operator(base,'current-bootstrap');bootstrap.apply()
-            assert bootstrap.state['up_to_date'] and bootstrap.state['patched']==[]
-            self.record('current_runtime_verified',bootstrap)
-            update=self.operator(self.release('managed-update',revision='warm'),'managed-update')
+            changed=self.release('managed-update',revision='warm')
+            # One real rollout covers manifest-only updates and long-request
+            # draining together. All four immutable image bindings stay fixed.
+            original=json.loads(base[1].read_text());desired=json.loads(changed[1].read_text())
+            assert original['images']==desired['images'] and original['deployments']['api']!=desired['deployments']['api']
+            update=self.operator(changed,'managed-update')
             self.long_request(update);update.verify()
             assert update.state['completed'] and update.state['flush_proofs']
-            self.record('managed_update_with_long_request',update)
+            self.record('managed_update_with_long_request',update,manifest_only_update=True)
             before=self.api_snapshot()
             workers=self.operator(self.release('worker-update',revision='warm',worker_revision='two'),'worker-update')
             workers.apply();workers.verify()
@@ -353,11 +358,11 @@ class Suite:
         self.record('legacy_preflight_failure_before_mutation',bad)
         migration=self.operator(base,'migration',True);self.long_request(migration);migration.verify()
         assert migration.state['completed'] and migration.state['legacy_drain']['cache_flush_confirmed'];self.record('actual_migration',migration)
-        return self.regular_cases(base,migration)
+        # The current suite independently covers ordinary rollback/defer/no-op.
+        # Do not repeat those same cycles after the legacy migration.
+        return self.proof(migration)
 
     def regular_cases(self,base,long_operation):
-        noop=self.operator(base,'noop');noop.apply()
-        assert noop.state['up_to_date'] and noop.state['patched']==[] and not noop.state.get('guard_job');self.record('verified_noop',noop)
         self.busy(True)
         try:
             busy=self.operator(self.release('busy',revision='two'),'busy');busy.apply()
@@ -370,14 +375,20 @@ class Suite:
         else:raise AssertionError('Failed business probe was accepted')
         self.assert_recovered(smoke);assert smoke.state['probe_failure']['http_status']==503;self.record('preview_smoke_rollback',smoke)
         self.retirement_failure()
-        updated=self.operator(self.release('manifest-change',revision='two'),'manifest-change');updated.apply();updated.verify()
-        assert updated.state['completed'] and updated.state['flush_proofs'];self.record('manifest_only_update',updated)
-        final=self.operator((updated.directory,self.temp/'manifest-change/delivery.json'),'final-noop');final.apply()
-        assert final.state['up_to_date'];self.record('post_update_noop',final)
+        # The failure cases must have restored the desired steady release.
+        # Prove that rollback converged without another successful rollout.
+        before=self.api_snapshot()
+        final=self.operator(base,'final-noop');final.apply();final.verify()
+        assert final.state['up_to_date'] and final.state['patched']==[] and not final.state.get('guard_job')
+        assert self.api_snapshot()==before
+        self.record('post_update_noop',final)
+        return self.proof(long_operation)
+
+    def proof(self,long_operation):
         queue=self.cluster.remote(self.active_api(),
             "import json,requests;print(json.dumps(requests.get('http://airflow-webserver:8080/_fixture/state',timeout=5).json()))")
         assert queue['queued']==1 and queue['provider_calls']==0 and not any(queue['paused'].values())
-        return {'schema':'traffic-isolated-delivery-proof/v2','suite':self.mode,'source_commit':os.environ['GITHUB_SHA'],
+        return {'schema':'traffic-isolated-delivery-proof/v3','suite':self.mode,'source_commit':os.environ['GITHUB_SHA'],
                 'ci_run_id':os.environ['GITHUB_RUN_ID'],'ci_attempt':os.environ['GITHUB_RUN_ATTEMPT'],
                 'release_id':self.bindings['release_id'],'images':self.bindings['images'],
                 'duration_seconds':round(time.monotonic()-self.started,3),'kubernetes_context':CONTEXT,

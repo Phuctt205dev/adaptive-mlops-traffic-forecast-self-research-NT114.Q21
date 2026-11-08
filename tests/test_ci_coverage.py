@@ -2,6 +2,7 @@
 import copy
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -25,8 +26,8 @@ def suite(mode='current'):
     for name in coverage.CASES[mode]:
         cases.append({'case':name,'queued_database_rows':1,'guard_held':False,'recovery_required':False,
                       'up_to_date':True,'deferred':True,'rolled_back':True,'completed':True,
-                      'flush_proofs':[{'complete':True,'stable':True}]})
-    return {'schema':'traffic-isolated-delivery-proof/v2','suite':mode,'source_commit':SHA,
+                      'manifest_only_update':True,'flush_proofs':[{'complete':True,'stable':True}]})
+    return {'schema':'traffic-isolated-delivery-proof/v3','suite':mode,'source_commit':SHA,
             'ci_run_id':'1','ci_attempt':'2','kubernetes_context':'kind-cd-e2e',**identity(),
             'production_accessed':False,'business_http_is_fixture':True,'real_baseline_and_role_images':True,
             'real_rf_inference':True,'real_database_and_object_storage':True,'provider_called':False,
@@ -34,7 +35,7 @@ def suite(mode='current'):
 
 
 def acceptance(full=False):
-    selected=scope.classify(['deployment/rke2/runtime-contract.json'] if full else ['backend/app/main.py'],baseline=BASE,commit=SHA)
+    selected=scope.classify(['deployment/rke2/migrations/role-runtime-v1.json'] if full else ['backend/app/main.py'],baseline=BASE,commit=SHA)
     proofs={mode:suite(mode) for mode in (('current','migration') if full else ('current',))}
     results={k:{'result':'success'} for k in coverage.required_results(selected)}
     return coverage.aggregate(selected,proofs,results,commit=SHA,run_id='1',attempt='2',identity=identity())
@@ -44,14 +45,19 @@ class ScopeTests(unittest.TestCase):
     def test_ordinary_application_changes_keep_all_regular_safety_tests(self):
         for paths in (['backend/app/main.py'],['src/features.py','tests/test_features.py'],['scripts/cloud_training/execute_branch.py'],
                       ['frontend/src/TrainingMonitor.tsx','docs/guides/TRAINING.md','README.md','backend/app/main.py'],
-                      ['docs/index.html'],[]):
+                      ['docs/index.html'],['scripts/cicd/roles_deploy.py','deployment/rke2/roles/api.json'],
+                      ['requirements/roles/api.txt','alembic/versions/new_revision.py'],
+                      ['.github/workflows/backend-ci.yml'],[]):
             with self.subTest(paths=paths):
                 result=scope.classify(paths,baseline=BASE,commit=SHA)
                 self.assertFalse(result['full']);scope.validate(result,SHA)
 
-    def test_foundation_unknown_and_no_baseline_always_require_full(self):
-        for path in ('scripts/cicd/roles_deploy.py','deployment/rke2/roles/api.json','requirements/roles/api.txt',
-                     'tests/integration/runtime_fixture.py','.github/workflows/backend-ci.yml','other/new_file.py'):
+    def test_legacy_unknown_and_no_baseline_always_require_full(self):
+        for path in ('scripts/cicd/migrations/role_runtime_v1.py','deployment/rke2/migrations/role-runtime-v1.json',
+                     'tests/fixtures/legacy_region_cleanup/loader.py','deployment/rke2/role-baseline.json',
+                     'deployment/rke2/baseline.json','deployment/rke2/runtime/traffic_region_training_worker.py',
+                     'scripts/cicd/ci_scope.py','scripts/cicd/ci_coverage.py','tests/integration/cluster_delivery.py',
+                     'tests/integration/runtime_fixture.py','other/new_file.py'):
             with self.subTest(path=path):self.assertTrue(scope.classify([path],baseline=BASE,commit=SHA)['full'])
         self.assertTrue(scope.classify([],baseline=None,commit=SHA)['full'])
         self.assertTrue(scope.classify([],baseline=BASE,commit=SHA,force=True)['full'])
@@ -62,25 +68,26 @@ class ScopeTests(unittest.TestCase):
                 value=scope.select('.',SHA,state={'last_success':{'commit':BASE}},diff=Mock(side_effect=error))
                 self.assertTrue(value['full']);self.assertIsNone(value['baseline']);scope.validate(value,SHA)
 
-    def test_multiple_commits_rename_and_delete_include_old_foundation_path(self):
+    def test_multiple_commits_rename_and_delete_include_old_legacy_path(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             def git(*args):
                 return subprocess.run(['git','-C',directory,*args],check=True,capture_output=True,text=True).stdout.strip()
             git('init');git('config','user.name','CI fixture');git('config','user.email','ci@example.test')
-            (root/'deployment').mkdir();(root/'backend').mkdir()
-            (root/'deployment/old.py').write_text('important\n');(root/'backend/deleted.py').write_text('remove\n')
+            (root/'deployment/rke2/migrations').mkdir(parents=True);(root/'backend').mkdir()
+            legacy=root/'deployment/rke2/migrations/old.py'
+            legacy.write_text('important\n');(root/'backend/deleted.py').write_text('remove\n')
             git('add','.');git('commit','-m','baseline');baseline=git('rev-parse','HEAD')
-            (root/'deployment/old.py').rename(root/'backend/moved.py');(root/'backend/deleted.py').unlink()
+            legacy.rename(root/'backend/moved.py');(root/'backend/deleted.py').unlink()
             git('add','-A');git('commit','-m','rename foundation into ordinary directory')
             (root/'backend/latest.py').write_text('latest\n');git('add','.');git('commit','-m','ordinary final commit')
             commit=git('rev-parse','HEAD');paths=scope.git_paths(root,baseline,commit)
-            self.assertEqual(set(paths),{'deployment/old.py','backend/moved.py','backend/deleted.py','backend/latest.py'})
+            self.assertEqual(set(paths),{'deployment/rke2/migrations/old.py','backend/moved.py','backend/deleted.py','backend/latest.py'})
             result=scope.select(root,commit,state={'last_success':{'commit':baseline}})
             self.assertTrue(result['full']);self.assertEqual(result['baseline'],baseline)
 
     def test_scope_cannot_downgrade_or_change_source(self):
-        value=scope.classify(['deployment/roles.json'],baseline=BASE,commit=SHA)
+        value=scope.classify(['deployment/rke2/migrations/role-runtime-v1.json'],baseline=BASE,commit=SHA)
         for changes in ({'full':False},{'commit':BASE},{'reason':'ordinary_source_change'},{'paths':['../backend/main.py']}):
             with self.subTest(changes=changes),self.assertRaises(ValueError):scope.validate({**value,**changes},SHA)
 
@@ -124,9 +131,20 @@ class AcceptanceTests(unittest.TestCase):
 
     def test_missing_case_failed_recovery_or_unacknowledged_flush_blocks(self):
         for field,value in (('queued_database_rows',0),('guard_held',True),('recovery_required',True),('flush_proofs',[]),('completed',False)):
-            proof=acceptance();case=next(c for c in proof['suites']['current']['cases'] if c['case']=='manifest_only_update')
+            proof=acceptance();case=next(c for c in proof['suites']['current']['cases'] if c['case']=='managed_update_with_long_request')
             case[field]=value
             with self.subTest(field=field),self.assertRaises(ValueError):self.check(proof)
+
+    def test_merged_manifest_coverage_is_required_and_old_profile_cannot_substitute(self):
+        for change in ('missing_manifest_proof','old_suite_profile','missing_noop','missing_worker_case'):
+            proof=acceptance();current=proof['suites']['current']
+            if change=='missing_manifest_proof':
+                next(c for c in current['cases'] if c['case']=='managed_update_with_long_request').pop('manifest_only_update')
+            elif change=='old_suite_profile':current['schema']='traffic-isolated-delivery-proof/v2'
+            else:
+                name='post_update_noop' if change=='missing_noop' else 'worker_only_update_preserves_api'
+                current['cases']=[c for c in current['cases'] if c['case']!=name]
+            with self.subTest(change=change),self.assertRaises(ValueError):self.check(proof)
 
     def test_suites_must_check_the_packaged_images_and_release(self):
         for field,value in (('release_id','f'*64),('images',{**identity()['images'],'sync':{**identity()['images']['sync'],'source_id':'f'*64}})):
@@ -169,6 +187,30 @@ class AcceptanceTests(unittest.TestCase):
         redirect=handler.redirect_request(request,None,302,'redirect',{},'https://storage.example.test/file.zip')
         self.assertIsNone(redirect.get_header('Authorization'))
         with self.assertRaises(ValueError):handler.redirect_request(request,None,302,'redirect',{},'http://storage.example.test/file.zip')
+
+
+class MergedRolloutTests(unittest.TestCase):
+    def test_real_fixture_release_changes_manifest_without_changing_any_role_image(self):
+        # Exercise the actual release builder/binder used in the isolated suite.
+        # This catches a source-ID or binding mismatch before a cluster is needed.
+        from scripts.cicd.roles_release import build
+        from tests.integration.cluster_delivery import Suite,ROOT
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source=root/'source';source.mkdir()
+            for name in ('backend','src','scripts','deployment','requirements'):
+                shutil.copytree(ROOT/name,source/name,ignore=shutil.ignore_patterns('__pycache__'))
+            (source/'docs').mkdir();shutil.copy2(ROOT/'docs/index.html',source/'docs/index.html')
+            release=build(source,root/'checked','e'*40)
+            fixture=object.__new__(Suite);fixture.source=source;fixture.temp=root
+            fixture.bindings={'images':{role:{'role':role,'source_id':v['source_id'],'commit':'e'*40,
+                'image':'ghcr.io/owner/repo/backend@sha256:'+'f'*64} for role,v in release['roles'].items()}}
+            fixture.profile()
+            before=json.loads(fixture.release('before')[1].read_text())
+            after=json.loads(fixture.release('after',revision='warm')[1].read_text())
+            self.assertEqual(before['images'],after['images'])
+            self.assertNotEqual(before['deployments']['api'],after['deployments']['api'])
+            self.assertEqual(before['deployments']['tree'],after['deployments']['tree'])
+            self.assertEqual(before['deployments']['neural'],after['deployments']['neural'])
 
 
 class PinnedToolTests(unittest.TestCase):

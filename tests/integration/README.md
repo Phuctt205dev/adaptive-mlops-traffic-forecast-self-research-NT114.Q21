@@ -38,17 +38,29 @@ The replacement HTTP fixture also installs SIGTERM handlers because it runs as
 PID 1, matching the real ASGI/Airflow servers' ability to stop. Long requests
 must still finish before retirement; the controller's grace budgets are kept.
 
-Required cases include legacy preflight failure before mutation, actual
-migration with a long request finishing, idle-only deferral, verified no-op,
+The balanced profile has six current cases: one API manifest-only rollout with
+a long request finishing, worker-only rollout preserving API, idle-only deferral,
 preview smoke failure, real S3 upload denial after promotion with scheduler
-defaulting/rollback, manifest-only update without an image rebuild, and queue
-preservation. A synthetic queued TrainingRun/TrainingExecution is stored in real
+defaulting/rollback, and a final no-op proving recovery converged. The first
+case checks identical image bindings and a changed API deployment ID; it replaces
+a separate manifest-only rollout. Repeated initial/middle no-op cycles are omitted.
+
+The optional migration suite has only three legacy-specific cases: regular
+release rejection on legacy, preflight failure before mutation, and actual
+migration with a long request finishing and legacy cache flush. Ordinary recovery
+cases are checked in current and are not repeated after migration. Direct legacy
+adapter/metadata/baseline edits, proof/scope/harness edits, unknown scope/history, and manual/weekly full
+validation require both suites. Shared managed-runtime edits require current;
+their effects on retired topology are checked periodically rather than on every
+release. All selected cases and immutable identities are enforced by proof v3.
+
+A synthetic queued TrainingRun/TrainingExecution is stored in real
 PostgreSQL and its unchanged queued state is checked after every case. Airflow's
 queue REST response is a fixture; no real scheduler is asked to dispatch it.
 Only allowlisted receipt/error/pod facts are preserved in
 `results/cicd/kubernetes-delivery-proof.json`.
 
-The hosted job allows 50 minutes for setup and all nine cases. The pinned
+The migration job allows 50 minutes for setup and its three legacy cases. The pinned
 legacy migration alone took about 20 minutes in run 42338350630; that run
 passed seven cases before its old 35-minute job limit canceled the last update.
 Production drain/shutdown budgets are preserved. Phase transitions are logged,

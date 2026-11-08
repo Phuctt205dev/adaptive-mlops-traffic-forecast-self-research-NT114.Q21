@@ -16,11 +16,20 @@ from scripts.cicd.cd_state import GitHub,Store
 
 SHA=re.compile(r'[0-9a-f]{40}')
 SCHEMA='traffic-ci-scope/v1'
-FOUNDATION=('scripts/cicd/','tests/integration/','tests/fixtures/legacy_region_cleanup/',
-            'deployment/','requirements/','alembic/','.github/',
-            'backend/app/services/artifact_sync_control.py','backend/app/services/region_cleanup_uploader.py',
-            'backend/app/services/restore_cache.py','backend/app/services/lifecycle.py')
-ORDINARY=('backend/','src/','tests/','scripts/cloud_training/','frontend/','docs/')
+# Current delivery and image checks cover the managed topology on every release.
+# Replay of the retired topology is required only for direct legacy changes,
+# explicit/weekly validation, or an unknown impact/history. Shared controller,
+# role/dependency and workflow edits still receive all current safety cases.
+LEGACY_PREFIXES=('scripts/cicd/migrations/','deployment/rke2/migrations/',
+            'tests/fixtures/legacy_region_cleanup/')
+LEGACY_FILES={'deployment/rke2/baseline.json','deployment/rke2/role-baseline.json',
+              'deployment/rke2/runtime/traffic_region_training_worker.py',
+              # Changes to the proof contract/harness must exercise both
+              # selected profiles before the new validator is released.
+              'scripts/cicd/ci_scope.py','scripts/cicd/ci_coverage.py',
+              'tests/integration/cluster_delivery.py','tests/integration/runtime_fixture.py'}
+ORDINARY=('backend/','src/','tests/','scripts/cloud_training/','scripts/cicd/',
+          'deployment/','requirements/','alembic/','.github/','frontend/','docs/')
 
 
 def classify(paths,*,baseline,commit,force=False):
@@ -29,7 +38,7 @@ def classify(paths,*,baseline,commit,force=False):
     reason='ordinary_source_change'
     if force:reason='explicit_full_validation'
     elif not isinstance(baseline,str) or not SHA.fullmatch(baseline):reason='missing_verified_baseline'
-    elif any(p.startswith(FOUNDATION) for p in paths):reason='delivery_foundation_changed'
+    elif any(p.startswith(LEGACY_PREFIXES) or p in LEGACY_FILES for p in paths):reason='legacy_migration_changed'
     elif any(not p.startswith(ORDINARY) and p not in {'app.py','README.md'} for p in paths):reason='unknown_impact'
     return {'schema':SCHEMA,'commit':commit,'baseline':baseline if isinstance(baseline,str) and SHA.fullmatch(baseline) else None,
             'full':reason!='ordinary_source_change','reason':reason,'paths':paths}

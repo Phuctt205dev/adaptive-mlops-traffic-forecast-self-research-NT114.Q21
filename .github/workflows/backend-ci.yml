@@ -250,7 +250,7 @@ jobs:
   current-runtime:
     needs: [package, scope]
     runs-on: ubuntu-24.04
-    # Direct managed-runtime setup; all ordinary safety cases remain required.
+    # Six balanced safety cases; manifest/no-op cycles are consolidated.
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -310,7 +310,7 @@ jobs:
     if: needs.scope.outputs.full == 'true'
     runs-on: ubuntu-24.04
     # The real legacy migration took ~20 minutes before the recovery cases.
-    # Keep the production grace/drain checks; budget setup and all nine cases.
+    # Keep production grace/drain; only the three legacy-specific cases run here.
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

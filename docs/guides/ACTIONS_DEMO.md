@@ -40,6 +40,22 @@ Nên mở sẵn một cặp CI/CD đã hoàn tất và cùng nguồn để trìn
 Summary và artifact cần thiết; không cần bấm **Run workflow** để chứng minh một
 lượt lịch sử. Không đổi mode hoặc tạo training/triển khai mới chỉ để xem màn hình.
 
+## Cặp minh họa đã nghiệm thu ngày 08/11/2026
+
+- [Backend CI #24 | push | master](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/42471585676): 544 test đạt, bốn image checks đạt, cả `current-runtime` và `legacy-migration` đạt 9/9, gate `acceptance` thành công.
+- [Backend CD #36 | CI #24 | release](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/42474256701): được CI #24 tự kích hoạt qua `workflow_run`; `inspect`, `deploy` và `record-result` thành công ở chế độ Auto.
+
+Hai lượt kiểm source `d1cbfd9760fe15f9bef04ce25af5853b0575297c`. Đây là thay đổi
+cách hiển thị Actions nên release tái dùng image đang phục vụ. Receipt xác nhận
+`up_to_date=true`, `patched=[]` và có proof Verify. UID/cấu hình/số restart của
+5 Deployment và 6 pod được theo dõi giữ nguyên. Dùng cặp này để giải thích
+luồng CI → Auto CD và trường hợp không cần cập nhật pod; chọn một lượt có
+thay đổi runtime thực nếu muốn minh họa rollout.
+
+Frontend CI #3 cũng thành công. Frontend CD #39 chờ backend Verify nên bỏ qua
+build/deploy; callback sau CD #36 xác nhận nội dung/cấu hình frontend đã được
+publish, không tạo thêm lượt xuất bản giống hệt.
+
 ## Trình bày frontend và điều khiển
 
 Mở **03 Frontend CI** để xem kiểm build và **04 Frontend CD** để xem bước chọn

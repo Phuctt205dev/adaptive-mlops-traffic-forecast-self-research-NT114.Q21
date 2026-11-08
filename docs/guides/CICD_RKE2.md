@@ -102,7 +102,7 @@ Lượt CI đã hoàn tất lúc CD còn false sẽ không tự chạy lại dep
 
 ## Mỗi lần phát hành
 
-Push vào nhánh mặc định → Backend CI tạo image/artifact → Deploy Backend RKE2 kiểm provenance → chờ **Review deployments → rke2-production → Approve and deploy**. Chỉ cần một lần duyệt cho toàn bộ job, không xác nhận từng lệnh kubectl.
+Push vào nhánh mặc định → **01 Backend CI** kiểm source/image/artifact và coverage → **02 Backend CD** kiểm nguồn rồi chọn mode đã lưu. Manual chờ **Review deployments → rke2-production → Approve and deploy** một lần cho release; Auto dùng `rke2-production-auto` và đi tới runner. Cùng engine Apply/Verify, không xác nhận từng lệnh kubectl.
 
 Runner xác minh artifact đúng commit và image digest. Preflight kiểm namespace UID, trạng thái training, migration head, cache API 4Gi, dung lượng restore dưới 80%, disk headroom và entrypoint. Runner giữ khóa bảo trì từ Job độc lập, pause DAG theo trạng thái đã ghi rồi cập nhật hai worker/API. Trong cửa sổ giữ khóa, các request ứng dụng chịu barrier có thể tạm trả busy; không cam kết zero downtime. Auth/health và một số route đọc vùng không bị barrier này chặn.
 

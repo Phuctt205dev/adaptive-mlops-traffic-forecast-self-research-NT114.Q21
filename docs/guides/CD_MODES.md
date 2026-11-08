@@ -1,11 +1,11 @@
-# CD Control: Manual / Auto
+# 90 CD Control: Manual / Auto
 
 Code vẫn push vào `master` như hiện tại; CI kiểm/build như trước. Chế độ chỉ
 chọn có cần duyệt deployment trước khi giao việc cho runner.
 
 ## Bật/tắt bằng GitHub Actions
 
-1. Mở [Actions → CD Control](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/workflows/cd-control.yml) → **Run workflow**, chọn nhánh `master`.
+1. Mở [Actions → 90 CD Control](https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/workflows/cd-control.yml) → **Run workflow**, chọn nhánh `master`.
 2. Ô **Desired mode**: đánh dấu chọn **Auto**, bỏ đánh dấu chọn **Manual**.
 3. Bấm **Run workflow**, chờ bước lưu thành công.
 4. Xem **Summary → mode** và **blocked** để biết kết quả đã lưu.
@@ -34,8 +34,8 @@ Công tắc áp dụng cho backend. Luồng thống nhất bổ sung gate cho fr
 Pages chỉ publish khi nội dung backend tương ứng đã Apply+Verify hoặc không
 đổi so với bản đã Verify. Backend đạt gọi lại Pages cho frontend mới nhất
 tương thích. Bản frontend đã publish được ghi riêng, không thay mode/chốt CD.
-Đây là hành vi của source mới; xem [trạng thái nghiệm thu](CICD_UNIFIED_FLOW.md)
-trước khi tiếp tục migration production đang tạm hoãn.
+Luồng này đã được nghiệm thu; xem [trạng thái và hợp đồng hiện hành](CICD_UNIFIED_FLOW.md)
+và [cách đọc Actions](ACTIONS_DEMO.md). Migration runtime ngày 07/11 đã hoàn tất.
 
 ## Job cũ khi đổi chế độ
 

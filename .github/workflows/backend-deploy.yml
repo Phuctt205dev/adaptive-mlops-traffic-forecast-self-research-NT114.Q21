@@ -1,13 +1,14 @@
-name: Deploy Backend RKE2
+name: 02 Backend CD
+run-name: "Backend CD #${{ github.run_number }} | ${{ github.event_name == 'workflow_run' && format('CI #{0}', github.event.workflow_run.run_number) || format('CI run {0}', inputs.ci_run_id) }} | ${{ inputs.operation || 'release' }}"
 
 on:
   workflow_run:
-    workflows: ['Backend CI']
+    workflows: ['01 Backend CI']
     types: [completed]
   workflow_dispatch:
     inputs:
       ci_run_id:
-        description: Successful default-branch Backend CI push run to deliver
+        description: Successful default-branch 01 Backend CI push run to deliver
         required: true
         type: string
       operation:

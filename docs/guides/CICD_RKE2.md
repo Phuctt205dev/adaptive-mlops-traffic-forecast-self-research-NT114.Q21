@@ -1,12 +1,11 @@
 # Vận hành CI/CD backend trên RKE2
 
-> Rà soát 07/11/2026: xem [luồng CI/CD thống nhất](CICD_UNIFIED_FLOW.md).
-> Gói chuyển đổi role chưa được nghiệm thu; xác minh cuối tối06/11 ghi nhận đã
-> rollback bản cũ và tạm tắt CD theo yêu cầu người dùng. Các bước Enable/Apply
-> bên dưới là hướng dẫn, không phải yêu cầu tự tiếp tục triển khai. Đợt rà soát
-> 07/11 đã bắt đầu sửa workflow/controller theo kế hoạch thống nhất; chưa nghiệm
-> thu production. `deliver.ps1` mới chỉ nhận role release v2; gói v1 chỉ dùng
-> controller/artifact gốc cho phục hồi giao dịch lịch sử.
+> Rà soát 08/11/2026: runtime thống nhất và gói tối ưu CI đã nghiệm thu;
+> Auto đang bật theo lựa chọn đã lưu. Xem [luồng hiện hành](CICD_UNIFIED_FLOW.md)
+> và [cách đọc Actions để trình bày](ACTIONS_DEMO.md). Mốc rollback/tạm tắt CD
+> ngày 06/11 là lịch sử. Các bước Enable/Apply bên dưới là hướng dẫn vận hành,
+> không phải yêu cầu chạy lại gói đã hoàn tất. `deliver.ps1` chỉ nhận role release
+> v2; gói v1 dùng controller/artifact gốc để phục hồi giao dịch lịch sử.
 
 Phương án đã được người dùng chốt ngày 05/11/2026: **CI kiểm chứng → duyệt một lần trên GitHub → runner Windows triển khai qua Tailscale → Verify**. Thiết lập ban đầu và nghiệm thu live vẫn là các bước riêng, không suy ra đã hoàn thành từ việc có workflow trong source.
 
@@ -85,7 +84,7 @@ Khi dựng lại, kiểm Settings → Actions để workflow từ **mọi cộng
 ## Publish source, image và bật CD
 
 1. Review/commit/push source theo quyền Git của nhiệm vụ; không force-add runtime lịch sử, results hoặc nhật ký. CI cần file runtime mới được theo dõi trong Git.
-2. Xem lượt **Backend CI** đầu tiên; chỉ tiếp tục khi các job bắt buộc đạt và có artifact `backend-release-<commit>` cùng image digest GHCR. Máy local không có TensorFlow không thay bằng chứng job neural trên GitHub.
+2. Xem lượt **01 Backend CI** đầu tiên; chỉ tiếp tục khi các job bắt buộc đạt và có artifact `backend-release-<commit>` cùng image digest GHCR. Máy local không có TensorFlow không thay bằng chứng job neural trên GitHub.
 3. Xác nhận node pull được image. Package GHCR mới có thể private. Với image chứa source công khai đã review, chủ repo có thể chọn public trong Package Settings; nếu giữ private, cấu hình pull Secret có credential đọc package phù hợp. Không dùng GITHUB_TOKEN hết hạn của một job làm credential pull lâu dài.
 4. Bật CD bằng **một** trong hai cách theo lựa chọn registry:
 
@@ -99,7 +98,7 @@ Khi dựng lại, kiểm Settings → Actions để workflow từ **mọi cộng
 
 EnableCD kiểm reviewer, runner online và đúng namespace UID trước khi đặt biến true; lựa chọn registry vẫn cần nghiệm thu pull thật. Không tự đổi package sang public hoặc tự tạo Secret từ token cá nhân.
 
-Lượt CI đã hoàn tất lúc CD còn false sẽ không tự chạy lại deploy khi bật biến. Để phát hành bản đó: GitHub → Actions → Deploy Backend RKE2 → Run workflow → nhập ID lượt Backend CI **push nhánh mặc định** đã đạt. Sau đó duyệt môi trường như bình thường.
+Lượt CI đã hoàn tất lúc CD còn false sẽ không tự chạy lại deploy khi bật biến. Để phát hành bản đó: GitHub → Actions → 02 Backend CD → Run workflow → nhập ID lượt 01 Backend CI **push nhánh mặc định** đã đạt. Manual yêu cầu duyệt môi trường; Auto theo chế độ đã lưu. Xem [hướng dẫn đọc Actions](ACTIONS_DEMO.md).
 
 ## Mỗi lần phát hành
 

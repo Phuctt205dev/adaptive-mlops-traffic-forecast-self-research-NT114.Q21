@@ -1,8 +1,10 @@
 # Isolated delivery acceptance
 
-`Backend CI / isolated-delivery` runs on a disposable GitHub-hosted runner,
+`01 Backend CI / current-runtime` runs on a disposable GitHub-hosted runner,
 after the role images pass offline checks and the immutable package is built.
-The full CI must succeed before the production provenance gate accepts it.
+When scope requires full coverage, `legacy-migration` runs independently in
+parallel. The acceptance job and production gate require every suite selected
+for this commit. See [Actions navigation](../../docs/guides/ACTIONS_DEMO.md).
 
 The script refuses a non-hosted runner, a context other than `kind-cd-e2e`, or
 a Kubernetes API outside loopback. It does not read a production kubeconfig,

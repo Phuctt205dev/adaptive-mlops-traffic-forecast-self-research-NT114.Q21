@@ -1,4 +1,5 @@
-name: CD Control
+name: 90 CD Control
+run-name: "CD Control #${{ github.run_number }} | ${{ inputs.automatic && 'Request Auto' || 'Request Manual' }}"
 
 on:
   workflow_dispatch:

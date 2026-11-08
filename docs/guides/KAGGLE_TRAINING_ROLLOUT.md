@@ -40,7 +40,7 @@ Nếu đang stage công việc khác hoặc HEAD/source đã đổi, helper sẽ
 lại. Nếu push lỗi sau commit, giữ nguyên commit và đọc `frontend-publish.json`
 trước khi xử lý; không chạy lại helper để tạo thêm commit.
 
-Đợi workflow `Deploy Frontend To GitHub Pages` thành công, Ctrl+F5 và đăng nhập
+Đợi workflow `04 Frontend CD` thành công, Ctrl+F5 và đăng nhập
 admin. Workflow rebuild source đã push; kiểm API/base path trong log khớp
 `frontend-build.json` đã chuẩn bị từ bundle Pages đang phục vụ. Gói ZIP frontend
 local là bản review, không tự được GitHub Pages dùng. Phần hướng dẫn chi tiết

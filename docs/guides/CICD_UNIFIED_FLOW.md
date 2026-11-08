@@ -1,5 +1,9 @@
 # Luồng CI/CD thống nhất
 
+Cách mở từng workflow, nối đúng lượt CI/CD và trình bày với giảng viên:
+[Hướng dẫn GitHub Actions](ACTIONS_DEMO.md). Các nhãn 01–04 là luồng chính,
+90/91 là điều khiển và retry; tên file/job/artifact dùng cho máy giữ nguyên.
+
 Ngày rà soát: **08/11/2026**, Asia/Saigon.
 Runtime thống nhất đã nghiệm thu production ngày 07/11; Auto đang bật theo lựa
 chọn của người dùng. Bản sửa training 35df07d đã Verify và người dùng xác nhận.
@@ -184,10 +188,10 @@ lập ở ingress, mạng hoặc dịch vụ dữ liệu đơn lẻ.
 
 1. Sửa source/test và manifest Git nếu cần đổi cấu hình. Push nhánh mặc định.
    Không thêm một workflow deploy riêng cho từng tính năng.
-2. Backend CI phải đạt toàn bộ tests, bốn image checks, package, bộ Kubernetes
+2. **01 Backend CI** phải đạt toàn bộ tests, bốn image checks, package, bộ Kubernetes
    hiện hành và bộ migration khi phạm vi yêu cầu. Job `acceptance` kiểm đủ bằng
    chứng theo SHA; CD kiểm lại proof và kết quả từng job trước chọn release.
-3. Khi CD được bật, `Deploy Backend RKE2` nhận gói đó. Manual yêu cầu duyệt
+3. Khi CD được bật, **02 Backend CD** nhận gói đó. Manual yêu cầu duyệt
    environment; Auto giữ mode đã lưu qua nhiều push. Cả hai chọn operation
    `release` và đi cùng controller. Thiếu training idle thì DEFERRED, không
    cưỡng chế ngắt công việc để cập nhật.
@@ -241,7 +245,7 @@ Thiếu/fail/skip một job bắt buộc thì dừng trước runner production;
 `legacy-migration` đạt. Progress của job timeout chỉ là bằng chứng điều tra.
 
 Xem Summary của `acceptance` để biết lý do chọn phạm vi và thời gian mỗi suite.
-Muốn kiểm full: Actions → Backend CI → Run workflow ở nhánh mặc định. Lịch tuần
+Muốn kiểm full: Actions → 01 Backend CI → Run workflow ở nhánh mặc định. Lịch tuần
 chạy lúc 03:17 thứ Hai (UTC+7). Các lượt này có event khác push nên không qua CD.
 Nếu chạy lại CI sau lỗi, chọn **Re-run all jobs**: proof attempt cũ không được
 ghép với proof attempt mới. Không tái dùng bằng chứng định kỳ cho release khác.

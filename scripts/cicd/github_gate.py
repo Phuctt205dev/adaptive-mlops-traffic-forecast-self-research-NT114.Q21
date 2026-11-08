@@ -87,7 +87,9 @@ def validate(repository, run_id, *, fetch=get, operation='release', coverage=che
         raise ValueError('CI sequence is missing.')
     if str(run.get('id'))!=str(run_id) or type(run.get('run_attempt')) is not int or run['run_attempt']<1:
         raise ValueError('CI run attempt identity is missing.')
-    coverage(repository,run,fetch)
+    proof=coverage(repository,run,fetch)
+    if operation!='release' and proof['scope']['full'] is not True:
+        raise ValueError('Runtime migration requires full CI coverage')
     return {"sha": run["head_sha"], "run_id": str(run_id), "artifact": "backend-release-" + run["head_sha"],
             'mode': mode, 'epoch': str(state['epoch']), 'environment': environment_name, 'ci_number': str(run['run_number']),
             'operation':operation}

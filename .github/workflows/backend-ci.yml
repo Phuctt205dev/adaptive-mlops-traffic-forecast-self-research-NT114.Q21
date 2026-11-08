@@ -277,11 +277,7 @@ jobs:
         env:
           KUBECONFIG: ${{ runner.temp }}/cd-e2e.kubeconfig
         run: |
-          curl --fail --location --retry 3 --max-time 90 \
-            https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 \
-            --output "$RUNNER_TEMP/kind"
-          echo "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  $RUNNER_TEMP/kind" | sha256sum --check
-          chmod +x "$RUNNER_TEMP/kind"
+          python -B scripts/cicd/kind_tool.py
           "$RUNNER_TEMP/kind" create cluster --name cd-e2e --wait 180s \
             --image kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed \
             --config tests/integration/kind.yaml --kubeconfig "$KUBECONFIG"
@@ -341,11 +337,7 @@ jobs:
         env:
           KUBECONFIG: ${{ runner.temp }}/cd-e2e.kubeconfig
         run: |
-          curl --fail --location --retry 3 --max-time 90 \
-            https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 \
-            --output "$RUNNER_TEMP/kind"
-          echo "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  $RUNNER_TEMP/kind" | sha256sum --check
-          chmod +x "$RUNNER_TEMP/kind"
+          python -B scripts/cicd/kind_tool.py
           "$RUNNER_TEMP/kind" create cluster --name cd-e2e --wait 180s \
             --image kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed \
             --config tests/integration/kind.yaml --kubeconfig "$KUBECONFIG"

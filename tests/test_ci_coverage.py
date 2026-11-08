@@ -5,10 +5,11 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from urllib.error import HTTPError
 from unittest.mock import Mock,patch
 from urllib.request import Request
 
-from scripts.cicd import ci_scope as scope,ci_coverage as coverage,github_gate
+from scripts.cicd import ci_scope as scope,ci_coverage as coverage,github_gate,kind_tool
 from tests import test_cicd as gate_tests
 
 SHA='a'*40;BASE='b'*40
@@ -144,6 +145,18 @@ class AcceptanceTests(unittest.TestCase):
             github_gate.validate('owner/repo','1',fetch=Mock(side_effect=values),coverage=required)
         required.assert_called_once()
 
+    def test_explicit_runtime_migration_also_requires_deep_coverage(self):
+        for full in (False,True):
+            values=gate_tests.GateTests().responses()
+            if full:
+                result=github_gate.validate('owner/repo','1',fetch=Mock(side_effect=values),
+                    coverage=Mock(return_value=acceptance(True)),operation='migrate-role-runtime-v1')
+                self.assertEqual(result['operation'],'migrate-role-runtime-v1')
+            else:
+                with self.assertRaisesRegex(ValueError,'full CI coverage'):
+                    github_gate.validate('owner/repo','1',fetch=Mock(side_effect=values),
+                        coverage=Mock(return_value=acceptance()),operation='migrate-role-runtime-v1')
+
     def test_artifact_lookup_rejects_missing_expired_or_ambiguous_proof(self):
         for artifacts in ([],[{'name':'proof','expired':True}], [{'name':'proof','expired':False}]*2):
             with self.subTest(artifacts=artifacts),self.assertRaises(ValueError):
@@ -154,6 +167,26 @@ class AcceptanceTests(unittest.TestCase):
         redirect=handler.redirect_request(request,None,302,'redirect',{},'https://storage.example.test/file.zip')
         self.assertIsNone(redirect.get_header('Authorization'))
         with self.assertRaises(ValueError):handler.redirect_request(request,None,302,'redirect',{},'http://storage.example.test/file.zip')
+
+
+class PinnedToolTests(unittest.TestCase):
+    def test_transient_download_retries_but_never_accepts_wrong_hash(self):
+        opener=Mock()
+        response=Mock();response.__enter__=Mock(return_value=response);response.__exit__=Mock(return_value=False)
+        response.read.return_value=b'wrong binary'
+        opener.open.side_effect=[HTTPError(kind_tool.ASSET,504,'gateway',{},None),response]
+        wait=Mock()
+        with tempfile.TemporaryDirectory() as directory:
+            target=Path(directory)/'kind'
+            with self.assertRaisesRegex(ValueError,'checksum'):kind_tool.install(target,opener=opener,sleep=wait)
+            self.assertFalse(target.exists());self.assertFalse(list(Path(directory).iterdir()))
+        wait.assert_called_once_with(5)
+
+    def test_exhausted_network_failure_is_bounded_and_omits_sensitive_url(self):
+        opener=Mock();opener.open.side_effect=TimeoutError('signed-url-or-token-must-not-appear');wait=Mock()
+        with self.assertRaisesRegex(RuntimeError,'details omitted') as caught:kind_tool.install('unused',opener=opener,sleep=wait)
+        self.assertNotIn('signed-url',str(caught.exception));self.assertEqual(opener.open.call_count,3)
+        self.assertEqual(wait.call_count,2)
 
 
 if __name__=='__main__':unittest.main()

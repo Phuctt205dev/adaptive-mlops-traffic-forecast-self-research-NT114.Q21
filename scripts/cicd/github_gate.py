@@ -77,7 +77,11 @@ def validate(repository, run_id, *, fetch=get, operation='release', coverage=che
     if operation!='release' and mode!='manual':
         raise ValueError('Runtime migration requires the reviewed Manual gate')
     if state['active'] is not None:
-        raise ValueError('An earlier delivery needs completion or verified recovery.')
+        active = state['active']
+        raise ValueError('An earlier delivery needs completion or verified recovery: https://github.com/'
+                         + repository + '/actions/runs/' + active['run_id'] + ' (attempt '
+                         + str(active['attempt']) + '). Inspect its original receipt; for a proven historical '
+                         'package-verification failure before engine entry, see recover_preapply.py and docs/guides/CD_MODES.md.')
     if mode == 'auto' and state['blocked']:
         raise ValueError('Auto is blocked by a failed release; use Manual to verify a repair.')
     environment_name = ENVIRONMENTS[mode]

@@ -88,6 +88,29 @@ python -B scripts/cicd/recover_cd.py `
 Thiếu receipt, cấu hình đổi xen vào hoặc guard chưa rõ thì phải dừng và tái lập
 phương án phục hồi có kiểm chứng. Không sửa receipt hoặc replay Apply để thử.
 
+Trường hợp controller cũ đã claim nhưng `deliver.ps1` lỗi xác minh gói ở dòng 28,
+chưa gọi engine và chưa tạo receipt, có nhánh kiểm chứng riêng:
+
+```powershell
+python -B scripts/cicd/recover_preapply.py `
+  --kubectl <kubectl.exe> --kubeconfig <dedicated-kubeconfig> `
+  --context traffic-delivery --namespace-uid <reviewed-namespace-uid> `
+  --proof-output <ignored-local-proof.json>
+```
+
+Mặc định chỉ đọc. Helper lấy source/log của đúng run/attempt từ GitHub, chỉ
+chấp nhận phiên bản controller lịch sử đã review và lỗi trước engine. Helper
+tải ZIP receipt cuối thành công, kiểm digest/CRC, đối chiếu đủ 14 Deployment/
+Service đúng UID/spec, replica Ready, DAG/training idle và không guard còn chạy.
+Receipt vẫn giữ nguyên commit gốc; proof phục hồi là tài liệu riêng.
+
+Nếu kiểm chứng đạt, chạy lại cùng lệnh với `--release` để kiểm tra mới và nhả
+ownership bằng compare-and-swap, đồng thời kiểm baseline chưa đổi. Auto vẫn bị
+chặn. Chọn Manual qua **90 CD Control**, phát hành CI thành công mới nhất và
+người dùng duyệt `rke2-production`; Apply+Verify đạt mới xóa chốt lỗi. Không
+rerun CD cũ để thử. Controller không khớp, có receipt hoặc bằng chứng thiếu
+thì nhánh này từ chối và giữ ownership.
+
 ## Chuẩn bị một lần
 
 `setup.ps1 -Action ConfigureCDModes` chuẩn bị environment Auto chỉ master và

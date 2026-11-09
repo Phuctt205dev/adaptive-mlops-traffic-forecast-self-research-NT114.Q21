@@ -88,12 +88,14 @@ def confirm_roles(cluster,receipt):
     return {'recovery_verified':True,'deployments_ready':5,'role_resources_verified':True}
 
 
-def release_ownership(store, active, proof):
+def release_ownership(store, active, proof, *, expected_success=None):
     if proof.get('recovery_verified') is not True or proof.get('deployments_ready') != 5:
         raise ValueError('Read-only recovery proof is required.')
     def change(state):
         if state['active'] != active:
             raise ValueError('Recovery ownership changed; inspect again.')
+        if expected_success is not None and state['last_success'] != expected_success:
+            raise ValueError('Recovery baseline changed; inspect again.')
         state['active'] = None
         state['blocked'] = True
         if state['failure']:

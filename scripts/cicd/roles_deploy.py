@@ -18,7 +18,7 @@ import time
 from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from scripts.cicd.deploy import Cluster, container, ready_pods, now, spec_hash, AIRFLOW_FILES, DAG_CHECK
+from scripts.cicd.deploy import Cluster, container, ready_pods, now, spec_hash, AIRFLOW_FILES, DAG_CHECK, DAG_COMPATIBILITY_CHECK
 from scripts.cicd.release import canonical, digest, DIGEST_IMAGE
 from scripts.cicd.roles_release import verify, ROLES
 from scripts.cicd.role_manifests import render,contract,CONTRACT,ANNOTATION,SLOTS
@@ -518,7 +518,7 @@ class RolesDelivery:
             expected={k:digest((self.directory/'airflow'/k).read_bytes()) for k in actual}
             if actual!=expected or not self.remote(self.cluster.deployment(target),DAG_CHECK).get('dag_valid'):
                 raise RuntimeError('Airflow source/graph verification failed')
-        if not self.remote(self.cluster.deployment('airflow-webserver'),DAG_CHECK).get('dag_valid'):
+        if not self.remote(self.cluster.deployment('airflow-webserver'),DAG_COMPATIBILITY_CHECK).get('dag_valid'):
             raise RuntimeError('Live Airflow webserver graph compatibility failed')
 
     def retire_api(self,name):

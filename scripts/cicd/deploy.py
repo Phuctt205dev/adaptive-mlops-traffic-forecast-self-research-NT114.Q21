@@ -32,13 +32,35 @@ AIRFLOW_FILES = ("import hashlib,json;from pathlib import Path;"
                  "'airflow_control.py':Path('/opt/traffic-cloud/airflow_control.py'),"
                  "'legacy/traffic_region_training_worker.py':Path('/opt/traffic-cloud/legacy/traffic_region_training_worker.py')};"
                  "print(json.dumps({k:hashlib.sha256(p.read_bytes()).hexdigest() for k,p in names.items()}))")
-DAG_CHECK = ("import importlib.util,json;"
-             "s=importlib.util.spec_from_file_location('delivery_dag_check','/opt/airflow/dags/traffic_region_training.py');"
-             "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);d=m.dag;"
-             "expected={'validate_training_conf','train_tree_models','train_lstm','train_gru','finalize_region_training'};"
-             "ok=set(d.task_ids)==expected and d.get_task('train_gru').upstream_task_ids=={'train_lstm'} "
-             "and d.get_task('finalize_region_training').upstream_task_ids=={'train_tree_models','train_gru'};"
-             "print(json.dumps({'dag_valid':ok}))")
+
+
+def airflow_dag_check(*, compatibility=False):
+    """Require the new scheduler graph; allow the previous graph for the UI.
+
+    LocalExecutor runs tasks only on the scheduler. The webserver keeps serving
+    queued requests during delivery and may still import the preceding source.
+    Both supported graphs use identical task IDs and the receipt finalizer.
+    """
+    parallel = {'validate_training_conf': [], 'train_tree_models': ['validate_training_conf'],
+                'train_lstm': ['validate_training_conf'], 'train_gru': ['validate_training_conf'],
+                'finalize_region_training': ['train_gru', 'train_lstm', 'train_tree_models']}
+    profiles = [(parallel, 3)]
+    if compatibility:
+        serial = {**parallel, 'train_gru': ['train_lstm'],
+                  'finalize_region_training': ['train_gru', 'train_tree_models']}
+        profiles.append((serial, 2))
+    return ("import importlib.util,json;"
+            "s=importlib.util.spec_from_file_location('delivery_dag_check','/opt/airflow/dags/traffic_region_training.py');"
+            "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);d=m.dag;"
+            "profiles=" + repr(profiles) + ";"
+            "graph={name:sorted(d.get_task(name).upstream_task_ids) for name in d.task_ids};"
+            "ok=d.dag_id=='traffic_region_training' and d.max_active_runs==1 "
+            "and any(graph==expected and d.max_active_tasks==limit for expected,limit in profiles);"
+            "print(json.dumps({'dag_valid':ok}))")
+
+
+DAG_CHECK = airflow_dag_check()
+DAG_COMPATIBILITY_CHECK = airflow_dag_check(compatibility=True)
 
 
 def now():

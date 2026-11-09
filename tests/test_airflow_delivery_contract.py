@@ -1,0 +1,108 @@
+"""Exercise the actual remote DAG probes without Airflow or a live cluster."""
+from contextlib import redirect_stdout
+import io
+import json
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import Mock, patch
+
+from scripts.cicd.deploy import AIRFLOW_FILES, DAG_CHECK, DAG_COMPATIBILITY_CHECK
+from scripts.cicd.release import digest
+from scripts.cicd.roles_deploy import RolesDelivery
+
+
+class AirflowDeliveryContractTests(unittest.TestCase):
+    def dag(self, *, serial=False):
+        graph = {'validate_training_conf': set(), 'train_tree_models': {'validate_training_conf'},
+                 'train_lstm': {'validate_training_conf'}, 'train_gru': {'validate_training_conf'},
+                 'finalize_region_training': {'train_tree_models', 'train_lstm', 'train_gru'}}
+        if serial:
+            graph.update(train_gru={'train_lstm'}, finalize_region_training={'train_tree_models', 'train_gru'})
+        dag = SimpleNamespace(dag_id='traffic_region_training', max_active_runs=1,
+                              max_active_tasks=2 if serial else 3, task_ids=list(graph))
+        dag.get_task = lambda name: SimpleNamespace(upstream_task_ids=graph[name])
+        return dag, graph
+
+    def check(self, probe, dag):
+        output = io.StringIO()
+        spec = SimpleNamespace(loader=SimpleNamespace(exec_module=Mock()))
+        with patch('importlib.util.spec_from_file_location', return_value=spec), \
+             patch('importlib.util.module_from_spec', return_value=SimpleNamespace(dag=dag)), redirect_stdout(output):
+            exec(probe, {})
+        return json.loads(output.getvalue())['dag_valid']
+
+    def test_scheduler_requires_parallel_graph_and_webserver_accepts_both_reviewed_versions(self):
+        current, _ = self.dag()
+        previous, _ = self.dag(serial=True)
+        self.assertTrue(self.check(DAG_CHECK, current))
+        self.assertFalse(self.check(DAG_CHECK, previous))
+        self.assertTrue(self.check(DAG_COMPATIBILITY_CHECK, current))
+        self.assertTrue(self.check(DAG_COMPATIBILITY_CHECK, previous))
+
+    def test_missing_receipt_edge_extra_task_or_wrong_model_dependency_fails_both_probes(self):
+        for serial in (False, True):
+            for broken in ('missing_final_receipt', 'wrong_start_dependency', 'extra_task'):
+                with self.subTest(serial=serial, broken=broken):
+                    dag, graph = self.dag(serial=serial)
+                    if broken == 'missing_final_receipt':
+                        graph['finalize_region_training'].remove('train_gru')
+                    elif broken == 'wrong_start_dependency':
+                        graph['train_lstm'] = {'train_tree_models'}
+                    else:
+                        graph['unreviewed_task'] = {'validate_training_conf'}
+                        dag.task_ids.append('unreviewed_task')
+                    self.assertFalse(self.check(DAG_CHECK, dag))
+                    self.assertFalse(self.check(DAG_COMPATIBILITY_CHECK, dag))
+
+    def test_wrong_dag_identity_or_concurrency_is_rejected(self):
+        for serial in (False, True):
+            for field, value in (('dag_id', 'unexpected'), ('max_active_runs', 2), ('max_active_tasks', 8)):
+                with self.subTest(serial=serial, field=field):
+                    dag, _ = self.dag(serial=serial)
+                    setattr(dag, field, value)
+                    self.assertFalse(self.check(DAG_CHECK, dag))
+                    self.assertFalse(self.check(DAG_COMPATIBILITY_CHECK, dag))
+
+    def test_rollout_checks_scheduler_strictly_and_keeps_previous_webserver_compatible(self):
+        for serial_scheduler, invalid_webserver in ((False, False), (True, False), (False, True)):
+            with self.subTest(serial_scheduler=serial_scheduler, invalid_webserver=invalid_webserver), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                hashes = {}
+                for name in ('dag.py', 'airflow_control.py', 'legacy/traffic_region_training_worker.py'):
+                    path = root / 'airflow' / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text('synthetic source', encoding='utf-8')
+                    hashes[name] = digest(path.read_bytes())
+                scheduler, _ = self.dag(serial=serial_scheduler)
+                webserver, graph = self.dag(serial=True)
+                if invalid_webserver:
+                    graph['finalize_region_training'].remove('train_gru')
+                def deployment(name):
+                    return {'metadata': {'name': name}, 'spec': {'template': {'spec': {
+                        'containers': [{'name': name, 'image': 'reviewed-airflow', 'volumeMounts': [
+                            {'name': 'cloud-code', 'mountPath': '/opt/traffic-cloud'}]}],
+                        'volumes': [{'name': 'cloud-code', 'configMap': {'name': 'previous'}}]}}}}
+                def remote(target, source):
+                    name = target['metadata']['name']
+                    if source == AIRFLOW_FILES:
+                        return hashes
+                    if source in (DAG_CHECK, DAG_COMPATIBILITY_CHECK):
+                        self.assertEqual(source, DAG_CHECK if name == 'airflow-scheduler' else DAG_COMPATIBILITY_CHECK)
+                        return {'dag_valid': self.check(source, scheduler if name == 'airflow-scheduler' else webserver)}
+                    return {'executor': 'LocalExecutor'}
+                cluster = SimpleNamespace(call=Mock(return_value={}), deployment=deployment, wait=Mock())
+                op = SimpleNamespace(directory=root, release={'baseline': {'airflow_image': 'reviewed-airflow'}},
+                                     cluster=cluster, remote=Mock(side_effect=remote), change=Mock())
+                if serial_scheduler or invalid_webserver:
+                    with self.assertRaises(RuntimeError):
+                        RolesDelivery.airflow(op)
+                else:
+                    RolesDelivery.airflow(op)
+                    self.assertEqual(op.change.call_args.args[1], 'airflow-scheduler')
+                    self.assertEqual(op.change.call_count, 1)
+
+
+if __name__ == '__main__':
+    unittest.main()

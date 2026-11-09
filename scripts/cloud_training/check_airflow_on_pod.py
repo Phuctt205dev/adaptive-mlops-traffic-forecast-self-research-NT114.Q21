@@ -21,7 +21,10 @@ try:
    source=request["files"]["dag.py"].replace("/opt/traffic-cloud/airflow_control.py",str(root/"airflow_control.py")).replace("/opt/traffic-cloud/legacy/traffic_region_training_worker.py",str(root/"legacy.py"))
    proposed=load("dag_proposed_check",source)
   def graph(dag):return {t.task_id:sorted(t.downstream_task_ids) for t in dag.tasks}
-  if graph(reference.dag)!=graph(proposed.dag) or reference.dag.dag_id!=proposed.dag.dag_id or reference.dag.max_active_runs!=proposed.dag.max_active_runs:raise RuntimeError("DAG graph changed")
+  expected={"validate_training_conf":["train_gru","train_lstm","train_tree_models"],
+            "train_tree_models":["finalize_region_training"],"train_lstm":["finalize_region_training"],
+            "train_gru":["finalize_region_training"],"finalize_region_training":[]}
+  if graph(proposed.dag)!=expected or reference.dag.dag_id!=proposed.dag.dag_id or proposed.dag.max_active_runs!=1 or proposed.dag.max_active_tasks!=3:raise RuntimeError("Controlled DAG concurrency contract differs")
   if len(proposed.dag.tasks)!=5 or not all(t.on_failure_callback==proposed.failed for t in proposed.dag.tasks):raise RuntimeError("Failure callback missing")
   proposed.legacy.configuration=lambda context:context["conf"]
   proposed.legacy.execute_tree_training=lambda **context:{"status":"completed","route":"legacy"}

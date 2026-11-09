@@ -7,6 +7,24 @@ from src.cloud_training.airflow_control import WorkerUnavailable, finalize, trai
 
 
 class AirflowControlTests(unittest.TestCase):
+    def test_quiet_provider_queue_is_logged_without_inventing_ml_progress(self):
+        elapsed, polls = [0], [0]
+        def sleep(seconds):
+            elapsed[0] += seconds
+        def send(role, path, payload=None):
+            result = self.response()
+            result["branches"] = {"tree": {"observation": {"phase": "provider_wait", "provider_state": "QUEUED",
+                                                         "private": "PRIVATE_PROVIDER_TEXT"}}}
+            polls[0] += 1
+            if polls[0] == 24:
+                result.update(branch_state="ready", artifact_receipt=self.receipt("tree"))
+            return result
+        train(self.conf, "tree", send=send, sleep=sleep, clock=lambda: elapsed[0], log=self.logs.append)
+        observations = [line for line in self.logs if "phase=" in line]
+        self.assertEqual(len(observations), 3)  # At t=0,30,60; no poll-by-poll spam.
+        self.assertTrue(all("provider=QUEUED" in line for line in observations))
+        self.assertFalse(any("epoch" in line or "PRIVATE" in line for line in self.logs))
+
     def test_local_or_legacy_conf_is_rejected_before_dispatch(self):
         for configuration in ({**self.conf, 'training_backend': 'local'}, {**self.conf, '_execution_protocol': 1}):
             with self.subTest(configuration=configuration):
@@ -54,6 +72,21 @@ class AirflowControlTests(unittest.TestCase):
         self.assertNotIn("events", result)
         self.assertEqual(sum("epoch_completed" in item for item in self.logs), 1)
         self.assertEqual(self.calls[1][2]["after_sequence"], 1)
+
+    def test_concurrent_sibling_events_advance_cursor_without_wrong_branch_log(self):
+        def send(role, path, payload=None):
+            self.calls.append((role, path, payload))
+            result = self.response()
+            result["events"] = [{"sequence": 1, "branch": "lstm", "code": "fit_completed", "details": {}},
+                                {"sequence": 2, "branch": "tree", "code": "model_evaluated", "details": {}},
+                                {"sequence": 3, "branch": "gru", "code": "epoch_completed", "details": {"epoch": 9}}]
+            if path.endswith("/status"):
+                result.update(branch_state="ready", artifact_receipt=self.receipt("tree"))
+            return result
+        train(self.conf, "tree", send=send, sleep=lambda _: None, log=self.logs.append)
+        self.assertEqual(self.calls[1][2]["after_sequence"], 3)
+        self.assertTrue(any("model_evaluated" in line for line in self.logs))
+        self.assertFalse(any("fit_completed" in line or "epoch_completed" in line for line in self.logs))
     def test_failure_requests_stop_on_both_roles_without_local_fallback(self):
         def send(role, path, payload=None):
             self.calls.append((role, path, payload))

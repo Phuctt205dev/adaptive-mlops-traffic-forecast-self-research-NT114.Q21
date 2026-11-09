@@ -5,6 +5,7 @@ restart reconciles the same resource; it never submits a replacement fit.
 """
 import copy
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 import hashlib
 import json
@@ -44,7 +45,8 @@ def initial_ledger(snapshot, username):
             "notebook_cleaned": False, "dataset_cleaned": False}
 
 
-def download_file(url, path, *, limit, expected_size=None, expected_sha256=None, refresh_url=None):
+def download_file(url, path, *, limit, expected_size=None, expected_sha256=None, refresh_url=None,
+                  session=None, cancelled=lambda: False):
     """Stream only provider-issued HTTPS URLs; bound bytes before disk writes."""
     import requests
     path = Path(path)
@@ -54,6 +56,8 @@ def download_file(url, path, *, limit, expected_size=None, expected_sha256=None,
     if path.exists():
         raise ProviderError("Output destination already exists.", operation="output_download", category="destination_exists")
     for attempt in range(3):
+        if cancelled():
+            raise TrainingCancelled("Output reception was cancelled.")
         created, digest, size = False, hashlib.sha256(), 0
         if attempt and refresh_url:
             url = refresh_url()  # Fresh signed URL for the SAME version/file.
@@ -61,18 +65,22 @@ def download_file(url, path, *, limit, expected_size=None, expected_sha256=None,
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
             raise ProviderError("Kaggle returned an invalid output download URL.", operation="output_download", category="invalid_url")
         try:
-            with requests.get(url, stream=True, timeout=(10, 45)) as response:
+            with (session.get if session is not None else requests.get)(url, stream=True, timeout=(10, 45)) as response:
                 response.raise_for_status()
                 if response.headers.get("Content-Length") and int(response.headers["Content-Length"]) > limit:
                     raise ProviderError("Output download exceeds its byte limit.", operation="output_download", category="byte_budget")
                 with path.open("xb") as stream:
                     created = True
                     for chunk in response.iter_content(128 * 1024):
+                        if cancelled():
+                            raise TrainingCancelled("Output reception was cancelled.")
                         size += len(chunk)
                         if size > limit:
                             raise ProviderError("Output download exceeds its byte limit.", operation="output_download", category="byte_budget")
                         digest.update(chunk)
                         stream.write(chunk)
+            if cancelled():
+                raise TrainingCancelled("Output reception was cancelled.")
             if expected_size is not None and (size != expected_size or digest.hexdigest() != expected_sha256):
                 raise ProviderError("Downloaded output differs from its manifest.", operation="output_download", category="checksum_mismatch")
             return
@@ -134,11 +142,14 @@ class KaggleExecution:
         with self.measured(operation, byte_count=byte_count):
             result = self.transport.call(operation, **values)
             components = result.pop("_rpc_timing", None)
-            if components:
+            reused = result.pop("_rpc_session_reused", None)
+            if components or reused is not None:
                 with self._journal_lock:
                     telemetry = copy.deepcopy(self.ledger.get("telemetry", {}))
-                    for name, seconds in components.items():
+                    for name, seconds in (components or {}).items():
                         operation_timing(telemetry, name, seconds)
+                    if reused is not None:
+                        operation_timing(telemetry, "sdk_session_reuse" if reused else "sdk_session_start", 0)
                     self.save(telemetry=telemetry)
             return result
 
@@ -371,6 +382,8 @@ class KaggleExecution:
 
     def _drain(self, progress):
         if self.stream is None:
+            if self.ledger.get("child_completed_observed"):
+                return
             if self.monotonic() < self._next_stream_at:
                 return
             self.stream = self.transport.stream(self.reference, self.ledger["snapshot"]["context"])
@@ -419,13 +432,14 @@ class KaggleExecution:
                         self.phase("ml_running")
         if self.stream.reader_failed:
             raise ProviderError("Notebook progress stream could not be validated.")
-        if ended:
+        if ended or self.ledger.get("child_completed_observed"):
             self.stream.stop()
             self.stream = None
             self._next_stream_at = self.monotonic() + 3
 
     def run(self, progress, cancelled):
         deadline, renewal = self.clock() + 8 * 3600, 0
+        queued_polls = 0
         try:
             self.submit(cancelled)
             self._start_progress(progress)
@@ -458,7 +472,7 @@ class KaggleExecution:
                         raise ProviderError("The notebook ended without successful ML output.",
                                             operation='terminal_events', category=category)
                     self._stop_progress()
-                    return self.fetch()
+                    return self.fetch(cancelled=cancelled)
                 if self.clock() >= renewal:
                     # Do not Quick Save an execution already observed terminal.
                     # Schedule from the actual lease written, not from reply time.
@@ -467,7 +481,20 @@ class KaggleExecution:
                     self.drain(progress)
                     if renewal <= self.clock():
                         continue
-                self.sleep(3)
+                queued_polls = (queued_polls + 1 if state == "QUEUED" and self.last_sequence == 0
+                                and not self.ledger.get("child_running_observed") else 0)
+                delay = min(15, 3 * 2 ** min(queued_polls - 1, 3)) if queued_polls else 3
+                before = (self.last_sequence, bool(self.ledger.get("child_running_observed")), bool(self.ledger.get("child_completed_observed")))
+                # Poll Kaggle less during a confirmed queue. Cancellation,
+                # incoming ML events and lease renewal remain responsive.
+                for _ in range(delay):
+                    self.sleep(1)
+                    if cancelled():
+                        raise TrainingCancelled("The training run requested cancellation.")
+                    self.drain(progress)
+                    after = (self.last_sequence, bool(self.ledger.get("child_running_observed")), bool(self.ledger.get("child_completed_observed")))
+                    if after != before or self.clock() >= renewal:
+                        break
             raise ProviderError("Kaggle execution exceeded its monitoring deadline.")
         finally:
             try:
@@ -498,14 +525,27 @@ class KaggleExecution:
             return False
         return True
 
-    def fetch(self):
+    def fetch(self, *, cancelled=lambda: False):
         if not self.ledger.get("remote_stopped") or self.ledger.get("terminal") != "COMPLETE":
             raise ProviderError("Only completed output may be received.")
         self.phase("output_listing")
         files = self.call("output_list", reference=self.reference)["files"]
+        listing_lock = threading.RLock()
+        stop_transfers = threading.Event()
+        cancel_lock = threading.Lock()
+        cancellation = {"checked_at": float("-inf"), "requested": False}
+        def cancel_check():
+            if stop_transfers.is_set():
+                return True
+            with cancel_lock:
+                if self.monotonic() - cancellation["checked_at"] >= .5:
+                    cancellation.update(checked_at=self.monotonic(), requested=bool(cancelled()))
+                return cancellation["requested"]
         def listed_url(name):
             nonlocal files
             for retry in range(12):
+                if cancel_check():
+                    raise TrainingCancelled("Output listing was cancelled.")
                 if name in files:
                     return files[name]
                 if retry < 11:
@@ -515,8 +555,9 @@ class KaggleExecution:
 
         def refreshed_url(name):
             nonlocal files
-            files = self.call("output_list", reference=self.reference)["files"]
-            return listed_url(name)
+            with listing_lock:
+                files = self.call("output_list", reference=self.reference)["files"]
+                return listed_url(name)
         manifest_name = "output/manifest.json"
         manifest_url = listed_url(manifest_name)
         output = self.directory / "output"
@@ -524,7 +565,7 @@ class KaggleExecution:
         self.phase("output_download")
         with self.measured("manifest_download"):
             self.downloader(manifest_url, output / "manifest.json", limit=1024 * 1024,
-                            refresh_url=lambda: refreshed_url(manifest_name))
+                            refresh_url=lambda: refreshed_url(manifest_name), cancelled=cancel_check)
         manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
         if manifest.get("context") != self.ledger["snapshot"]["context"] or not isinstance(manifest.get("files"), list):
             raise ProviderError("Output manifest belongs to another attempt.", operation="output_manifest", category="context_mismatch")
@@ -535,19 +576,48 @@ class KaggleExecution:
             if not isinstance(item, dict) or set(item) != {"path", "size", "sha256"}:
                 raise ProviderError("Invalid output descriptor.", operation="output_manifest", category="invalid_descriptor")
             name = relative_path(item["path"])
-            if (name in names or type(item["size"]) is not int or item["size"] <= 0
+            if (name in names or name == "manifest.json" or name.startswith("manifest.json/")
+                    or any(name.startswith(other + "/") or other.startswith(name + "/") for other in names)
+                    or type(item["size"]) is not int or item["size"] <= 0
                     or not isinstance(item["sha256"], str) or not re.fullmatch("[a-f0-9]{64}", item["sha256"])):
                 raise ProviderError("Invalid output path, size or checksum.", operation="output_manifest", category="invalid_descriptor")
             names.add(name)
             total += item["size"]
         if total > MAX_BYTES:
             raise ProviderError("Output bytes exceed their budget.", operation="output_manifest", category="byte_budget")
-        for item in entries:
+        # Resolve the immutable manifest's paths first. A bounded pool then
+        # reuses one HTTP session per thread, never a shared mutable Session.
+        downloads = [(item, listed_url("output/" + item["path"])) for item in entries]
+        sessions, local, sessions_lock = [], threading.local(), threading.Lock()
+        def receive(item, url):
+            import requests
+            if not hasattr(local, "session"):
+                local.session = requests.Session()
+                with sessions_lock:
+                    sessions.append(local.session)
+            if cancel_check():
+                raise TrainingCancelled("Output reception was cancelled.")
             remote = "output/" + item["path"]
-            url = listed_url(remote)
             with self.measured("output_download", byte_count=item["size"]):
                 self.downloader(url, output / item["path"], limit=item["size"], expected_size=item["size"],
-                                expected_sha256=item["sha256"], refresh_url=lambda name=remote: refreshed_url(name))
+                                expected_sha256=item["sha256"], refresh_url=lambda: refreshed_url(remote),
+                                session=local.session, cancelled=cancel_check)
+        try:
+            with self.measured("output_transfer_wall"), ThreadPoolExecutor(max_workers=3, thread_name_prefix="kaggle-output") as pool:
+                futures = [pool.submit(receive, item, url) for item, url in downloads]
+                try:
+                    for future in as_completed(futures):
+                        future.result()
+                except Exception:
+                    stop_transfers.set()
+                    for future in futures:
+                        future.cancel()
+                    raise
+        finally:
+            for session in sessions:
+                session.close()
+        if cancel_check():
+            raise TrainingCancelled("Output verification was cancelled.")
         self.phase("output_verification")
         with self.measured("output_verification"):
             result = read_bundle(output, self.ledger["snapshot"]["context"])

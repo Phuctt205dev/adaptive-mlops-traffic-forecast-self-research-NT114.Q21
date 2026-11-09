@@ -19,6 +19,7 @@ from backend.app.services import training_execution as state
 from backend.app.services.model_registry import create_queued_training_run
 from backend.app.services.training_control import WorkerController, failure_facts
 from src.cloud_training.artifacts import write_bundle
+from src.cloud_training.kaggle_execution import TrainingCancelled
 
 
 class FakeStore:
@@ -59,6 +60,143 @@ class FakeCloud:
 
 
 class TrainingControlTests(unittest.TestCase):
+    def hold_branches(self, controller):
+        entered = {name: threading.Event() for name in ("lstm", "gru")}
+        gates = {name: threading.Event() for name in entered}
+        def execute(run_id, branch, handle):
+            entered[branch].set()
+            gates[branch].wait(timeout=5)
+            handle["stopped"] = True
+            controller.release(handle)
+        self.addCleanup(lambda: [gate.set() for gate in gates.values()])
+        return entered, gates, execute
+
+    def test_two_neural_attempts_share_one_exclusive_run_until_both_stop(self):
+        controller = self.controllers["recurrent"]
+        controller.status_state = {"busy": False, "operation_count": 0}
+        entered, gates, execute = self.hold_branches(controller)
+        with self.sessions() as db:
+            original = db.get(TrainingRun, self.run_id)
+            other = create_queued_training_run(db, original.dataset_id, original.requested_by,
+                original.configuration_json, "synthetic-other-run").id
+        with patch.object(controller, "execute", side_effect=execute):
+            first = controller.start(self.run_id, "lstm")
+            second = controller.start(self.run_id, "gru")
+            self.assertTrue(all(event.wait(timeout=1) for event in entered.values()))
+            self.assertNotEqual(first["attempt_id"], second["attempt_id"])
+            self.assertEqual(controller.start(self.run_id, "lstm")["attempt_id"], first["attempt_id"])
+            self.assertEqual(controller._lease_count, 2)
+            self.assertEqual(controller.status_state["active_cloud_branches"], 2)
+            with self.assertRaisesRegex(Exception, "already owns"):
+                controller.start(other, "lstm")
+            self.assertFalse(controller.operation_lock.acquire(blocking=False))
+            gates["lstm"].set()
+            controller.handles[(str(self.run_id), "lstm")]["thread"].join(timeout=2)
+            self.assertEqual(controller._lease_count, 1)
+            self.assertTrue(controller.status_state["busy"])
+            self.assertFalse(controller.operation_lock.acquire(blocking=False))
+            gates["gru"].set()
+            self.wait(controller)
+        self.assertEqual(controller._lease_count, 0)
+        self.assertFalse(controller.status_state["busy"])
+        self.assertEqual(controller.status_state["operation_count"], 2)
+        self.assertTrue(controller.operation_lock.acquire(blocking=False))
+        controller.operation_lock.release()
+
+    def test_second_branch_claim_failure_cannot_unlock_its_running_sibling(self):
+        controller = self.controllers["recurrent"]
+        entered, gates, execute = self.hold_branches(controller)
+        with patch.object(controller, "execute", side_effect=execute):
+            controller.start(self.run_id, "lstm")
+            self.assertTrue(entered["lstm"].wait(timeout=1))
+            with patch.object(state, "claim_branch", side_effect=RuntimeError("Synthetic DB refusal")):
+                with self.assertRaises(RuntimeError):
+                    controller.start(self.run_id, "gru")
+            self.assertEqual(controller._lease_count, 1)
+            self.assertFalse(controller.operation_lock.acquire(blocking=False))
+            gates["lstm"].set()
+            self.wait(controller)
+        self.assertTrue(controller.operation_lock.acquire(blocking=False))
+        controller.operation_lock.release()
+
+    def test_lost_start_snapshot_keeps_running_owner_and_retry_returns_same_attempt(self):
+        controller = self.controllers["recurrent"]
+        entered, gates, execute = self.hold_branches(controller)
+        with patch.object(controller, "execute", side_effect=execute):
+            with patch.object(controller, "response", side_effect=RuntimeError("Synthetic snapshot failure")):
+                with self.assertRaises(RuntimeError):
+                    controller.start(self.run_id, "lstm")
+            self.assertTrue(entered["lstm"].wait(timeout=1))
+            handle = controller.handles[(str(self.run_id), "lstm")]
+            self.assertEqual(controller._lease_count, 1)
+            self.assertFalse(controller.operation_lock.acquire(blocking=False))
+            self.assertEqual(controller.start(self.run_id, "lstm")["attempt_id"], handle["attempt_id"])
+            gates["lstm"].set()
+            self.wait(controller)
+
+    def test_cpu_verification_is_serial_and_waiting_sibling_can_cancel(self):
+        controller = self.controllers["recurrent"]
+        entered, gate, cancelled, errors = threading.Event(), threading.Event(), threading.Event(), []
+        def verify(*args):
+            entered.set()
+            gate.wait(timeout=3)
+        def waiting():
+            try:
+                controller.verify_serving(None, {}, {}, {}, cancelled.is_set)
+            except Exception as error:
+                errors.append(error)
+        with patch.object(controller, "_verify_serving", side_effect=verify) as checks:
+            first = threading.Thread(target=controller.verify_serving, args=(None, {}, {}, {}, lambda: False))
+            first.start()
+            self.assertTrue(entered.wait(timeout=1))
+            second = threading.Thread(target=waiting)
+            second.start()
+            cancelled.set()
+            second.join(timeout=2)
+            gate.set()
+            first.join(timeout=2)
+        self.assertFalse(first.is_alive() or second.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], TrainingCancelled)
+        checks.assert_called_once()
+
+    def test_concurrent_neural_failure_cancels_sibling_with_isolated_sdk_and_cleanup(self):
+        controller = self.controllers["recurrent"]
+        barrier, transports, observed_cancel = threading.Barrier(2), [], threading.Event()
+        def fork():
+            transport = SimpleNamespace(close=lambda: None)
+            transports.append(transport)
+            return transport
+        controller.transport = SimpleNamespace(fork=fork)
+        class ParallelCloud(FakeCloud):
+            def run(provider, progress, cancelled):
+                barrier.wait(timeout=3)
+                if provider.ledger["snapshot"]["context"]["branch"] == "lstm":
+                    raise RuntimeError("Synthetic first-branch failure")
+                for _ in range(300):
+                    if cancelled():
+                        observed_cancel.set()
+                        raise TrainingCancelled("Sibling failed")
+                    threading.Event().wait(.005)
+                raise AssertionError("Sibling did not see the run fence")
+        with patch("backend.app.services.training_control.KaggleExecution", ParallelCloud):
+            controller.start(self.run_id, "lstm")
+            controller.start(self.run_id, "gru")
+            self.wait(controller)
+            self.assertTrue(observed_cancel.is_set())
+            self.assertEqual(len(transports), 2)
+            self.assertIsNot(transports[0], transports[1])
+            self.assertFalse(controller.operation_lock.acquire(blocking=False))
+            controller.sweep()
+        with self.sessions() as db:
+            record = state.execution(db, self.run_id)
+            self.assertTrue(record.cancel_requested)
+            self.assertTrue(all(item["cleanup_confirmed"] for item in record.branches_json.values()))
+            self.assertEqual(record.state, "failed")
+        self.assertEqual(self.bridge.store.objects, {"models/active/preserve.pkl": b"preserve"})
+        self.assertTrue(controller.operation_lock.acquire(blocking=False))
+        controller.operation_lock.release()
+
     def test_failure_facts_keep_stage_and_type_without_exception_payload(self):
         try:
             raise FileNotFoundError('private-token-and-dataset-content')

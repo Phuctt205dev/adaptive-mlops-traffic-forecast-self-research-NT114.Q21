@@ -1,12 +1,14 @@
-"""Same training graph, with polling for explicitly opted-in protocol2 runs.
+"""Controlled Kaggle graph shared by Dataset and manual/automatic Drift runs.
 
-Mount the reviewed legacy DAG outside Airflow's scanned DAG directory.
-Automatic drift retraining keeps the legacy route until separately enabled.
+Tree, LSTM and GRU use separate attempts and notebooks. The two neural fits
+may overlap on Kaggle; their receipts still join at one publication gate.
 """
 import importlib.util
 from pathlib import Path
 import sys
 from airflow.exceptions import AirflowSkipException
+from airflow import DAG
+from airflow.operators.python import PythonOperator
 
 control_spec = importlib.util.spec_from_file_location("traffic_airflow_control", "/opt/traffic-cloud/airflow_control.py")
 control = importlib.util.module_from_spec(control_spec)
@@ -65,15 +67,18 @@ def failed(context):
         control.request_stop(conf)
 
 
-dag = legacy.dag
-dag.get_task("validate_training_conf").python_callable = validate_cloud
-# Airflow exposes description as read-only in the deployed version.
-# Keep the existing DAG metadata while replacing only the task callables.
-dag.get_task("train_tree_models").python_callable = tree
-dag.get_task("train_lstm").python_callable = recurrent
-dag.get_task("train_gru").python_callable = recurrent
-dag.get_task("finalize_region_training").python_callable = finalize
-dag.get_task("train_gru").trigger_rule = "none_failed"
-dag.get_task("finalize_region_training").trigger_rule = "none_failed"
+with DAG(dag_id=legacy.DAG_ID, description="Controlled Kaggle branches with independent neural sessions.",
+         start_date=legacy.dag.start_date, schedule_interval=None, catchup=False,
+         max_active_runs=1, max_active_tasks=3, tags=["traffic", "mlops", "training"]) as dag:
+    validate_training_conf = PythonOperator(task_id="validate_training_conf", python_callable=validate_cloud, retries=0)
+    train_tree_models = PythonOperator(task_id="train_tree_models", python_callable=tree, retries=0)
+    train_lstm = PythonOperator(task_id="train_lstm", python_callable=recurrent,
+                                op_kwargs={"model_name": "LSTM"}, retries=0)
+    train_gru = PythonOperator(task_id="train_gru", python_callable=recurrent,
+                               op_kwargs={"model_name": "GRU"}, trigger_rule="none_failed", retries=0)
+    finalize_region_training = PythonOperator(task_id="finalize_region_training", python_callable=finalize,
+                                              trigger_rule="none_failed", retries=0)
+    validate_training_conf >> [train_tree_models, train_lstm, train_gru]
+    [train_tree_models, train_lstm, train_gru] >> finalize_region_training
 for task in dag.tasks:
     task.on_failure_callback = failed

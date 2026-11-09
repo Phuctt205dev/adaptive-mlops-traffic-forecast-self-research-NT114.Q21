@@ -70,6 +70,7 @@ def train(conf, branch, *, send=post, sleep=time.sleep, clock=time.monotonic, lo
     role = "tree" if branch == "tree" else "recurrent"
     path = f"/training-runs/{conf['training_run_id']}/control/{branch}"
     deadline, cursor = clock() + 8 * 3600, 0
+    last_observation, next_observation = None, 0
     log("Training backend=" + conf["training_backend"] + "; branch=" + branch)
     try:
         # Repeating start is safe: the worker returns the same durable attempt.
@@ -94,14 +95,30 @@ def train(conf, branch, *, send=post, sleep=time.sleep, clock=time.monotonic, lo
                 if type(sequence) is not int or sequence <= cursor:
                     continue
                 cursor = sequence
+                if event.get("branch") not in (None, branch):
+                    continue
                 code = event.get("code")
                 if not isinstance(code, str) or not re.fullmatch("[a-z_]{1,60}", code):
                     continue
                 details = event.get("details") or {}
-                counters = [f"{key}={details[key]}" for key in ("fold", "folds", "epoch", "epochs")
+                counters = [f"{key}={details[key]}" for key in ("fold", "folds", "epoch", "epochs", "epochs_completed")
                             if type(details.get(key)) is int]
+                if details.get("fit_purpose") in {"cv_full", "cv_reduced", "cv_reused", "final"}:
+                    counters.append("fit_purpose=" + details["fit_purpose"])
                 # Only normalized protocol fields; never raw SDK/HTTP errors.
                 log("Training " + branch + ": " + code + ("; " + ", ".join(counters) if counters else ""))
+            # Quiet provider queues still need an honest status in Airflow.
+            # Use only normalized observations; a heartbeat is never ML work.
+            observation = ((response.get("branches") or {}).get(branch) or {}).get("observation") or {}
+            phase, provider = observation.get("phase"), observation.get("provider_state")
+            if not isinstance(phase, str) or not re.fullmatch("[a-z_]{1,60}", phase):
+                phase = "waiting_for_progress"
+            if provider not in {"QUEUED", "RUNNING", "COMPLETE", "ERROR", "CANCEL_ACKNOWLEDGED"}:
+                provider = "UNKNOWN"
+            observed = (phase, provider)
+            if observed != last_observation or clock() >= next_observation:
+                log("Training " + branch + ": phase=" + phase + "; provider=" + provider)
+                last_observation, next_observation = observed, clock() + 30
             if response.get("cancel_requested") or response.get("state") in {"failed", "cancelling"}:
                 raise RuntimeError("Training failed; stopping the remaining work. No backend fallback was started.")
             if response.get("branch_state") in {"ready", "skipped"}:

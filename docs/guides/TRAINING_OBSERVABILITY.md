@@ -91,6 +91,61 @@ an imagined lease starting when the HTTP reply finally arrives.
 Cancel requested, provider terminal, cloud cleanup and run-staging cleanup
 remain separate confirmations.
 
+## Package 2: execution overhead and independent neural sessions
+
+Dataset training, manual Drift retraining and automatic Drift retraining share
+these changes. The controlled DAG keeps one active run and permits three branch
+tasks. Tree, LSTM and GRU start independently and join at the same finalizer.
+LSTM and GRU retain separate notebooks, input snapshots, execution versions,
+leases, cancellation journals and receipts. Kaggle still decides when a queued
+notebook receives GPU capacity; parallel submission does not guarantee parallel
+GPU allocation or a particular end-to-end duration.
+
+The neural worker permits two cloud branches of the same run. Its existing
+exclusive operation lock remains held until the last owned branch stops; other
+runs and lifecycle operations cannot borrow that lock. Pending cancellation or
+cleanup continues to fence new work through durable state. CPU serving reload
+checks run one at a time to preserve the worker's memory budget. No additional
+local model fitting is enabled.
+
+Each attempt uses its own SDK RPC process and authenticated API, rotated after
+512 confirmed replies. Every request has a unique response identity and shares
+one deadline across bounded read retries. Timeout, invalid identity or broken
+IPC closes the process; ambiguous writes are never repeated by this layer.
+The existing exact-source/version reconciliation remains authoritative.
+Progress uses a separate process, reuses authentication on quiet reconnects and
+deduplicates replayed events before they enter the bounded worker queue.
+
+Confirmed queues without ML progress use status polling intervals of
+3, 6, 12 and at most 15 seconds, excluding request time. Real progress returns
+polling to 3 seconds. Waiting checks cancellation every second and wakes for
+progress or lease renewal. Airflow continues its 3-second worker heartbeat;
+its log shows phase/provider changes and a quiet status at most every 30 seconds,
+without relabeling sibling events or inventing epochs.
+
+Output reception validates the complete manifest first, then downloads at most
+three payload files together, using a separate HTTP session per transfer thread.
+Only manifest paths on the pinned execution version are accepted; byte limits,
+checksums, destination ownership and full bundle verification still apply.
+Failure or cancellation stops pending transfers and joins active transfers
+before returning. In-flight HTTP reads retain their existing bounded timeout.
+Signed URL refreshes are serialized and remain scoped to the same file/version.
+
+`sdk_session_start` and `sdk_session_reuse` count confirmed RPC replies using a
+new or reused session; they are not counts of failed authentication attempts.
+`output_transfer_wall` measures the payload pool's wall duration, excluding the
+manifest and listing. `output_download.seconds` sums individual transfers and
+can exceed wall duration when transfers overlap. `verify_serving` includes
+waiting for the serial CPU reload slot. These nested timings must not be added
+to queue time or compared as disjoint phases.
+
+Live comparison still requires the same dataset, window, CV, epochs, features,
+SHAP policy and runtime. Compare provider queue, child ML time, RPC overhead,
+output, cleanup and total duration separately; preserve candidate quality and
+active-model identity. A past 8–9 minute run with an unknown workload is context,
+not a controlled baseline. Use the existing CI/CD engine for release and a
+user-created run or the existing automatic schedule for live acceptance.
+
 ## Validation and release
 
 Run the backend unit suite (including neural tests in the official CI runtime),
@@ -104,4 +159,5 @@ Use the existing CI/CD engine, with backend Verify before dependent frontend
 publication. A user-created five-model run and the existing Drift schedule
 provide live acceptance after release. Do not submit real Kaggle jobs from CI,
 activate a candidate or clear Airflow/DB state to manufacture acceptance.
-Package 2 selects changes only after comparable live phase measurements exist.
+Package 2 is selected from the completed five-model run's phase measurements;
+offline validation alone does not establish its production speedup.

@@ -51,7 +51,7 @@ def add_control(app, base, operation_lock, project, finalizer):
     status_state = app.state.operation_status
     controller = WorkerController(SessionLocal, training, bridge, role=role, identity=identity,
         root="/app/models/distributed-training/v1", project=project, username=settings.kaggle_username,
-        transport=SDKTransport(settings.kaggle_username, python=os.environ.get("KAGGLE_PYTHON"), repository=Path('/app')),
+        transport=SDKTransport(settings.kaggle_username, python=os.environ.get("KAGGLE_PYTHON"), repository=Path('/app'), persistent=True),
         operation_lock=operation_lock, barrier_factory=lambda: database_barrier(engine), status_state=status_state,
         producer_profile=json.loads(Path('/app/role-release.json').read_text(encoding='utf-8'))['producer_profile'])
     original_register = training.register_training_result
@@ -174,7 +174,7 @@ def build_app(project):
             return training.finalize_parallel_training_run(training_run_id,_token,db)
     app=FastAPI(title='Kaggle '+role+' controller',docs_url=None,redoc_url=None)
     register_exception_handlers(app)
-    app.state.operation_status={'busy':False,'operation_count':0}
+    app.state.operation_status={'busy':False,'operation_count':0,'active_cloud_branches':0}
     app.add_middleware(WorkerGate,role=role,token=token)
     base=SimpleNamespace(NODES=NODES,REVISION='branch-execution-v1')
     add_control(app,base,threading.Lock(),Path(project),finalize)
@@ -194,5 +194,6 @@ def build_app(project):
         return {'status':'ok','role':role,'node':NODES[role],'pod':os.environ['POD_NAME'],
                 'runtime_revision':'branch-execution-v1','control_revision':'cloud-training-v1',
                 'artifact_bridge_installed':True,'receipt_finalize':True,'run_artifact_isolation':True,
-                'training_enabled':True,'max_active_operations':1,**app.state.operation_status}
+                'training_enabled':True,'max_active_operations':1,
+                'max_cloud_branches':2 if role=='recurrent' else 1,**app.state.operation_status}
     return app

@@ -71,13 +71,15 @@ class WorkerController:
         self.sessions, self.training, self.bridge = sessions, training, bridge
         self.role, self.identity, self.root = role, identity, Path(root)
         self.project, self.username = Path(project), username
-        self.transport = transport or SDKTransport(username, repository=self.project)
+        self.transport = transport or SDKTransport(username, repository=self.project, persistent=True)
         self.barrier_factory = barrier_factory
         self.status_state = status_state
         self.producer_profile = producer_profile
         self.worker = identity["pod"] + ":" + str(uuid.uuid4())
         self.operation_lock = operation_lock or threading.Lock()
         self.handles, self.handles_lock = {}, threading.RLock()
+        self._lease_count, self._lease_run_id = 0, None
+        self._verification_lock = threading.Lock()
         self.shutdown = threading.Event()
         self.watcher = None
 
@@ -112,12 +114,20 @@ class WorkerController:
             if any(self.owns(name) and item.get("attempt_id") and not item.get("cleanup_confirmed")
                    for pending_run in pending for name, item in pending_run.branches_json.items()):
                 raise ApplicationError("training_recovery_pending", "An earlier attempt is still being stopped or cleaned.", 503)
-            if not self.operation_lock.acquire(blocking=False):
+            joining = (self.role == "recurrent" and self._lease_run_id == str(run_id)
+                       and 0 < self._lease_count < 2)
+            acquired = not joining
+            if acquired and not self.operation_lock.acquire(blocking=False):
                 raise ApplicationError("training_worker_busy", "This worker already owns a training operation.", 503)
+            claimed_slot = False
             try:
                 current = state.claim_branch(db, run_id, branch, self.worker)
+                self._lease_count += 1
+                self._lease_run_id = str(run_id)
+                claimed_slot = True
                 if self.status_state is not None:
                     self.status_state["busy"] = True
+                    self.status_state["active_cloud_branches"] = self._lease_count
                     self.status_state["operation_count"] += 1
                 handle = {"attempt_id": current["attempt_id"], "process": None, "provider": None,
                           "lease_owned": True, "stopped": False, "thread": None, "failed": False, "barrier": None}
@@ -125,15 +135,18 @@ class WorkerController:
                 thread = threading.Thread(target=self.execute, args=(run_id, branch, handle), daemon=True)
                 handle["thread"] = thread
                 thread.start()
-                return self.response(db, run_id, branch)
             except Exception:
                 self.handles.pop(key, None)
-                self.operation_lock.release()
-                if self.status_state is not None:
-                    self.status_state["busy"] = False
+                if claimed_slot:
+                    self.release_slot()
+                elif acquired:
+                    self.operation_lock.release()
                 if current.get("attempt_id"):
                     state.fail_run(db, run_id, branch, current["attempt_id"], "worker_restarted")
                 raise
+            # A failed HTTP snapshot does not undo an already-started owner.
+            # Airflow can repeat start and obtain this same durable attempt.
+            return self.response(db, run_id, branch)
 
     def response(self, db, run_id, branch, after=0):
         run, dataset, _ = self.training._get_training_context(db, run_id)
@@ -179,6 +192,7 @@ class WorkerController:
         phase = 'prepare_input'
         preparation_start = time.monotonic()
         preparation = {"backend": "kaggle", "phase": "prepare_input", "telemetry": {}}
+        attempt_transport = None
         try:
             self.save_provider(run_id, branch, attempt, preparation)
             if self.barrier_factory:
@@ -236,7 +250,8 @@ class WorkerController:
                     "dataset_sha256": snapshot["files"]["dataset.csv"]["sha256"],
                     "source_sha256": snapshot["files"]["source.bin"]["sha256"], "registered_dataset_rows": registered_rows}
                 self.save_provider(run_id, branch, attempt, ledger)
-                provider = KaggleExecution(self.transport, directory, ledger,
+                attempt_transport = self.transport.fork() if hasattr(self.transport, "fork") else self.transport
+                provider = KaggleExecution(attempt_transport, directory, ledger,
                     lambda value: self.save_provider(run_id, branch, attempt, value))
                 handle["provider"] = provider
                 phase = 'provider_execution'
@@ -302,10 +317,25 @@ class WorkerController:
                                    isinstance(error, ProviderError) and error.category == "ml_execution_failed") else "training_failed")
             # Watcher retries network/cleanup failures without making a new fit.
         finally:
+            if attempt_transport is not None and attempt_transport is not self.transport:
+                attempt_transport.close()
             if handle["stopped"]:
                 self.release(handle)
 
     def verify_serving(self, directory, context, result, handle, cancelled):
+        # GPU fits may run together on Kaggle. Keep CPU reload checks serial on
+        # this worker so two TensorFlow imports do not double local memory peaks.
+        while not self._verification_lock.acquire(timeout=.25):
+            if cancelled():
+                raise TrainingCancelled("Serving verification was cancelled while waiting.")
+        try:
+            if cancelled():
+                raise TrainingCancelled("Serving verification was cancelled.")
+            return self._verify_serving(directory, context, result, handle, cancelled)
+        finally:
+            self._verification_lock.release()
+
+    def _verify_serving(self, directory, context, result, handle, cancelled):
         candidates = result.get("candidates", [])
         if not candidates:
             return
@@ -342,9 +372,17 @@ class WorkerController:
                     handle["failed"] = True
             if handle["lease_owned"]:
                 handle["lease_owned"] = False
-                self.operation_lock.release()
-                if self.status_state is not None:
-                    self.status_state["busy"] = False
+                self.release_slot()
+
+    def release_slot(self):
+        # Called under handles_lock. Cleanup/lifecycle still see one exclusive
+        # run lock until the last owned neural branch has stopped.
+        self._lease_count -= 1
+        if self._lease_count == 0:
+            self._lease_run_id = None
+            self.operation_lock.release()
+        if self.status_state is not None:
+            self.status_state.update(busy=self._lease_count > 0, active_cloud_branches=self._lease_count)
 
     def prefixes(self, run, branch):
         region, run_id = str(uuid.UUID(str(run.region_id))), str(uuid.UUID(str(run.id)))
@@ -391,12 +429,14 @@ class WorkerController:
                     run = db.get(TrainingRun, run_id)
                     exchange, serving = self.prefixes(run, branch)
                     completed = record.state == "completed"
+                attempt_transport = None
                 try:
                     directory = execution_directory(self.root, str(run_id), branch, attempt)
                     stopped = bool(handle and handle["stopped"])
                     if provider_journal["backend"] == "kaggle" and provider_journal.get("snapshot"):
                         directory.mkdir(parents=True, exist_ok=True)
-                        provider = KaggleExecution(self.transport, directory, provider_journal,
+                        attempt_transport = self.transport.fork() if hasattr(self.transport, "fork") else self.transport
+                        provider = KaggleExecution(attempt_transport, directory, provider_journal,
                             lambda value, r=run_id, b=branch, a=attempt: self.save_provider(r, b, a, value))
                         stopped = provider.stop()
                         with provider.measured("cloud_cleanup"):
@@ -441,6 +481,9 @@ class WorkerController:
                     # Retain cancelling/red state and retry. No raw SDK, path,
                     # token or dataset value enters application logs.
                     continue
+                finally:
+                    if attempt_transport is not None and attempt_transport is not self.transport:
+                        attempt_transport.close()
 
     def boot(self):
         self.root.mkdir(parents=True, exist_ok=True)

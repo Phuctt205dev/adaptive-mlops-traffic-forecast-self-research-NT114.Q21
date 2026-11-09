@@ -5,7 +5,7 @@ from pathlib import Path
 import threading
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 import uuid
 
 from src.cloud_training.control import CONTROL_PREFIX
@@ -353,6 +353,144 @@ class KaggleExecutionTests(unittest.TestCase):
         self.assertEqual(caught.exception.category, "file_not_ready")
         self.assertEqual(sum(op == "output_list" for op, _ in self.transport.calls), 12)
         self.assertEqual(sum(op == "kernel_push" for op, _ in self.transport.calls), 1)
+
+    def output_fixture(self, names):
+        self.provider.submit()
+        self.provider.save(remote_stopped=True, terminal="COMPLETE")
+        payloads = {name: ("synthetic:" + name).encode() for name in names}
+        manifest = {"schema": 1, "context": self.context,
+                    "result": {"verified": True, "files": [{"$training_file": name} for name in names]},
+                    "files": [{"path": name, "size": len(body), "sha256": hashlib.sha256(body).hexdigest()}
+                              for name, body in payloads.items()]}
+        self.transport.outputs = {"output/manifest.json": json.dumps(manifest).encode(),
+                                  **{"output/" + name: body for name, body in payloads.items()}}
+        return manifest
+
+    def test_output_pool_overlaps_at_most_three_files_and_closes_sessions(self):
+        self.output_fixture([f"model-{n}.bin" for n in range(6)])
+        active, peak, lock, barrier, sessions = [0], [0], threading.Lock(), threading.Barrier(3), []
+        def session():
+            instance = Mock()
+            sessions.append(instance)
+            return instance
+        def download(url, path, **options):
+            name = url.removeprefix("https://provider.example/")
+            if name != "output/manifest.json":
+                self.assertIsNotNone(options["session"])
+                with lock:
+                    active[0] += 1
+                    peak[0] = max(peak[0], active[0])
+                try:
+                    barrier.wait(timeout=3)
+                    self.assertEqual(options["refresh_url"](), url)
+                    path.write_bytes(self.transport.outputs[name])
+                finally:
+                    with lock:
+                        active[0] -= 1
+            else:
+                path.write_bytes(self.transport.outputs[name])
+        self.provider.downloader = download
+        with patch("requests.Session", side_effect=session):
+            result = self.provider.fetch()
+            self.assertTrue(result["verified"])
+            self.assertEqual(len(result["files"]), 6)
+        self.assertEqual(peak[0], 3)
+        self.assertEqual(active[0], 0)
+        self.assertEqual(len(sessions), 3)
+        for instance in sessions:
+            instance.close.assert_called_once()
+        operations = self.provider.ledger["telemetry"]["operations"]
+        self.assertEqual(operations["output_download"]["count"], 6)
+        self.assertEqual(operations["output_transfer_wall"]["count"], 1)
+        self.assertEqual({values["reference"] for op, values in self.transport.calls if op == "output_list"},
+                         {self.provider.reference})
+
+    def test_output_failure_drains_pool_before_verification_and_return(self):
+        self.output_fixture([f"model-{n}.bin" for n in range(6)])
+        barrier, exited, lock = threading.Barrier(3), [], threading.Lock()
+        def download(url, path, **options):
+            name = url.removeprefix("https://provider.example/")
+            if name == "output/manifest.json":
+                path.write_bytes(self.transport.outputs[name])
+                return
+            try:
+                barrier.wait(timeout=3)
+                if name.endswith("0.bin"):
+                    raise ProviderError("Synthetic checksum failure", category="checksum_mismatch")
+                # Another receiver must see the shared stop fence promptly.
+                for _ in range(2000):
+                    if options["cancelled"]():
+                        raise TrainingCancelled("Sibling transfer failed.")
+                    threading.Event().wait(.001)
+                raise AssertionError("Transfer did not observe the stop fence")
+            finally:
+                with lock:
+                    exited.append(name)
+        self.provider.downloader = download
+        with patch("src.cloud_training.kaggle_execution.read_bundle") as verify:
+            with self.assertRaises(ProviderError) as caught:
+                self.provider.fetch()
+        self.assertEqual(caught.exception.category, "checksum_mismatch")
+        verify.assert_not_called()
+        self.assertGreaterEqual(len(exited), 3)
+        self.assertFalse(any(t.name.startswith("kaggle-output") for t in threading.enumerate()))
+
+    def test_manifest_rejects_duplicate_or_colliding_destinations_before_payload_download(self):
+        manifest = self.output_fixture(["model.bin"])
+        original = manifest["files"][0]
+        for names in (["model.bin", "model.bin"], ["folder", "folder/model.bin"],
+                      ["manifest.json"], ["manifest.json/model.bin"]):
+            with self.subTest(names=names), tempfile.TemporaryDirectory() as root:
+                self.provider.directory = Path(root)
+                manifest["files"] = [{**original, "path": name} for name in names]
+                self.transport.outputs["output/manifest.json"] = json.dumps(manifest).encode()
+                def download(url, path, **options):
+                    self.assertTrue(str(url).endswith("/manifest.json"))
+                    path.write_bytes(self.transport.outputs["output/manifest.json"])
+                self.provider.downloader = Mock(side_effect=download)
+                with self.assertRaises(ProviderError):
+                    self.provider.fetch()
+                self.assertEqual(self.provider.downloader.call_count, 1)
+
+    def queued_clock(self):
+        elapsed = [1000]
+        self.provider.clock = self.provider.monotonic = lambda: elapsed[0]
+        self.provider.sleep = lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds)
+        self.transport.state = "QUEUED"
+        return elapsed
+
+    def test_long_queue_reduces_status_calls_while_renewing_the_actual_lease(self):
+        elapsed = self.queued_clock()
+        with self.assertRaises(TrainingCancelled):
+            self.provider.run(lambda _: None, lambda: elapsed[0] >= 1120)
+        statuses = [values["reference"] for op, values in self.transport.calls if op == "status"]
+        self.assertGreater(len(statuses), 5)
+        self.assertLess(len(statuses), 16)  # Previously ~40 over this fake 120s queue.
+        self.assertEqual(set(statuses), {self.provider.reference})
+        pushes = [values for op, values in self.transport.calls if op == "kernel_push"]
+        self.assertEqual(sum(not item["no_run"] for item in pushes), 1)
+        self.assertGreaterEqual(sum(item["no_run"] for item in pushes), 3)
+        self.assertEqual(elapsed[0], 1120)
+        self.assertGreater(self.provider.ledger["lease_until"], 1120)
+
+    def test_queued_backoff_is_interrupted_by_real_ml_events(self):
+        elapsed = self.queued_clock()
+        observations = []
+        original = self.transport.call
+        def call(operation, **values):
+            if operation == "status":
+                observations.append(elapsed[0])
+            return original(operation, **values)
+        self.transport.call = call
+        class LiveStream(FakeStream):
+            def drain(stream):
+                if elapsed[0] == 1022:
+                    stream.events = [{"sequence": 1}]
+                return super().drain()
+        self.transport.stream = lambda *args: LiveStream([])
+        with self.assertRaises(TrainingCancelled):
+            self.provider.run(lambda _: None, lambda: elapsed[0] >= 1024)
+        self.assertIn(1022, observations)
 
     def terminal_run(self, event_after=None):
         self.transport.state = 'COMPLETE'

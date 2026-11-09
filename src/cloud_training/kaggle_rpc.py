@@ -2,6 +2,7 @@
 import contextlib
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import time
@@ -253,7 +254,96 @@ def operation(api, name, request, stdout):
     raise ValueError("Unknown SDK operation.")
 
 
+class EventRelay:
+    """Deduplicate reconnect/replay before the bounded parent queue fills."""
+    def __init__(self, stdout, context):
+        self.stdout, self.context = stdout, context
+        self.sequence, self.controls = 0, {}
+
+    def write(self, line):
+        prefix = "TRAFFIC_EXECUTION_EVENT "
+        if not line.startswith(prefix):
+            return len(line)
+        packet = json.loads(line[len(prefix):])
+        if packet.get("context") != self.context:
+            raise ValueError("Stream context differs.")
+        event = packet["event"]
+        if "control" in event:
+            stage = event["control"]
+            stable = {key: value for key, value in event.items() if key != "worker_stream_time"}
+            fingerprint = json.dumps(stable, sort_keys=True, allow_nan=False)
+            if self.controls.get(stage) == fingerprint:
+                return len(line)
+            if stage not in self.controls and len(self.controls) >= 16:
+                raise ValueError("Control event budget exceeded.")
+            self.controls[stage] = fingerprint
+        else:
+            sequence = event.get("sequence")
+            if type(sequence) is not int or sequence < 1:
+                raise ValueError("Invalid stream sequence.")
+            if sequence <= self.sequence:
+                return len(line)
+            self.sequence = sequence
+        self.stdout.write(line)
+        return len(line)
+
+    def flush(self):
+        self.stdout.flush()
+
+
+def stream_events(api, request, stdout, *, clock=time.monotonic, sleep=time.sleep):
+    relay = EventRelay(stdout, request["context"])
+    deadline = clock() + 8 * 3600
+    while clock() < deadline:
+        operation(api, "events", request, relay)
+        sleep(3)  # Reuse authentication even if the provider ends a quiet stream.
+
+
+def serve(stdin, stdout, *, api_factory=api_for, handler=operation):
+    """Sequential framed requests reuse one authenticated SDK in this attempt.
+
+    The caller owns process death/deadlines. Streaming logs use a separate
+    process so a long-lived GET never blocks lease or cancellation requests.
+    """
+    api, username = None, None
+    for _ in range(20000):
+        raw = stdin.readline(1024 * 1024 + 1)
+        if not raw:
+            return 0
+        identity = None
+        try:
+            if len(raw.encode("utf-8")) > 1024 * 1024:
+                raise ValueError("SDK request is too large.")
+            request = json.loads(raw)
+            identity = request.get("request_id")
+            if not isinstance(identity, str) or not re.fullmatch("[a-f0-9]{32}", identity):
+                raise ValueError("Invalid RPC identity.")
+            if request.get("operation") == "events":
+                raise ValueError("Events require their own stream process.")
+            started = time.monotonic()
+            reused = api is not None
+            with contextlib.redirect_stdout(Discard()), contextlib.redirect_stderr(Discard()):
+                if api is None:
+                    api = api_factory(request["username"])
+                    username = request["username"]
+                elif request["username"] != username:
+                    raise ValueError("SDK session identity cannot change.")
+                authenticated = time.monotonic()
+                result = handler(api, request["operation"], request, Discard())
+            response = {"ok": True, "result": result, "session_reused": reused,
+                        "timing": {"sdk_import_auth": round(authenticated - started, 6) if not reused else 0,
+                                   "sdk_operation": round(time.monotonic() - authenticated, 6)}}
+        except (Exception, SystemExit) as error:
+            response = {"ok": False, "error_type": type(error).__name__,
+                        "http_status": getattr(getattr(error, "response", None), "status_code", None)}
+        stdout.write("TRAFFIC_RPC_RESPONSE " + json.dumps({"request_id": identity, **response}, allow_nan=False) + "\n")
+        stdout.flush()
+    return 0
+
+
 def main():
+    if sys.argv[1:] == ["--worker"]:
+        return serve(sys.stdin, sys.stdout)
     stdout = sys.stdout
     try:
         raw = sys.stdin.read(1024 * 1024 + 1)
@@ -264,6 +354,9 @@ def main():
         with contextlib.redirect_stdout(Discard()), contextlib.redirect_stderr(Discard()):
             api = api_for(request["username"])
             authenticated = time.monotonic()
+            if request["operation"] == "events":
+                stream_events(api, request, stdout)
+                return 0
             result = operation(api, request["operation"], request, stdout)
         timing = {"sdk_import_auth": round(authenticated - started, 6),
                   "sdk_operation": round(time.monotonic() - authenticated, 6)}

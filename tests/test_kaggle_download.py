@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 import requests
 
-from src.cloud_training.kaggle_execution import download_file
+from src.cloud_training.kaggle_execution import TrainingCancelled, download_file
 from src.cloud_training.kaggle_transport import ProviderError
 
 
@@ -28,6 +28,15 @@ class Response:
 
 
 class KaggleDownloadTests(unittest.TestCase):
+    def test_cancellation_during_chunks_removes_only_its_partial_file(self):
+        checks = [False, False, True]
+        with tempfile.TemporaryDirectory() as directory, patch("requests.get", return_value=Response([b"part", b"remaining"])) as get:
+            path = Path(directory) / "model.bin"
+            with self.assertRaises(TrainingCancelled):
+                download_file("https://provider.example/file", path, limit=100, cancelled=lambda: checks.pop(0))
+            self.assertFalse(path.exists())
+        get.assert_called_once()
+
     def test_expired_signed_url_is_refreshed_for_the_same_file(self):
         body = b"verified"
         expired = Response([])

@@ -22,11 +22,40 @@ thu live của bản nâng cấp phải tra handoff; tài liệu source không t
 | `.github/workflows/backend-deploy.yml` | Xác minh CI đúng repo/nhánh/commit và cổng duyệt thật, chờ `rke2-production`, giao job cho runner `rke2-deploy`. |
 | `.github/workflows/frontend-ci.yml` | Build frontend trong PR/push; workflow Pages hiện có tiếp tục phát hành frontend. |
 | `scripts/cicd/release.py` | Build/Verify gói source, hash từng file, ràng buộc commit/base image/schema. |
+| `scripts/cicd/prepare_artifact.py` | Tải ZIP trọn vẹn, kiểm digest GitHub, CRC, manifest và image binding trước khi nhận quyền CD. |
 | `scripts/cicd/deploy.py` | Plan/Apply/Verify/Rollback; patch có kiểm UID/resourceVersion/spec, không apply manifest nền. |
 | `scripts/cicd/maintenance.py` | Giữ khóa PostgreSQL trong Job riêng xuyên suốt thay pod để chặn yêu cầu công việc mới lọt giữa bước kiểm idle và rollout. |
 | `scripts/cicd/cache_sync.py` | Nạp uploader của release sau kiểm hash và compatibility contract; sidecar dùng cùng image digest với release. |
 | `scripts/cicd/setup.ps1` | Thiết lập một lần theo các action tường minh; mặc định Check chỉ đọc. |
 | `deployment/rke2/` | Baseline không chứa bí mật, RBAC và ba file runtime/DAG được theo dõi trong Git. |
+
+## Nhận gói triển khai trên Windows
+
+Runner chạy kiểm thử offline `tests.test_prepare_artifact`, sau đó helper tải
+artifact của đúng CI push đã thành công. Metadata phải khớp run/commit, có đúng
+một artifact chưa hết hạn và SHA256. Helper dùng GET từ
+[GitHub Artifact API](https://docs.github.com/en/rest/actions/artifacts), giữ TLS
+và bỏ Authorization khi chuyển sang host lưu trữ khác.
+
+ZIP được ghi vào `.part` trong thư mục tạm riêng, tối đa64MiB, ngân sách300s
+kiểm giữa các lần đọc, mỗi lần chờ mạng tối đa30s và tối đa3 lần tải.
+Tải thiếu/ngắt hoặc URL ký hết hạn có thể tải lại; checksum
+sai không được bỏ qua. Chỉ ZIP đủ byte và đúng digest mới được giải nén. CRC,
+số file/dung lượng giải nén, đường dẫn Windows, trùng tên và symlink đều được
+kiểm. Bộ `roles_release.verify` và kiểm image/deployment binding hiện có tiếp
+tục chạy; không sửa manifest/hash để chấp nhận gói thiếu.
+
+Thư mục hoàn chỉnh chỉ xuất hiện sau khi tất cả kiểm tra đạt. Workflow dùng
+thư mục đó để gọi `deliver.ps1`, vẫn kiểm lại gói trước Apply. `cd_state begin`
+chạy sau bước chuẩn bị, nên lỗi tải mới không giữ ownership của một transaction
+chưa triển khai. Chính sách chặn Auto khi workflow lỗi vẫn giữ nguyên.
+Lỗi khóa truy cập Windows lúc đổi tên thư mục được thử lại ngắn, có giới hạn;
+thư mục đích đã tồn tại vẫn được giữ nguyên và helper dừng.
+
+Bản sửa khâu tải không xóa ownership/chốt của các lượt CD đã lỗi trước đó.
+Phải đối soát bằng chứng phục hồi theo [CD Control](CD_MODES.md), không sửa
+state hoặc replay Apply thủ công. Helper chỉ tải/kiểm file local; không gọi
+Kubernetes, train model hoặc thay mode.
 
 ## Gói phát hành giai đoạn đầu
 

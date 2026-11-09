@@ -73,12 +73,22 @@ jobs:
         with:
           ref: ${{ needs.inspect.outputs.sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: ${{ needs.inspect.outputs.artifact }}
-          run-id: ${{ needs.inspect.outputs.run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: delivery-artifact
+      - name: Check artifact preparation on Windows with offline fixtures
+        shell: powershell
+        run: |
+          python -B -m unittest tests.test_prepare_artifact
+          if ($LASTEXITCODE -ne 0) { throw 'Windows artifact preparation checks failed.' }
+      - name: Download and verify the complete release before claiming CD
+        id: package
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_CI_RUN: ${{ needs.inspect.outputs.run_id }}
+          EXPECTED_COMMIT: ${{ needs.inspect.outputs.sha }}
+        run: |
+          $destination = Join-Path $env:RUNNER_TEMP ('traffic-artifact-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT)
+          python -B scripts/cicd/prepare_artifact.py --run-id $env:SOURCE_CI_RUN --commit $env:EXPECTED_COMMIT --destination $destination
+          if ($LASTEXITCODE -ne 0) { throw 'Release preparation failed before CD claim.' }
       - name: Claim this deployment under the saved mode
         id: claim
         shell: powershell
@@ -103,7 +113,8 @@ jobs:
           PUBLIC_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
           DELIVERY_OPERATION: ${{ needs.inspect.outputs.operation }}
           DELIVERY_MODE: ${{ needs.inspect.outputs.mode }}
-        run: ./scripts/cicd/deliver.ps1 -ArtifactDirectory ./delivery-artifact -ExpectedCommit $env:EXPECTED_COMMIT -Operation $env:DELIVERY_OPERATION
+          ARTIFACT_DIRECTORY: ${{ steps.package.outputs.artifact_directory }}
+        run: ./scripts/cicd/deliver.ps1 -ArtifactDirectory $env:ARTIFACT_DIRECTORY -ExpectedCommit $env:EXPECTED_COMMIT -Operation $env:DELIVERY_OPERATION
       - name: Summarize deployment and recovery separately
         if: always()
         shell: powershell

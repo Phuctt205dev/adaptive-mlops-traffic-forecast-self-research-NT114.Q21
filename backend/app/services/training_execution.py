@@ -32,7 +32,7 @@ ERROR_MESSAGES = {
     "publication_failed": "Training output could not be published safely.",
     "worker_restarted": "The worker restarted before this operation could be confirmed.",
     "cleanup_failed": "Temporary output cleanup has not been confirmed.",
-    "dispatch_failed": "Airflow could not confirm submission. This run is closed to new training work.",
+    "dispatch_failed": "Airflow did not complete training dispatch. This run is closed to new training work.",
 }
 
 
@@ -350,13 +350,19 @@ def fail_run(db, run_id, branch, attempt, error_code="training_failed"):
     return True
 
 
-def fail_dispatch(db, run_id):
+def fail_dispatch(db, run_id, *, unstarted_only=False, expected_dag_run_id=None):
     """Fence a rejected/ambiguous Airflow submission; never leave a queued run.
 
     If a worker started before the HTTP response was lost, use the same stop
     protocol as other failures. A late DAG cannot claim a closed run.
     """
     record = execution(db, run_id, lock=True)
+    run = db.get(TrainingRun, run_id)
+    if unstarted_only and (record.state != 'queued'
+            or any(b.get('attempt_id') for b in record.branches_json.values())
+            or run.airflow_dag_run_id != expected_dag_run_id):
+        db.rollback()
+        return False
     if record.state in {"completed", "failed"}:
         db.commit()
         return
@@ -373,10 +379,47 @@ def fail_dispatch(db, run_id):
     for value in models.values():
         value.update(state="cancelled", stage="not_started")
     record.branches_json, record.models_json = branches, models
-    run = db.get(TrainingRun, run_id)
     run.status, run.completed_at, run.error_message = TrainingRunStatus.FAILED, now(), record.error_message
     add_event(record, "dispatch_failed", level="error")
     db.commit()
+    return True
+
+
+def reconcile_dispatch(db, run_id, *, fetch=None):
+    """Close only proven failed, unstarted dispatches; reads of Monitor stay pure.
+
+    Worker ownership is rechecked under the row lock after the HTTP read. An
+    unavailable Airflow API, ordinary queue or already-started branch is never
+    evidence that training failed or stopped.
+    """
+    record = execution(db, run_id)
+    if (record.state != 'queued' or record.cancel_requested
+            or any(b.get('attempt_id') for b in record.branches_json.values())):
+        return False
+    created = record.created_at
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    if (now() - created).total_seconds() < 15:
+        return False
+    run = db.get(TrainingRun, run_id)
+    if not run.airflow_dag_run_id:
+        return False
+    dag_run_id = run.airflow_dag_run_id
+    try:
+        from backend.app.core.config import get_settings
+        from backend.app.services.airflow_client import get_dag_run
+        dag_id = get_settings().training_dag_id
+        value = (fetch or get_dag_run)(dag_id, dag_run_id)
+        if (value.get('dag_id') != dag_id or value.get('dag_run_id') != dag_run_id
+                or value.get('state') != 'failed'):
+            return False
+        conf = value.get('conf') or {}
+        if (conf.get('training_run_id') != str(run.id) or conf.get('region_id') != str(run.region_id)
+                or conf.get('dataset_id') != str(run.dataset_id)):
+            return False
+    except Exception:
+        return False  # Unknown status must stay unknown; no raw HTTP body is logged.
+    return fail_dispatch(db, run_id, unstarted_only=True, expected_dag_run_id=dag_run_id)
 
 
 def acknowledge_stop(db, run_id, branch, attempt, *, stopped, cleaned):

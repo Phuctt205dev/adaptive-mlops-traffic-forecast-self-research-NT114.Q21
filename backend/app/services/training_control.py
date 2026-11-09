@@ -80,6 +80,8 @@ class WorkerController:
         self.handles, self.handles_lock = {}, threading.RLock()
         self._lease_count, self._lease_run_id = 0, None
         self._verification_lock = threading.Lock()
+        self._next_dispatch_check = 0
+        self._dispatch_cursor = 0
         self.shutdown = threading.Event()
         self.watcher = None
 
@@ -394,8 +396,21 @@ class WorkerController:
     def sweep(self, *, recovery=False):
         with self.sessions() as db:
             records = db.scalars(select(TrainingExecution).where(TrainingExecution.dismissed.is_(False),
-                TrainingExecution.state.in_(["queued", "running", "finalizing", "cancelling", "completed"]))).all()
+                TrainingExecution.state.in_(["queued", "running", "finalizing", "cancelling", "completed"]))
+                .order_by(TrainingExecution.created_at, TrainingExecution.training_run_id)).all()
             ids = [record.training_run_id for record in records]
+            queued_ids = [record.training_run_id for record in records if record.state == 'queued'
+                          and not any(b.get('attempt_id') for b in record.branches_json.values())]
+        # One role owns this check. Bound API traffic independently of the 2s
+        # cleanup watcher; never use a read failure to cancel a real attempt.
+        if self.role == 'tree' and time.monotonic() >= self._next_dispatch_check:
+            self._next_dispatch_check = time.monotonic() + 15
+            selected = [queued_ids[(self._dispatch_cursor + offset) % len(queued_ids)]
+                        for offset in range(min(3, len(queued_ids)))]
+            self._dispatch_cursor += len(selected)
+            for run_id in selected:
+                with self.sessions() as db:
+                    state.reconcile_dispatch(db, run_id)
         for run_id in ids:
             for branch in state.BRANCHES:
                 if not self.owns(branch):

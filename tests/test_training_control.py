@@ -259,6 +259,28 @@ class TrainingControlTests(unittest.TestCase):
             thread.join(timeout=5)
             self.assertFalse(thread.is_alive())
 
+    def test_only_tree_watcher_checks_unstarted_dispatch_and_throttles_airflow_reads(self):
+        with patch('backend.app.services.training_control.time.monotonic', return_value=100), \
+             patch('backend.app.services.training_control.state.reconcile_dispatch') as reconcile:
+            self.controllers['recurrent'].sweep()
+            reconcile.assert_not_called()
+            self.controllers['tree'].sweep()
+            self.controllers['tree'].sweep()
+            reconcile.assert_called_once()
+            self.assertEqual(reconcile.call_args.args[1], self.run_id)
+        with patch('backend.app.services.training_control.time.monotonic', return_value=116), \
+             patch('backend.app.services.training_control.state.reconcile_dispatch') as reconcile:
+            self.controllers['tree'].sweep()
+            reconcile.assert_called_once()
+
+    def test_dispatch_watcher_reads_do_not_touch_cloud_or_artifact_cleanup(self):
+        with patch('backend.app.services.airflow_client.get_dag_run') as read, \
+             patch('backend.app.services.training_control.delete_prefix') as delete:
+            self.controllers['tree'].sweep()
+            read.assert_not_called()  # Fresh queued runs have a 15s grace period.
+            delete.assert_not_called()
+            self.assertEqual(self.bridge.store.objects, {'models/active/preserve.pkl': b'preserve'})
+
     def test_sibling_failure_blocks_publication_and_cleans_only_this_run(self):
         tree, neural = self.controllers["tree"], self.controllers["recurrent"]
         first = tree.start(self.run_id, "tree")

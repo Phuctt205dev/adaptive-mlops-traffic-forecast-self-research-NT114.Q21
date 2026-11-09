@@ -20,6 +20,20 @@ No ML event means "waiting for progress", not proof that a model is learning.
 Heartbeat freshness is separate from ML progress freshness. "Waiting for new
 ML progress" means no new event was received recently, not a diagnosed hang.
 
+The controlled DAG imports only the protocol helper, which never constructs
+an Airflow DAG. Importing the legacy DAG for utility functions also registers
+its identical DAG ID and can make task processes select legacy callables.
+Scheduler delivery checks use the real `DagBag`, require one candidate, and
+validate callables, failure callbacks, graph and neural model arguments.
+
+The tree worker also reconciles unstarted dispatches every 15 seconds, checking
+at most three queued runs per pass in rotation. Only an authenticated Airflow
+`failed` result with matching DAG/run/region/dataset identities can close a run
+that is still queued and has no attempt under the execution row lock. Unknown
+status, an ordinary queue or a concurrent worker claim does not close it.
+The normal `dispatch_failed` event then reaches the read-only Monitor; viewing
+the Monitor does not start training or write a recovery result.
+
 ## Optional event fields
 
 Existing events without timing remain readable. New events carry:

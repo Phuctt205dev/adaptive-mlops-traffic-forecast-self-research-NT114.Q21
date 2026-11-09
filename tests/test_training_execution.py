@@ -151,6 +151,73 @@ class TrainingExecutionTests(unittest.TestCase):
     def event(self, seq=1, model="random_forest_lag", stage="model_started", **details):
         return {"sequence": seq, "model": model, "stage": stage, **details}
 
+    def failed_dispatch(self):
+        record = service.execution(self.db, self.run.id)
+        record.created_at = datetime.now(UTC) - timedelta(minutes=1)
+        self.db.commit()
+        from backend.app.core.config import get_settings
+        return {'dag_id': get_settings().training_dag_id, 'dag_run_id': self.run.airflow_dag_run_id,
+                'state': 'failed', 'conf': {'training_run_id': str(self.run.id),
+                    'region_id': str(self.run.region_id), 'dataset_id': str(self.run.dataset_id)}}
+
+    def test_airflow_terminal_failure_closes_unstarted_dispatch_and_monitor_is_read_only(self):
+        document = self.failed_dispatch()
+        record = service.execution(self.db, self.run.id)
+        configuration = copy.deepcopy(self.run.configuration_json)
+        self.assertEqual(service.visible_runs(self.db, self.region.id)[0]['state'], 'queued')
+        self.assertEqual(record.state, 'queued')
+        self.assertTrue(service.reconcile_dispatch(self.db, self.run.id, fetch=lambda *args: document))
+        self.assertEqual(record.state, 'failed')
+        self.assertEqual(self.run.status, TrainingRunStatus.FAILED)
+        self.assertEqual(service.visible_runs(self.db, self.region.id)[0]['error_code'], 'dispatch_failed')
+        self.assertTrue(all(b['cleanup_confirmed'] for b in record.branches_json.values()))
+        self.assertEqual(self.run.configuration_json, configuration)
+        with self.assertRaises(ApplicationError): self.claim()
+
+    def test_unavailable_nonterminal_wrong_identity_or_conf_never_closes_dispatch(self):
+        document = self.failed_dispatch()
+        cases = [None, {**document, 'state': 'queued'}, {**document, 'state': 'running'},
+                 {**document, 'state': 'success'}, {**document, 'dag_run_id': 'another-run'},
+                 {**document, 'dag_id': 'another-dag'}, {**document, 'conf': {}},
+                 {**document, 'conf': {**document['conf'], 'training_run_id': str(uuid.uuid4())}}]
+        for item in cases:
+            with self.subTest(item=item):
+                def fetch(*args):
+                    if item is None: raise TimeoutError('PRIVATE HTTP RESPONSE')
+                    return item
+                self.assertFalse(service.reconcile_dispatch(self.db, self.run.id, fetch=fetch))
+                self.assertEqual(service.execution(self.db, self.run.id).state, 'queued')
+
+    def test_recent_queue_or_already_claimed_branch_is_not_polled_or_closed(self):
+        from unittest.mock import Mock
+        fetch = Mock()
+        self.assertFalse(service.reconcile_dispatch(self.db, self.run.id, fetch=fetch))
+        self.failed_dispatch()
+        self.claim()
+        self.assertFalse(service.reconcile_dispatch(self.db, self.run.id, fetch=fetch))
+        fetch.assert_not_called()
+
+    def test_worker_claimed_during_airflow_read_keeps_its_owner_and_open_run(self):
+        document = self.failed_dispatch()
+        attempts = []
+        def fetch(*args):
+            attempts.append(self.claim())
+            return document
+        self.assertFalse(service.reconcile_dispatch(self.db, self.run.id, fetch=fetch))
+        record = service.execution(self.db, self.run.id)
+        self.assertEqual(record.branches_json['tree']['attempt_id'], attempts[0])
+        self.assertEqual(record.state, 'running')
+        self.assertFalse(record.cancel_requested)
+
+    def test_dispatch_binding_changed_during_read_cannot_close_another_dag_run(self):
+        document = self.failed_dispatch()
+        def fetch(*args):
+            self.run.airflow_dag_run_id = 'changed-before-lock'
+            self.db.commit()
+            return document
+        self.assertFalse(service.reconcile_dispatch(self.db, self.run.id, fetch=fetch))
+        self.assertEqual(service.execution(self.db, self.run.id).state, 'queued')
+
     def test_backend_is_manual_and_validated(self):
         self.assertEqual(TrainingRunCreate(train_start_date="2026-01-01", train_end_date="2026-02-01").training_backend, "kaggle")
         with self.assertRaises(ValueError):

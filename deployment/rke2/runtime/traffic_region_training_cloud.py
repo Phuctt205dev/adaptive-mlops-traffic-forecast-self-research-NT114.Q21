@@ -4,8 +4,7 @@ Tree, LSTM and GRU use separate attempts and notebooks. The two neural fits
 may overlap on Kaggle; their receipts still join at one publication gate.
 """
 import importlib.util
-from pathlib import Path
-import sys
+from datetime import datetime
 from airflow.exceptions import AirflowSkipException
 from airflow import DAG
 from airflow.operators.python import PythonOperator
@@ -14,31 +13,25 @@ control_spec = importlib.util.spec_from_file_location("traffic_airflow_control",
 control = importlib.util.module_from_spec(control_spec)
 control_spec.loader.exec_module(control)
 
-LEGACY = Path("/opt/traffic-cloud/legacy/traffic_region_training_worker.py")
-spec = importlib.util.spec_from_file_location("traffic_training_legacy", LEGACY)
-legacy = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(legacy)
-
-
 def complete_or_skip(response, conf, branch, context):
     if response.get("status") == "skipped":
         # PythonOperator will not push its return value after SkipException.
         # Persist the verified empty receipt first; finalize still needs it.
-        legacy.receipt(response, conf, branch)
+        control.receipt(response, conf, branch)
         context["ti"].xcom_push(key="return_value", value=response)
         raise AirflowSkipException(f"{branch} was not selected; no model was trained.")
     return response
 
 
 def cloud_configuration(context):
-    conf = legacy.configuration(context)
+    conf = control.configuration(context)
     if conf.get("training_backend") != "kaggle" or conf.get("_execution_protocol") != 2:
         raise ValueError("This DAG accepts controlled Kaggle training only.")
     return conf
 
 
 def validate_cloud(**context):
-    legacy.validate_conf(**context)
+    control.validate_conf(**context)
     cloud_configuration(context)
 
 
@@ -56,19 +49,19 @@ def recurrent(model_name, **context):
 
 def finalize(**context):
     conf = cloud_configuration(context)
-    receipts = {branch: legacy.receipt(context["ti"].xcom_pull(task_ids=task), conf, branch)
-                for branch, task in legacy.TASKS.items()}
+    receipts = {branch: control.receipt(context["ti"].xcom_pull(task_ids=task), conf, branch)
+                for branch, task in control.TASKS.items()}
     return control.finalize(conf, receipts)
 
 
 def failed(context):
-    conf = legacy.configuration(context)
+    conf = control.configuration(context)
     if conf.get("_execution_protocol") == 2 and conf.get('training_backend') == 'kaggle':
         control.request_stop(conf)
 
 
-with DAG(dag_id=legacy.DAG_ID, description="Controlled Kaggle branches with independent neural sessions.",
-         start_date=legacy.dag.start_date, schedule_interval=None, catchup=False,
+with DAG(dag_id=control.DAG_ID, description="Controlled Kaggle branches with independent neural sessions.",
+         start_date=datetime(2026, 1, 1), schedule_interval=None, catchup=False,
          max_active_runs=1, max_active_tasks=3, tags=["traffic", "mlops", "training"]) as dag:
     validate_training_conf = PythonOperator(task_id="validate_training_conf", python_callable=validate_cloud, retries=0)
     train_tree_models = PythonOperator(task_id="train_tree_models", python_callable=tree, retries=0)

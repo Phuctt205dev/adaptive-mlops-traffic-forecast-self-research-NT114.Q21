@@ -26,8 +26,26 @@ try:
             "train_gru":["finalize_region_training"],"finalize_region_training":[]}
   if graph(proposed.dag)!=expected or reference.dag.dag_id!=proposed.dag.dag_id or proposed.dag.max_active_runs!=1 or proposed.dag.max_active_tasks!=3:raise RuntimeError("Controlled DAG concurrency contract differs")
   if len(proposed.dag.tasks)!=5 or not all(t.on_failure_callback==proposed.failed for t in proposed.dag.tasks):raise RuntimeError("Failure callback missing")
-  proposed.legacy.configuration=lambda context:context["conf"]
-  proposed.legacy.execute_tree_training=lambda **context:{"status":"completed","route":"legacy"}
+  # Airflow task execution uses DagBag, not module.dag. Importing a helper
+  # containing another DAG can auto-register the same ID and overwrite it.
+  from airflow.models import DagBag
+  class CheckedBag(DagBag):
+   def __init__(self,*args,**kwargs):
+    self.candidates=[];super().__init__(*args,**kwargs)
+   def bag_dag(self,dag,root_dag):
+    if dag.dag_id=='traffic_region_training':self.candidates.append(dag)
+    return super().bag_dag(dag,root_dag)
+  path=root/'traffic_region_training.py';path.write_text(source,encoding='utf-8')
+  expected_calls={'validate_training_conf':'validate_cloud','train_tree_models':'tree','train_lstm':'recurrent','train_gru':'recurrent','finalize_region_training':'finalize'}
+  for _ in range(8):
+   with patch('requests.sessions.Session.request',side_effect=AssertionError('Import cannot contact training services')):
+    bag=CheckedBag(dag_folder=str(path),include_examples=False)
+   loaded=bag.dags.get('traffic_region_training')
+   if bag.import_errors or len(bag.candidates)!=1 or loaded is None:raise RuntimeError('Ambiguous DagBag registration')
+   if graph(loaded)!=expected or loaded.max_active_tasks!=3:raise RuntimeError('DagBag graph differs')
+   if {t.task_id:t.python_callable.__name__ for t in loaded.tasks}!=expected_calls:raise RuntimeError('DagBag selected legacy callables')
+   if not all(getattr(t.on_failure_callback,'__name__',None)=='failed' for t in loaded.tasks):raise RuntimeError('DagBag failure callback missing')
+  proposed.control.configuration=lambda context:context["conf"]
   proposed.control.train=lambda conf,branch:{"status":"ready","route":"controlled:"+branch}
   stop_requests=[];proposed.control.request_stop=lambda conf:stop_requests.append(conf)
   for invalid in ({},{'_execution_protocol':2,'training_backend':'local'},{'_execution_protocol':1,'training_backend':'kaggle'}):
@@ -55,7 +73,7 @@ try:
      chosen=any(name.endswith('_lag') for name in selected) if branch=='tree' else branch in selected
      return {'training_run_id':conf['training_run_id'],'branch':branch,'status':'ready' if chosen else 'skipped','artifact_receipt':receipt}
     proposed.control.train=response
-    for branch,task in proposed.legacy.TASKS.items():
+    for branch,task in proposed.control.TASKS.items():
      ti=TI(task)
      try:
       value=proposed.tree(conf=conf,ti=ti) if branch=='tree' else proposed.recurrent(branch.upper(),conf=conf,ti=ti)
@@ -68,6 +86,7 @@ try:
    skip_contract=True
   proof={"airflow_source_verified":True,"dag_id":proposed.dag.dag_id,"task_graph":graph(proposed.dag),"local_dispatch_blocked":True,"task_executed":False,"deployment_changed":False,"configmaps_sha256":request["configmaps_sha256"]}
   proof['skipped_receipts_verified']=skip_contract
+  proof['real_dagbag_verified']=True;proof['dagbag_loads']=8;proof['dag_candidates']=1
  print("TRAFFIC_AIRFLOW_CHECK "+json.dumps(proof))
 except Exception as error:
  frames=traceback.extract_tb(error.__traceback__)

@@ -4,7 +4,8 @@ import io
 import json
 from pathlib import Path
 import tempfile
-from types import SimpleNamespace
+import copy
+from types import SimpleNamespace, ModuleType
 import unittest
 from unittest.mock import Mock, patch
 
@@ -22,16 +23,51 @@ class AirflowDeliveryContractTests(unittest.TestCase):
             graph.update(train_gru={'train_lstm'}, finalize_region_training={'train_tree_models', 'train_gru'})
         dag = SimpleNamespace(dag_id='traffic_region_training', max_active_runs=1,
                               max_active_tasks=2 if serial else 3, task_ids=list(graph))
-        dag.get_task = lambda name: SimpleNamespace(upstream_task_ids=graph[name])
+        def function(name):
+            scope = {}
+            exec(compile('def ' + name + '(): pass', '/opt/airflow/dags/traffic_region_training.py', 'exec'), scope)
+            return scope[name]
+        names = {'validate_training_conf': 'validate_cloud', 'train_tree_models': 'tree',
+                 'train_lstm': 'recurrent', 'train_gru': 'recurrent', 'finalize_region_training': 'finalize'}
+        tasks = {name: SimpleNamespace(task_id=name, python_callable=function(call), on_failure_callback=function('failed'),
+                   op_kwargs={'model_name': {'train_lstm': 'LSTM', 'train_gru': 'GRU'}.get(name)},
+                   trigger_rule='none_failed' if name in {'train_gru', 'finalize_region_training'} else 'all_success')
+                 for name, call in names.items()}
+        dag.tasks = list(tasks.values())
+        dag.get_task = lambda name: SimpleNamespace(**vars(tasks.get(name, SimpleNamespace())), upstream_task_ids=graph[name])
         return dag, graph
 
-    def check(self, probe, dag):
+    def check(self, probe, dag, *, candidates=None, errors=None):
         output = io.StringIO()
-        spec = SimpleNamespace(loader=SimpleNamespace(exec_module=Mock()))
-        with patch('importlib.util.spec_from_file_location', return_value=spec), \
-             patch('importlib.util.module_from_spec', return_value=SimpleNamespace(dag=dag)), redirect_stdout(output):
+        class DagBag:
+            def __init__(self, **kwargs):
+                self.dags = {}; self.import_errors = errors or {}
+                for value in candidates if candidates is not None else [dag]:
+                    self.bag_dag(value, value)
+            def bag_dag(self, dag, root_dag):
+                self.dags[dag.dag_id] = dag
+        airflow, models = ModuleType('airflow'), ModuleType('airflow.models')
+        models.DagBag = DagBag
+        with patch.dict('sys.modules', {'airflow': airflow, 'airflow.models': models}), redirect_stdout(output):
             exec(probe, {})
         return json.loads(output.getvalue())['dag_valid']
+
+    def test_duplicate_autoregistration_fails_even_if_selected_graph_is_correct(self):
+        current, _ = self.dag()
+        for candidates in ([current, copy.deepcopy(current)], [self.dag(serial=True)[0], current]):
+            self.assertFalse(self.check(DAG_CHECK, current, candidates=candidates))
+            self.assertTrue(self.check(DAG_COMPATIBILITY_CHECK, current, candidates=candidates))
+
+    def test_wrong_callable_missing_callback_wrong_model_or_import_error_blocks_scheduler(self):
+        for broken in ('callable', 'callback', 'kwargs', 'source', 'import'):
+            with self.subTest(broken=broken):
+                dag, _ = self.dag()
+                task = dag.tasks[1]
+                if broken == 'callable': task.python_callable = lambda: None
+                elif broken == 'callback': task.on_failure_callback = None
+                elif broken == 'kwargs': dag.tasks[2].op_kwargs['model_name'] = 'GRU'
+                elif broken == 'source': task.python_callable.__code__ = task.python_callable.__code__.replace(co_filename='/unexpected.py')
+                self.assertFalse(self.check(DAG_CHECK, dag, errors={'dag.py': 'Parse failed'} if broken == 'import' else None))
 
     def test_scheduler_requires_parallel_graph_and_webserver_accepts_both_reviewed_versions(self):
         current, _ = self.dag()

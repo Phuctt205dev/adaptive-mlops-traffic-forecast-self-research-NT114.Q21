@@ -8,6 +8,31 @@ import requests
 
 URLS = {"tree": "http://traffic-training-tree:8000", "recurrent": "http://traffic-training-worker:8000"}
 NODES = {"tree": "mlops-node-02", "recurrent": "mlops-node-03"}
+DAG_ID = "traffic_region_training"
+TASKS = {"tree": "train_tree_models", "lstm": "train_lstm", "gru": "train_gru"}
+
+
+def configuration(context):
+    """Shared validation without importing or registering another Airflow DAG."""
+    conf = context["dag_run"].conf or {}
+    for name in ("region_id", "dataset_id", "training_run_id"):
+        if str(uuid.UUID(str(conf.get(name)))) != conf.get(name):
+            raise ValueError("DAG requires canonical region/dataset/training UUIDs.")
+    return conf
+
+
+def validate_conf(**context):
+    conf = configuration(context)
+    if not conf.get("train_start_date") or not conf.get("train_end_date"):
+        raise ValueError("DAG requires training start/end dates.")
+    selected = conf.get("selected_models")
+    supported = {"random_forest_lag", "xgboost_lag", "lightgbm_lag", "lstm", "gru"}
+    if not isinstance(selected, list) or not selected or any(not isinstance(v, str) or v not in supported for v in selected):
+        raise ValueError("selected_models must contain supported model names.")
+
+
+def receipt(response, conf, branch):
+    return check_receipt(response.get("artifact_receipt") if isinstance(response, dict) else None, conf, branch)
 
 
 class WorkerUnavailable(RuntimeError):

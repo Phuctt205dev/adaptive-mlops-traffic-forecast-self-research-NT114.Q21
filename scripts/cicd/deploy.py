@@ -35,11 +35,10 @@ AIRFLOW_FILES = ("import hashlib,json;from pathlib import Path;"
 
 
 def airflow_dag_check(*, compatibility=False):
-    """Require the new scheduler graph; allow the previous graph for the UI.
+    """Check the DAG selected by Airflow, including hidden auto-registration.
 
-    LocalExecutor runs tasks only on the scheduler. The webserver keeps serving
-    queued requests during delivery and may still import the preceding source.
-    Both supported graphs use identical task IDs and the receipt finalizer.
+    Only the UI webserver may retain the reviewed preceding source. Scheduler
+    execution requires exactly one candidate and controlled callables/callbacks.
     """
     parallel = {'validate_training_conf': [], 'train_tree_models': ['validate_training_conf'],
                 'train_lstm': ['validate_training_conf'], 'train_gru': ['validate_training_conf'],
@@ -49,14 +48,43 @@ def airflow_dag_check(*, compatibility=False):
         serial = {**parallel, 'train_gru': ['train_lstm'],
                   'finalize_region_training': ['train_gru', 'train_tree_models']}
         profiles.append((serial, 2))
-    return ("import importlib.util,json;"
-            "s=importlib.util.spec_from_file_location('delivery_dag_check','/opt/airflow/dags/traffic_region_training.py');"
-            "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);d=m.dag;"
-            "profiles=" + repr(profiles) + ";"
-            "graph={name:sorted(d.get_task(name).upstream_task_ids) for name in d.task_ids};"
-            "ok=d.dag_id=='traffic_region_training' and d.max_active_runs==1 "
-            "and any(graph==expected and d.max_active_tasks==limit for expected,limit in profiles);"
-            "print(json.dumps({'dag_valid':ok}))")
+    return '''import contextlib,io,json
+from airflow.models import DagBag
+path='/opt/airflow/dags/traffic_region_training.py'
+class CheckedDagBag(DagBag):
+ def __init__(self,*args,**kwargs):
+  self.candidates=[]
+  super().__init__(*args,**kwargs)
+ def bag_dag(self,dag,root_dag):
+  if dag.dag_id=='traffic_region_training':self.candidates.append(dag)
+  return super().bag_dag(dag,root_dag)
+with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
+ bag=CheckedDagBag(dag_folder=path,include_examples=False)
+profiles=''' + repr(profiles) + '''
+compatibility=''' + repr(compatibility) + '''
+controlled={'validate_training_conf':'validate_cloud','train_tree_models':'tree',
+            'train_lstm':'recurrent','train_gru':'recurrent','finalize_region_training':'finalize'}
+legacy={'validate_training_conf':'validate_conf','train_tree_models':'execute_tree_training',
+        'train_lstm':'execute_recurrent_training','train_gru':'execute_recurrent_training',
+        'finalize_region_training':'finalize_training'}
+def valid(dag):
+ graph={name:sorted(dag.get_task(name).upstream_task_ids) for name in dag.task_ids}
+ if dag.max_active_runs!=1 or not any(graph==expected and dag.max_active_tasks==limit for expected,limit in profiles):return False
+ names={t.task_id:getattr(getattr(t,'python_callable',None),'__name__',None) for t in dag.tasks}
+ if compatibility and names==legacy:return True
+ if names!=controlled:return False
+ for task in dag.tasks:
+  call=task.python_callable;callback=task.on_failure_callback
+  if (getattr(getattr(call,'__code__',None),'co_filename',None)!=path
+      or getattr(callback,'__name__',None)!='failed'
+      or getattr(getattr(callback,'__code__',None),'co_filename',None)!=path):return False
+ if any(dag.get_task(task).op_kwargs.get('model_name')!=name for task,name in [('train_lstm','LSTM'),('train_gru','GRU')]):return False
+ return dag.get_task('train_gru').trigger_rule=='none_failed' and dag.get_task('finalize_region_training').trigger_rule=='none_failed'
+selected=bag.dags.get('traffic_region_training')
+ok=(not bag.import_errors and selected is not None and bool(bag.candidates)
+    and (compatibility or len(bag.candidates)==1) and all(valid(d) for d in bag.candidates))
+print(json.dumps({'dag_valid':ok,'loader':'DagBag','dag_candidates':len(bag.candidates)}))
+'''
 
 
 DAG_CHECK = airflow_dag_check()

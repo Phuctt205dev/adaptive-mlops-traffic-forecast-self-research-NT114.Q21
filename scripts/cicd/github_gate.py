@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import base64
+import ssl
 import sys
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -24,7 +25,10 @@ def get(path):
                       "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
                       'Cache-Control': 'no-cache'})
     try:
-        with urlopen(request, timeout=30) as response:
+        context = ssl.create_default_context()
+        if os.name == 'nt' and os.environ.get('NODE_EXTRA_CA_CERTS'):
+            context.load_verify_locations(cafile=os.environ['NODE_EXTRA_CA_CERTS'])
+        with urlopen(request, timeout=30, context=context) as response:
             raw = response.read(2 * 1024 * 1024 + 1)
             if len(raw) > 2 * 1024 * 1024:
                 raise ValueError('GitHub response exceeds its budget.')
@@ -35,7 +39,8 @@ def get(path):
         raise RuntimeError("GitHub API check failed (HTTP " + str(error.code) + "); token/body omitted.") from None
 
 
-def validate(repository, run_id, *, fetch=get, operation='release', coverage=check_run):
+def validate(repository, run_id, *, fetch=get, operation='release', coverage=check_run,
+             expected_commit=None, expected_attempt=None):
     if operation not in {'release','migrate-role-runtime-v1'}:
         raise ValueError('Unsupported deployment operation')
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or not str(run_id).isdigit():
@@ -48,6 +53,11 @@ def validate(repository, run_id, *, fetch=get, operation='release', coverage=che
             or (run.get("head_repository") or {}).get("full_name", "").lower() != repository.lower()
             or not re.fullmatch(r"[0-9a-f]{40}", run.get("head_sha", ""))):
         raise ValueError("Only successful default-branch push runs from this repository may deploy.")
+    if expected_commit is not None and run['head_sha'] != expected_commit:
+        raise ValueError('The source CI commit differs from the selected completion event.')
+    if expected_attempt is not None and (type(expected_attempt) is not int or expected_attempt < 1
+                                         or run.get('run_attempt') != expected_attempt):
+        raise ValueError('The source CI attempt changed; wait for its own successful completion.')
     controller = fetch(f'repos/{repository}/contents/scripts/cicd/cd_state.py?ref={run["head_sha"]}')
     if controller.get('type') != 'file':
         raise ValueError('This CI does not contain the mode-aware delivery controller.')
@@ -92,18 +102,50 @@ def validate(repository, run_id, *, fetch=get, operation='release', coverage=che
         raise ValueError('Runtime migration requires full CI coverage')
     return {"sha": run["head_sha"], "run_id": str(run_id), "artifact": "backend-release-" + run["head_sha"],
             'mode': mode, 'epoch': str(state['epoch']), 'environment': environment_name, 'ci_number': str(run['run_number']),
-            'operation':operation}
+            'ci_attempt': str(run['run_attempt']), 'operation':operation}
+
+
+def recheck_source(repository, choice, *, fetch=get):
+    """A rerun started while coverage/policy were being checked invalidates this choice."""
+    run = fetch(f'repos/{repository}/actions/runs/{choice["run_id"]}')
+    if (str(run.get('id')) != choice['run_id'] or run.get('head_sha') != choice['sha']
+            or type(run.get('run_attempt')) is not int or str(run['run_attempt']) != choice['ci_attempt']
+            or run.get('status') != 'completed' or run.get('conclusion') != 'success'
+            or run.get('event') != 'push'
+            or (run.get('head_repository') or {}).get('full_name', '').lower() != repository.lower()):
+        raise ValueError('The selected CI is no longer the same successful completed attempt.')
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument('--expected-commit')
+    parser.add_argument('--expected-attempt', type=int)
+    parser.add_argument('--check-only', action='store_true', help='Recheck the pinned CI before claim without changing step outputs.')
     args = parser.parse_args()
-    result = validate(os.environ["GITHUB_REPOSITORY"], args.run_id,operation=os.environ.get('DELIVERY_OPERATION','release'))
+    commit = args.expected_commit or os.environ.get('CI_TRIGGER_SHA') or None
+    attempt = args.expected_attempt
+    if attempt is None and os.environ.get('CI_TRIGGER_ATTEMPT'):
+        attempt = int(os.environ['CI_TRIGGER_ATTEMPT'])
+    if os.environ.get('GITHUB_EVENT_NAME') == 'workflow_run' and (commit is None or attempt is None):
+        raise ValueError('The CI completion event must identify its source commit and attempt.')
+    if args.check_only:
+        if (not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', os.environ['GITHUB_REPOSITORY'])
+                or not re.fullmatch('[1-9][0-9]*', args.run_id)
+                or not isinstance(commit, str) or not re.fullmatch('[0-9a-f]{40}', commit)
+                or type(attempt) is not int or attempt < 1):
+            raise ValueError('A pre-claim check requires the exact inspected CI identity.')
+        choice = {'sha': commit, 'run_id': args.run_id, 'ci_attempt': str(attempt)}
+        recheck_source(os.environ['GITHUB_REPOSITORY'], choice)
+        print(json.dumps({'ci_rechecked': True, **choice}))
+        return
+    result = validate(os.environ["GITHUB_REPOSITORY"], args.run_id, operation=os.environ.get('DELIVERY_OPERATION','release'),
+                      expected_commit=commit, expected_attempt=attempt)
+    recheck_source(os.environ['GITHUB_REPOSITORY'], result)
     with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as stream:
         for key, value in result.items():
             stream.write(key + "=" + value + "\n")
-    print(json.dumps({"ci_provenance_verified": True, "deployment_policy_verified": True, **result}))
+    print(json.dumps({"ci_provenance_verified": True, "deployment_policy_verified": True, 'ci_rechecked': True, **result}))
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a', encoding='utf-8') as stream:
             stream.write('## Deployment selection\n\n- Mode: **' + result['mode'] + '**\n- Environment: `' +

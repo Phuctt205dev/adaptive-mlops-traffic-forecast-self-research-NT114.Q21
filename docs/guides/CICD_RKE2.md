@@ -31,6 +31,17 @@ thu live của bản nâng cấp phải tra handoff; tài liệu source không t
 
 ## Nhận gói triển khai trên Windows
 
+CD tự động chỉ nhận sự kiện [workflow_run completed](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run)
+với CI `success` của push hợp lệ. Inspect
+khớp run ID, commit và attempt của sự kiện, kiểm coverage đầy đủ rồi đọc lại
+CI trước khi xuất lựa chọn triển khai. Tên lượt CD hiển thị số CI và attempt
+nguồn để dễ đối chiếu hai bộ số thứ tự được đếm riêng.
+
+Ngay sau kiểm gói và trước `cd_state begin`, runner đọc lại CI đúng run/commit/
+attempt đã chọn. CI còn chạy, thất bại hoặc bị rerun sang attempt khác sẽ bị
+chặn trước claim; mode/epoch/ownership vẫn do CAS hiện có kiểm. Khi transaction
+đã nhận quyền thì quy tắc không hủy rollout giữa chừng tiếp tục giữ nguyên.
+
 Runner chạy kiểm thử offline `tests.test_prepare_artifact`, sau đó helper tải
 artifact của đúng CI push đã thành công. Metadata phải khớp run/commit, có đúng
 một artifact chưa hết hạn và SHA256. Helper dùng GET từ

@@ -1,5 +1,5 @@
 name: 02 Backend CD
-run-name: "Backend CD #${{ github.run_number }} | ${{ github.event_name == 'workflow_run' && format('CI #{0}', github.event.workflow_run.run_number) || format('CI run {0}', inputs.ci_run_id) }} | ${{ inputs.operation || 'release' }}"
+run-name: "Backend CD #${{ github.run_number }} | ${{ github.event_name == 'workflow_run' && format('CI #{0} attempt {1}', github.event.workflow_run.run_number, github.event.workflow_run.run_attempt) || format('CI run {0}', inputs.ci_run_id) }} | ${{ inputs.operation || 'release' }}"
 
 on:
   workflow_run:
@@ -32,7 +32,8 @@ jobs:
     if: >-
       vars.RKE2_CD_ENABLED == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
+      (github.event.workflow_run.status == 'completed' &&
+       github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -43,6 +44,7 @@ jobs:
       epoch: ${{ steps.provenance.outputs.epoch }}
       environment: ${{ steps.provenance.outputs.environment }}
       ci_number: ${{ steps.provenance.outputs.ci_number }}
+      ci_attempt: ${{ steps.provenance.outputs.ci_attempt }}
       operation: ${{ steps.provenance.outputs.operation }}
     steps:
       # The validation code comes from the protected default branch, never a PR.
@@ -55,6 +57,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CI_RUN_ID: ${{ inputs.ci_run_id || github.event.workflow_run.id }}
+          CI_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_TRIGGER_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           DELIVERY_OPERATION: ${{ inputs.operation || 'release' }}
         run: python -B scripts/cicd/github_gate.py --run-id "$CI_RUN_ID"
 
@@ -98,7 +102,14 @@ jobs:
           CI_NUMBER: ${{ needs.inspect.outputs.ci_number }}
           DELIVERY_MODE: ${{ needs.inspect.outputs.mode }}
           CONTROL_EPOCH: ${{ needs.inspect.outputs.epoch }}
-        run: python -B scripts/cicd/cd_state.py begin
+          SOURCE_CI_RUN: ${{ needs.inspect.outputs.run_id }}
+          SOURCE_CI_ATTEMPT: ${{ needs.inspect.outputs.ci_attempt }}
+          DELIVERY_OPERATION: ${{ needs.inspect.outputs.operation }}
+        run: |
+          python -B scripts/cicd/github_gate.py --run-id $env:SOURCE_CI_RUN --expected-commit $env:EXPECTED_COMMIT --expected-attempt $env:SOURCE_CI_ATTEMPT --check-only
+          if ($LASTEXITCODE -ne 0) { throw 'The selected CI must still be fully successful before CD claim.' }
+          python -B scripts/cicd/cd_state.py begin
+          if ($LASTEXITCODE -ne 0) { throw 'Deployment claim failed.' }
       - name: Deliver the approved immutable release
         id: delivery
         if: steps.claim.outputs.began == 'true'

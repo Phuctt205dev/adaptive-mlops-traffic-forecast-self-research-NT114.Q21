@@ -11,7 +11,7 @@ from src.mlflow_regions import set_mlflow_experiment
 from src.shap_reporting import explain_saved_model, file_sha256, resolve_shap_config, neural_shap_config
 from src.feature_selection import (validate_selection, reusable_groups, rank_training_features,
                                   columns_for_groups, selection_summary, MODEL_KEYS, guard_quality_holdout)
-from src.training_progress import epoch_callbacks, report as report_progress, set_fold
+from src.training_progress import epoch_callbacks, report as report_progress, set_fold, start_fit
 
 from src.lstm_sequences import (
     DEFAULT_SEQUENCE_LENGTH,
@@ -537,6 +537,7 @@ def _train_neural_fold(
     feature_names=None,
     shap_config=None,
     inner_validation=False,
+    progress_purpose="cv_full",
 ):
     # TensorFlow chỉ được import khi người dùng thực sự chạy LSTM/GRU.
     from tensorflow import keras
@@ -567,6 +568,7 @@ def _train_neural_fold(
         split = max(1, min(len(fit_X) - 1, int(len(fit_X) * .9)))
         validation = (fit_X[split:], fit_y[split:])
         fit_X, fit_y = fit_X[:split], fit_y[:split]
+    start_fit(model_name, progress_purpose)
     history = model.fit(
         fit_X,
         fit_y,
@@ -578,6 +580,7 @@ def _train_neural_fold(
         verbose=verbose,
     )
     training_seconds = time.perf_counter() - started_at
+    report_progress(model_name, "evaluating")
     scaled_predictions = model.predict(
         datasets["validation"]["X"],
         batch_size=256,
@@ -621,7 +624,8 @@ def _train_neural_fold(
             for value in datasets.values():
                 value["X"] = value["X"][:, :, indices]
             reduced_metrics, reduced_epoch, reduced_epochs, reduced_seconds = _train_neural_fold(
-                model_name, datasets, target_scaler, max_epochs, batch_size, random_state, verbose, inner_validation=True)
+                model_name, datasets, target_scaler, max_epochs, batch_size, random_state, verbose,
+                inner_validation=True, progress_purpose="cv_reduced")
             selection_row.update(reduced_metrics=[reduced_metrics[key] for key in ("MAE", "RMSE", "MAPE")],
                                  reduced_validation_metrics=dict(reduced_metrics),
                                  reduced_best_epoch=reduced_epoch, reduced_epochs=reduced_epochs,
@@ -672,6 +676,7 @@ def _train_final_neural_model(
         input_shape=datasets["train"]["X"].shape[1:],
     )
     started_at = time.perf_counter()
+    start_fit(model_name, "final")
     model.fit(
         datasets["train"]["X"],
         datasets["train"]["y"],
@@ -682,6 +687,7 @@ def _train_final_neural_model(
         verbose=verbose,
     )
     training_seconds = time.perf_counter() - started_at
+    report_progress(model_name, "evaluating")
     scaled_predictions = model.predict(
         datasets["validation"]["X"],
         batch_size=256,
@@ -847,6 +853,7 @@ def _run_neural_cross_validation(
                 batch_size,
                 random_state,
                 verbose,
+                progress_purpose="cv_reused" if cached_groups else "cv_full",
                 **selection_kwargs,
             )
         )
@@ -888,6 +895,8 @@ def _run_neural_cross_validation(
                 fold_result["training_seconds"] += selection_row.get("reduced_training_seconds", 0.)
     # Median làm giảm ảnh hưởng của một fold quá dễ hoặc quá khó.
     final_epochs = max(1, int(round(float(np.median(best_epochs)))))
+    set_fold()
+    report_progress(model_name, "model_cv_completed")
     final_result = _train_final_neural_model(
         model_name,
         source,

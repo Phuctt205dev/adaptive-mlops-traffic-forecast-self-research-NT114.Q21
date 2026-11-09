@@ -1,5 +1,6 @@
 """Kaggle-only worker HTTP contract, without legacy fit or serving imports."""
 import hmac,importlib,json,os,re,threading,uuid
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -110,7 +111,13 @@ def add_control(app, base, operation_lock, project, finalizer):
                 if payload["artifact_receipts"] != expected:
                     raise training.ApplicationError("training_receipt_mismatch", "Finalize receipts differ from the accepted branches.", 409)
                 try:
+                    finalization_started = time.monotonic()
                     result = finalizer(training_run_id=run_id, payload=payload, _token=None, db=db)
+                    finalization_seconds = time.monotonic() - finalization_started
+                    try:
+                        state.record_finalization_timing(db, run_id, finalization_seconds)
+                    except Exception:
+                        db.rollback()  # Missing telemetry cannot undo confirmed publication.
                     return {**result, "execution_worker": {**identity, "control_revision": "cloud-training-v1"}}
                 except Exception:
                     db.rollback()

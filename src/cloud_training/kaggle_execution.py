@@ -4,18 +4,22 @@ Every potentially ambiguous write is fenced BEFORE the network request. A
 restart reconciles the same resource; it never submits a replacement fit.
 """
 import copy
+from contextlib import contextmanager
+from datetime import UTC, datetime
 import hashlib
 import json
 from pathlib import Path
 import re
 import time
+import threading
 from urllib.parse import urlparse
 
 from src.cloud_training.artifacts import MAX_BYTES, MAX_FILES, read_bundle, relative_path
-from src.cloud_training.control import render_notebook, source_configuration, with_control
+from src.cloud_training.control import render_notebook, source_configuration, source_control, with_control
 from src.cloud_training.kaggle_transport import ProviderError
 from src.cloud_training.probe import canonical, sha256_file
 from src.cloud_training.errors import validate_failure
+from src.cloud_training.telemetry import operation_timing, source_timing
 
 TERMINAL = {"COMPLETE", "ERROR", "CANCEL_ACKNOWLEDGED"}
 TERMINAL_EVENT_WAIT_SECONDS = 90
@@ -91,16 +95,95 @@ def download_file(url, path, *, limit, expected_size=None, expected_sha256=None,
 
 class KaggleExecution:
     def __init__(self, transport, directory, ledger, save, *, clock=time.time,
-                 sleep=time.sleep, downloader=download_file):
+                 sleep=time.sleep, downloader=download_file, monotonic=time.monotonic, background_progress=True):
         self.transport, self.directory = transport, Path(directory)
         self.ledger, self.save_callback = copy.deepcopy(ledger), save
         self.clock, self.sleep, self.downloader = clock, sleep, downloader
         self.stream = None
         self.last_sequence = 0
+        self.monotonic = monotonic
+        self._journal_lock = threading.RLock()
+        self._drain_lock = threading.Lock()
+        self._progress_stop = threading.Event()
+        self._progress_thread = None
+        self._progress_error = None
+        self._next_stream_at = 0
+        self.background_progress = background_progress
+
+    def timestamp(self):
+        return datetime.fromtimestamp(self.clock(), UTC).isoformat()
+
+    @contextmanager
+    def measured(self, operation, *, byte_count=0):
+        start, failed = self.monotonic(), False
+        try:
+            yield
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            with self._journal_lock:
+                telemetry = copy.deepcopy(self.ledger.get("telemetry", {}))
+                operation_timing(telemetry, operation, max(0, self.monotonic() - start),
+                                 failed=failed, byte_count=byte_count)
+                self.save(telemetry=telemetry)
+
+    def call(self, operation, **values):
+        byte_count = (sum(item["size"] for item in self.ledger["snapshot"]["files"].values())
+                      if operation == "dataset_create" else 0)
+        with self.measured(operation, byte_count=byte_count):
+            result = self.transport.call(operation, **values)
+            components = result.pop("_rpc_timing", None)
+            if components:
+                with self._journal_lock:
+                    telemetry = copy.deepcopy(self.ledger.get("telemetry", {}))
+                    for name, seconds in components.items():
+                        operation_timing(telemetry, name, seconds)
+                    self.save(telemetry=telemetry)
+            return result
+
+    def milestone(self, name, event=None):
+        with self._journal_lock:
+            telemetry = copy.deepcopy(self.ledger.get("telemetry", {}))
+            markers = telemetry.setdefault("milestones", {})
+            if name not in markers:
+                if len(markers) >= 40:
+                    raise ProviderError("Timing milestone budget exceeded.")
+                markers[name] = {"observed_at": self.timestamp(), **source_timing(event or {})}
+                self.save(telemetry=telemetry)
+
+    def phase(self, name):
+        if self.ledger.get("phase") != name:
+            self.save(phase=name)
+            self.milestone(name)
 
     def save(self, **values):
-        self.ledger.update(values)
-        self.save_callback(copy.deepcopy(self.ledger))
+        with self._journal_lock:
+            self.ledger.update(values)
+            self.save_callback(copy.deepcopy(self.ledger))
+
+    def _start_progress(self, progress):
+        if not self.background_progress:
+            return
+        self._progress_stop.clear()
+        def pump():
+            try:
+                while not self._progress_stop.is_set():
+                    self.drain(progress)
+                    self._progress_stop.wait(.25)
+            except Exception as error:
+                self._progress_error = error
+        self._progress_thread = threading.Thread(target=pump, name="kaggle-progress", daemon=True)
+        self._progress_thread.start()
+
+    def _stop_progress(self):
+        self._progress_stop.set()
+        if self._progress_thread:
+            self._progress_thread.join(timeout=5)
+            if self._progress_thread.is_alive():
+                raise ProviderError("Progress delivery did not stop within its deadline.", category="progress_timeout")
+        if self._progress_error:
+            raise self._progress_error
 
     @property
     def reference(self):
@@ -134,19 +217,21 @@ class KaggleExecution:
         return source
 
     def submit(self, cancelled=lambda: False):
+        self.phase("input_upload")
         inputs = self.directory / "input"
         metadata = {"id": self.ledger["dataset_reference"], "title": self.ledger["dataset_reference"].split("/")[1],
                     "licenses": [{"name": "other"}], "description": "Private temporary training snapshot. All rights reserved."}
         (inputs / "dataset-metadata.json").write_bytes(canonical(metadata))
         if not self.ledger["dataset_pending"]:
             self.save(dataset_pending=True)
-            self.transport.call("dataset_create", directory=str(inputs), timeout=300)
+            self.call("dataset_create", directory=str(inputs), timeout=300)
+        self.phase("input_processing")
         deadline = self.clock() + 600
         while True:
             if cancelled():
                 raise TrainingCancelled("The run was cancelled before notebook submission.")
             try:
-                info = self.transport.call("dataset_check", reference=self.ledger["dataset_reference"])
+                info = self.call("dataset_check", reference=self.ledger["dataset_reference"])
             except ProviderError as error:
                 if error.http_status not in {403, 404} or self.clock() >= deadline:
                     raise
@@ -159,6 +244,8 @@ class KaggleExecution:
             if info["status"] in {"error", "failed"} or self.clock() >= deadline:
                 raise ProviderError("The private dataset did not become ready within its deadline.")
             self.sleep(5)
+        self.milestone("input_ready")
+        self.phase("notebook_submit")
         notebook = self.directory / "notebook"
         notebook.mkdir(exist_ok=True)
         (notebook / "kernel-metadata.json").write_bytes(canonical(self.metadata()))
@@ -170,61 +257,122 @@ class KaggleExecution:
             source = render_notebook(self.ledger["snapshot"], self.ledger["reference"], self.ledger["dataset_reference"], clock=self.clock())
             (notebook / "train.py").write_text(source, encoding="utf-8")
             self.save(submit_pending=True)
-            response = self.transport.call("kernel_push", directory=str(notebook), no_run=False, timeout=90)
+            response = self.call("kernel_push", directory=str(notebook), no_run=False, timeout=90)
             if response.get("rejected"):
                 self.save(submit_rejected=True, expected_version=response.get("version"))
-                raise ProviderError("The provider rejected this notebook execution.")
+                raise ProviderError("The provider rejected this notebook execution.", operation="kernel_push",
+                                    category="submit_rejected", diagnostic=response.get("diagnostic"))
             self.save(expected_version=response["version"])
         # An uncertain response is recovered by read-back, never by a new push.
-        remote = self.transport.call("kernel_get", reference=self.ledger["reference"])
+        remote = self.call("kernel_get", reference=self.ledger["reference"])
         self.verify_remote(remote)
         version = remote["current_version_number"]
         if (type(version) is not int or version < 1
                 or (self.ledger.get("expected_version") is not None and version != self.ledger["expected_version"])):
             raise ProviderError("The notebook execution version could not be reconciled.")
         self.save(version=version, submit_pending=False)
+        self.milestone("submit_confirmed")
+        self.phase("provider_wait")
         return self.reference
 
     def control(self, *, cancel=False):
         cancel = bool(cancel or self.ledger.get("cancel_requested"))
-        remote = self.transport.call("kernel_get", reference=self.ledger["reference"])
+        remote = self.call("kernel_get", reference=self.ledger["reference"])
         source = self.verify_remote(remote)
-        controlled = with_control(source, cancel=cancel, clock=self.clock())
+        cancel = bool(cancel or source_control(source)["cancel"])
+        base_version = remote["current_version_number"]
+        if type(base_version) is not int or base_version < self.ledger.get("control_version", self.ledger["version"]):
+            raise ProviderError("Control version identity differs.", operation="kernel_get", category="control_identity")
+        pending = self.ledger.get("pending_control") if self.ledger.get("control_pending") else None
+        if pending:
+            # A previous process may have lost the reply. Read back its original
+            # intent, never replace it with a newly generated lease or write.
+            controlled = with_control(source, cancel=pending["cancel"], clock=pending["lease_until"] - 180)
+            if (hashlib.sha256(controlled.encode()).hexdigest() != pending["sha256"]
+                    or source != controlled or base_version <= pending["base_version"]):
+                raise ProviderError("Pending control update is not confirmed.", operation="kernel_get",
+                                    category="control_unconfirmed")
+            self.save(control_pending=False, pending_control=None, control_version=base_version,
+                      lease_until=pending["lease_until"], last_control_confirmed_at=self.timestamp(),
+                      confirmed_control_writes=self.ledger.get("confirmed_control_writes", 0) + 1)
+            if not cancel or pending["cancel"]:
+                return
+        control_clock = self.clock()
+        controlled = with_control(source, cancel=cancel, clock=control_clock)
         directory = self.directory / "control"
         directory.mkdir(exist_ok=True)
         (directory / "kernel-metadata.json").write_bytes(canonical(self.metadata()))
         (directory / "train.py").write_text(controlled, encoding="utf-8")
-        self.save(control_pending=True, cancel_requested=self.ledger.get("cancel_requested", False) or cancel)
+        pending = {"base_version": base_version, "sha256": hashlib.sha256(controlled.encode()).hexdigest(),
+                   "lease_until": control_clock + 180, "cancel": cancel, "writes": 0}
+        self.save(control_pending=True, pending_control=pending,
+                  cancel_requested=self.ledger.get("cancel_requested", False) or cancel)
         # Quick Save edits the existing private source. It never starts a fit.
-        try:
-            response = self.transport.call("kernel_push", directory=str(directory), no_run=True, timeout=75)
-            if response.get("rejected"):
-                raise ProviderError("The provider did not accept the control update.", operation="kernel_push", category="control_rejected")
-        except ProviderError as error:
-            # A control response can be lost after Quick Save was accepted.
-            # Reconcile exact source; never repeat this write or start a fit.
-            if error.category == "control_rejected":
-                raise
-            remote = self.transport.call("kernel_get", reference=self.ledger["reference"])
-            self.verify_remote(remote)
-            if remote["source"].replace("\r\n", "\n") != controlled:
+        for attempt in range(2):
+            pending["writes"] += 1
+            self.save(pending_control=copy.deepcopy(pending))
+            error, response = None, None
+            try:
+                response = self.call("kernel_push", directory=str(directory), no_run=True, timeout=75)
+                if response.get("rejected"):
+                    raise ProviderError("The provider did not accept the control update.", operation="kernel_push",
+                                        category="control_rejected", diagnostic=response.get("diagnostic"))
+            except ProviderError as failure:
+                error = failure
+                diagnostic = failure.diagnostic or {}
+                self.save(last_failure={"operation": failure.operation, "category": failure.category,
+                                        "http_status": failure.http_status, "diagnostic": diagnostic})
+                if diagnostic.get("reason") in {"authentication", "quota", "invalid_sources"}:
+                    self.save(control_pending=False, pending_control=None)
+                    raise
+            remote = self.call("kernel_get", reference=self.ledger["reference"])
+            actual = self.verify_remote(remote)
+            version = remote["current_version_number"]
+            expected = response.get("version") if response and not response.get("rejected") else None
+            if (type(version) is int and version > base_version and actual == controlled
+                    and (expected is None or expected == version)):
+                self.save(control_pending=False, pending_control=None, control_version=version,
+                          lease_until=pending["lease_until"], last_control_confirmed_at=self.timestamp(),
+                          confirmed_control_writes=self.ledger.get("confirmed_control_writes", 0) + 1)
+                return
+            # Only an explicit transient refusal AND unchanged exact source/
+            # version permit one retry. A timeout may still commit: never retry it.
+            retryable = (error is not None and error.category == "control_rejected"
+                         and (error.diagnostic or {}).get("retryable") is True
+                         and version == base_version and actual == source
+                         and self.clock() < pending["lease_until"] - 75)
+            if attempt == 0 and retryable:
+                self.sleep(.5)
+                continue
+            if error:
+                if error.category == "control_rejected" and version == base_version and actual == source:
+                    self.save(control_pending=False, pending_control=None)
                 raise error
-        else:
-            remote = self.transport.call("kernel_get", reference=self.ledger["reference"])
-        self.verify_remote(remote)
-        if remote["source"].replace("\r\n", "\n") != controlled:
-            raise ProviderError("The cooperative control write was not confirmed.")
-        self.save(control_pending=False, lease_until=self.clock() + 180,
-                  confirmed_control_writes=self.ledger.get("confirmed_control_writes", 0) + 1)
+            raise ProviderError("The cooperative control write was not confirmed.",
+                                operation="kernel_get", category="control_unconfirmed")
 
     def status(self):
-        state = self.transport.call("status", reference=self.reference)["state"]
+        state = self.call("status", reference=self.reference)["state"]
+        changed = self.ledger.get("provider_state") != state
+        checked_at = self.timestamp()
+        self.save(provider_state=state, provider_checked_at=checked_at,
+                  provider_observed_at=checked_at if changed else self.ledger.get("provider_observed_at"))
+        if changed:
+            self.milestone("provider_" + state.lower() + "_observed")
         if state in TERMINAL:
             self.save(terminal=state, remote_stopped=True)
         return state
 
     def drain(self, progress):
+        with self._drain_lock:
+            if self._progress_error:
+                raise self._progress_error
+            self._drain(progress)
+
+    def _drain(self, progress):
         if self.stream is None:
+            if self.monotonic() < self._next_stream_at:
+                return
             self.stream = self.transport.stream(self.reference, self.ledger["snapshot"]["context"])
         events = self.stream.drain()
         # returncode() joins the stdout reader after process exit. That reader
@@ -235,9 +383,16 @@ class KaggleExecution:
         for event in events:
             if "control" in event:
                 stage = event["control"]
-                if stage not in {"control_ready", "child_running", "child_completed", "cancelled", "failed"}:
+                if stage not in {"supervisor_started", "control_ready", "input_ready", "runtime_preparing",
+                                 "runtime_ready", "child_running", "child_completed", "output_writing",
+                                 "output_written", "cancelled", "failed"}:
                     raise ProviderError("Invalid notebook control event.")
+                new_stage = not self.ledger.get(stage + "_observed")
+                self.milestone("supervisor_input_ready" if stage == "input_ready" else stage, event)
                 self.save(**{stage + "_observed": True})
+                if (new_stage and stage in {"supervisor_started", "runtime_preparing", "runtime_ready", "child_running", "output_writing"}
+                        and (self.last_sequence == 0 or stage == "output_writing")):
+                    self.phase(stage)
                 if "failure" in event:
                     if stage != "failed":
                         raise ProviderError("Unexpected child failure stage.")
@@ -260,24 +415,26 @@ class KaggleExecution:
                 if sequence > self.last_sequence:
                     progress(event)
                     self.last_sequence = sequence
+                    if self.ledger.get("phase") not in {"ml_running", "output_writing"}:
+                        self.phase("ml_running")
         if self.stream.reader_failed:
             raise ProviderError("Notebook progress stream could not be validated.")
         if ended:
             self.stream.stop()
             self.stream = None
+            self._next_stream_at = self.monotonic() + 3
 
     def run(self, progress, cancelled):
         deadline, renewal = self.clock() + 8 * 3600, 0
         try:
             self.submit(cancelled)
+            self._start_progress(progress)
             while self.clock() < deadline:
                 if cancelled():
                     raise TrainingCancelled("The training run requested cancellation.")
-                if self.clock() >= renewal:
-                    self.control()
-                    renewal = self.clock() + 45
                 self.drain(progress)
                 state = self.status()
+                self.drain(progress)
                 if state in TERMINAL:
                     # Provider status and persisted logs arrive independently.
                     # Re-read the SAME version while awaiting its completion
@@ -300,13 +457,25 @@ class KaggleExecution:
                                     "completion_unconfirmed" if state == 'COMPLETE' else "execution_validation")
                         raise ProviderError("The notebook ended without successful ML output.",
                                             operation='terminal_events', category=category)
+                    self._stop_progress()
                     return self.fetch()
+                if self.clock() >= renewal:
+                    # Do not Quick Save an execution already observed terminal.
+                    # Schedule from the actual lease written, not from reply time.
+                    self.control()
+                    renewal = min(self.clock() + 45, self.ledger.get("lease_until", self.clock() + 180) - 90)
+                    self.drain(progress)
+                    if renewal <= self.clock():
+                        continue
                 self.sleep(3)
             raise ProviderError("Kaggle execution exceeded its monitoring deadline.")
         finally:
-            if self.stream is not None:
-                self.stream.stop()  # Stops the log reader, never claims remote cancellation.
-                self.stream = None
+            try:
+                self._stop_progress()
+            finally:
+                if self.stream is not None:
+                    self.stream.stop()  # Stops the log reader, never claims remote cancellation.
+                    self.stream = None
 
     def stop(self):
         if self.ledger.get("remote_stopped"):
@@ -315,11 +484,11 @@ class KaggleExecution:
             self.save(remote_stopped=True)
             return True
         if not self.ledger.get("version"):
-            if self.ledger.get("submit_rejected") and not self.transport.call(
+            if self.ledger.get("submit_rejected") and not self.call(
                     "resource_exists", kind="notebook", reference=self.ledger["reference"])["exists"]:
                 self.save(remote_stopped=True, notebook_cleaned=True)
                 return True
-            remote = self.transport.call("kernel_get", reference=self.ledger["reference"])
+            remote = self.call("kernel_get", reference=self.ledger["reference"])
             self.verify_remote(remote)
             self.save(version=remote["current_version_number"])
         if self.status() not in TERMINAL:
@@ -332,8 +501,8 @@ class KaggleExecution:
     def fetch(self):
         if not self.ledger.get("remote_stopped") or self.ledger.get("terminal") != "COMPLETE":
             raise ProviderError("Only completed output may be received.")
-        self.save(phase="output_listing")
-        files = self.transport.call("output_list", reference=self.reference)["files"]
+        self.phase("output_listing")
+        files = self.call("output_list", reference=self.reference)["files"]
         def listed_url(name):
             nonlocal files
             for retry in range(12):
@@ -341,20 +510,21 @@ class KaggleExecution:
                     return files[name]
                 if retry < 11:
                     self.sleep(5)
-                    files = self.transport.call("output_list", reference=self.reference)["files"]
+                    files = self.call("output_list", reference=self.reference)["files"]
             raise ProviderError("Notebook output file is not ready.", operation="output_listing", category="file_not_ready")
 
         def refreshed_url(name):
             nonlocal files
-            files = self.transport.call("output_list", reference=self.reference)["files"]
+            files = self.call("output_list", reference=self.reference)["files"]
             return listed_url(name)
         manifest_name = "output/manifest.json"
         manifest_url = listed_url(manifest_name)
         output = self.directory / "output"
         output.mkdir(exist_ok=False)
-        self.save(phase="output_download")
-        self.downloader(manifest_url, output / "manifest.json", limit=1024 * 1024,
-                        refresh_url=lambda: refreshed_url(manifest_name))
+        self.phase("output_download")
+        with self.measured("manifest_download"):
+            self.downloader(manifest_url, output / "manifest.json", limit=1024 * 1024,
+                            refresh_url=lambda: refreshed_url(manifest_name))
         manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
         if manifest.get("context") != self.ledger["snapshot"]["context"] or not isinstance(manifest.get("files"), list):
             raise ProviderError("Output manifest belongs to another attempt.", operation="output_manifest", category="context_mismatch")
@@ -375,38 +545,43 @@ class KaggleExecution:
         for item in entries:
             remote = "output/" + item["path"]
             url = listed_url(remote)
-            self.downloader(url, output / item["path"], limit=item["size"], expected_size=item["size"],
-                            expected_sha256=item["sha256"], refresh_url=lambda name=remote: refreshed_url(name))
-        result = read_bundle(output, self.ledger["snapshot"]["context"])
-        self.save(phase="output_verified")
+            with self.measured("output_download", byte_count=item["size"]):
+                self.downloader(url, output / item["path"], limit=item["size"], expected_size=item["size"],
+                                expected_sha256=item["sha256"], refresh_url=lambda name=remote: refreshed_url(name))
+        self.phase("output_verification")
+        with self.measured("output_verification"):
+            result = read_bundle(output, self.ledger["snapshot"]["context"])
+        self.phase("output_verified")
         return result
 
     def cleanup(self):
         if not self.ledger.get("remote_stopped"):
             return False
+        self.milestone("cleanup_started")
         # Read identity before each destructive provider operation. References
         # were derived from a unique attempt UUID and never supplied by a user.
         if self.ledger.get("version") and not self.ledger["notebook_cleaned"]:
-            if self.ledger.get("notebook_delete_pending") and not self.transport.call(
+            if self.ledger.get("notebook_delete_pending") and not self.call(
                     "resource_exists", kind="notebook", reference=self.ledger["reference"])["exists"]:
                 self.save(notebook_cleaned=True)
             else:
-                remote = self.transport.call("kernel_get", reference=self.ledger["reference"])
+                remote = self.call("kernel_get", reference=self.ledger["reference"])
                 self.verify_remote(remote)
                 self.save(notebook_delete_pending=True)
-                self.transport.call("cleanup", notebook=self.ledger["reference"])
-                if self.transport.call("resource_exists", kind="notebook", reference=self.ledger["reference"])["exists"]:
+                self.call("cleanup", notebook=self.ledger["reference"])
+                if self.call("resource_exists", kind="notebook", reference=self.ledger["reference"])["exists"]:
                     return False
                 self.save(notebook_cleaned=True)
         if self.ledger["dataset_pending"] and not self.ledger["dataset_cleaned"]:
-            if not self.transport.call(
+            if not self.call(
                     "resource_exists", kind="dataset", reference=self.ledger["dataset_reference"])["exists"]:
                 self.save(dataset_cleaned=True)
             else:
-                self.transport.call("dataset_check", reference=self.ledger["dataset_reference"])
+                self.call("dataset_check", reference=self.ledger["dataset_reference"])
                 self.save(dataset_delete_pending=True)
-                self.transport.call("cleanup", dataset=self.ledger["dataset_reference"])
-                if self.transport.call("resource_exists", kind="dataset", reference=self.ledger["dataset_reference"])["exists"]:
+                self.call("cleanup", dataset=self.ledger["dataset_reference"])
+                if self.call("resource_exists", kind="dataset", reference=self.ledger["dataset_reference"])["exists"]:
                     return False
                 self.save(dataset_cleaned=True)
+        self.milestone("cleanup_confirmed")
         return True

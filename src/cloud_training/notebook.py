@@ -29,6 +29,8 @@ def main():
     child = None
     output = Path("/kaggle/working/output")
     sequence = 0
+    clock_origin = time.monotonic()
+    output_lock = threading.Lock()
     queue_events = queue.Queue(maxsize=1000)
     reader_failed = threading.Event()
     phase = "startup"
@@ -36,11 +38,26 @@ def main():
     def emit(stage, *, supervisor_failure=None, http_status=None, failure_phase=None, child_returncode=None):
         nonlocal sequence
         sequence += 1
-        event = {"context": CONFIG["context"], "sequence": sequence, "stage": stage}
+        from datetime import UTC, datetime
+        event = {"context": CONFIG["context"], "sequence": sequence, "stage": stage,
+                 "source_time": datetime.now(UTC).isoformat(), "source_clock": "supervisor_monotonic_v1",
+                 "source_elapsed_seconds": round(time.monotonic() - clock_origin, 6)}
         if supervisor_failure is not None:
             event.update(supervisor_failure=supervisor_failure, supervisor_http_status=http_status,
                          supervisor_phase=failure_phase, supervisor_child_returncode=child_returncode)
-        print("TRAFFIC_CONTROL_EVENT " + json.dumps(event), flush=True)
+        with output_lock:
+            print("TRAFFIC_CONTROL_EVENT " + json.dumps(event), flush=True)
+
+    def forward(line):
+        # The reader forwards validated ML events immediately, even while the
+        # supervisor's main thread is waiting for a control HTTP response.
+        if line.startswith("TRAFFIC_EXECUTION_EVENT "):
+            from datetime import UTC, datetime
+            envelope = json.loads(line[len("TRAFFIC_EXECUTION_EVENT "):])
+            envelope["event"]["supervisor_relay_time"] = datetime.now(UTC).isoformat()
+            line = "TRAFFIC_EXECUTION_EVENT " + json.dumps(envelope, allow_nan=False)
+        with output_lock:
+            print(line, flush=True)
 
     def stop():
         if child is not None and child.poll() is None:
@@ -68,7 +85,7 @@ def main():
                     event = json.loads(line[len("TRAFFIC_EXECUTION_EVENT "):])
                     if set(event) != {"context", "event"} or event["context"] != CONFIG["context"]:
                         raise ValueError("Wrong progress context.")
-                    queue_events.put_nowait(line.rstrip())
+                    forward(line.rstrip())
                 elif line.startswith("TRAFFIC_EXECUTION_FAILURE "):
                     if len(line) > 4096:
                         raise ValueError("Oversized failure event.")
@@ -82,12 +99,13 @@ def main():
                             or any(not isinstance(failure[k], str) or not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]{0,100}\.py", failure[k]) for k in ("source", "final_source"))
                             or any(type(failure[k]) is not int or not 1 <= failure[k] <= 1000000 for k in ("line", "final_line"))):
                         raise ValueError("Invalid normalized child failure.")
-                    queue_events.put_nowait("TRAFFIC_CONTROL_EVENT " + json.dumps({"context": CONFIG["context"],
+                    forward("TRAFFIC_CONTROL_EVENT " + json.dumps({"context": CONFIG["context"],
                         "stage": "failed", "failure": failure}))
         except Exception:
             reader_failed.set()
 
     try:
+        emit("supervisor_started")
         import requests
         original_send = requests.Session.send
         def bounded_send(session, request, **kwargs):
@@ -169,6 +187,7 @@ def main():
                     digest.update(chunk)
             if digest.hexdigest() != descriptor["sha256"]:
                 raise RuntimeError("Input snapshot checksum differs.")
+        emit("input_ready")
         with tempfile.TemporaryDirectory(prefix="traffic-execution-") as directory:
             code = Path(directory)
             with zipfile.ZipFile(inputs / "source.bin") as archive:

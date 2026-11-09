@@ -81,6 +81,28 @@ def kernel(api, reference):
         "dataset_data_sources", "kernel_data_sources", "competition_data_sources", "model_data_sources")}}
 
 
+def rejection_diagnostic(response):
+    """Classify upstream rejection without retaining messages, URLs or input names."""
+    invalid = [key for key in ("invalid_dataset_sources", "invalid_kernel_sources",
+               "invalid_competition_sources", "invalid_model_sources") if getattr(response, key, None)]
+    message = str(getattr(response, "error", "") or "").lower()
+    reason = "provider_rejected"
+    if invalid:
+        reason = "invalid_sources"
+    else:
+        for category, phrases in (
+            ("authentication", ("unauthorized", "authentication", "invalid token", "forbidden")),
+            ("quota", ("quota", "gpu limit", "maximum concurrent")),
+            ("rate_limit", ("rate limit", "too many requests")),
+            ("temporarily_unavailable", ("temporarily unavailable", "service unavailable", "try again later")),
+        ):
+            if any(phrase in message for phrase in phrases):
+                reason = category
+                break
+    return {"reason": reason, "invalid_sources": invalid,
+            "retryable": reason in {"rate_limit", "temporarily_unavailable"}}
+
+
 def operation(api, name, request, stdout):
     if name == "doctor":
         quota = api.quota_view()
@@ -150,7 +172,8 @@ def operation(api, name, request, stdout):
         if getattr(response, "error", "") or any(getattr(response, key, None) for key in (
                 "invalid_dataset_sources", "invalid_kernel_sources", "invalid_competition_sources", "invalid_model_sources")):
             version = getattr(response, "version_number", None)
-            return {"rejected": True, "version": version if type(version) is int and version > 0 else None}
+            return {"rejected": True, "version": version if type(version) is int and version > 0 else None,
+                    "diagnostic": rejection_diagnostic(response)}
         version = response.version_number
         if type(version) is not int or version < 1:
             raise ValueError("Notebook version was not confirmed.")
@@ -173,6 +196,12 @@ def operation(api, name, request, stdout):
                     if event.get("context") != context:
                         raise ValueError("Progress belongs to another execution.")
                     payload = event["event"] if prefix == "TRAFFIC_EXECUTION_EVENT " else {"control": event["stage"]}
+                    if prefix == "TRAFFIC_CONTROL_EVENT ":
+                        from src.cloud_training.telemetry import source_timing
+                        payload.update(source_timing(event))
+                    if "source_time" in payload:
+                        from datetime import UTC, datetime
+                        payload["worker_stream_time"] = datetime.now(UTC).isoformat()
                     if prefix == "TRAFFIC_CONTROL_EVENT " and "failure" in event:
                         if event["stage"] != "failed":
                             raise ValueError("Unexpected failure stage.")
@@ -231,10 +260,14 @@ def main():
         if len(raw) > 1024 * 1024:
             raise ValueError("SDK request is too large.")
         request = json.loads(raw)
+        started = time.monotonic()
         with contextlib.redirect_stdout(Discard()), contextlib.redirect_stderr(Discard()):
             api = api_for(request["username"])
+            authenticated = time.monotonic()
             result = operation(api, request["operation"], request, stdout)
-        stdout.write(json.dumps({"ok": True, "result": result}, allow_nan=False) + "\n")
+        timing = {"sdk_import_auth": round(authenticated - started, 6),
+                  "sdk_operation": round(time.monotonic() - authenticated, 6)}
+        stdout.write(json.dumps({"ok": True, "result": result, "timing": timing}, allow_nan=False) + "\n")
         return 0
     except (Exception, SystemExit) as error:
         stdout.write(json.dumps({"ok": False, "error": "kaggle_operation_unconfirmed",

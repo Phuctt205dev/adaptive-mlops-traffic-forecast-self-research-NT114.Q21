@@ -1,5 +1,6 @@
 """Bound SDK/network calls in a separate process; never expose provider errors."""
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -7,13 +8,15 @@ import sys
 import time
 
 from src.cloud_training.process import ExecutionProcess
+from src.cloud_training.telemetry import rejection_summary
 
 
 class ProviderError(RuntimeError):
-    def __init__(self, message, http_status=None, *, operation=None, category=None):
+    def __init__(self, message, http_status=None, *, operation=None, category=None, diagnostic=None):
         super().__init__(message)
         self.http_status = http_status
         self.operation, self.category = operation or "execution", category or "execution_validation"
+        self.diagnostic = rejection_summary(diagnostic) if diagnostic is not None else None
 
 
 class SDKTransport:
@@ -62,7 +65,15 @@ class SDKTransport:
                             "HTTPError": "http_error", "ValueError": "invalid_response"}.get(document.get("error_type"), "provider_error")
                 raise ProviderError("Kaggle operation could not be confirmed.", status if type(status) is int else None,
                                     operation=operation, category=category)
-            return document["result"]
+            result = document["result"]
+            timing = document.get("timing")
+            if timing is not None:
+                if (not isinstance(timing, dict) or set(timing) != {"sdk_import_auth", "sdk_operation"}
+                        or any(type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= timeout
+                               for value in timing.values())):
+                    raise ValueError("Invalid RPC duration envelope.")
+                result = {**result, "_rpc_timing": timing}
+            return result
         except (OSError, ValueError, subprocess.TimeoutExpired) as error:
             category = "rpc_timeout" if isinstance(error, subprocess.TimeoutExpired) else "invalid_response" if isinstance(error, ValueError) else "rpc_unavailable"
             raise ProviderError("Kaggle operation could not be confirmed within its deadline.", operation=operation, category=category) from None

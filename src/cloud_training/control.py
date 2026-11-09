@@ -1,6 +1,7 @@
 """Private notebook source identity and expiring cooperative control messages."""
 import ast
 import hashlib
+import json
 import math
 from pathlib import Path
 import time
@@ -27,6 +28,19 @@ def source_configuration(source):
     if config["body_sha256"] != body_digest(source):
         raise ValueError("Notebook supervisor source hash differs.")
     return config
+
+
+def source_control(source):
+    config = source_configuration(source)
+    lines = [line[len(CONTROL_PREFIX):] for line in source.splitlines() if line.startswith(CONTROL_PREFIX)]
+    if len(lines) != 1:
+        raise ValueError("Notebook must have exactly one control message.")
+    value = json.loads(lines[0])
+    if (not isinstance(value, dict) or set(value) != {"attempt_id", "cancel", "lease_until"}
+            or value["attempt_id"] != config["context"]["attempt_id"] or type(value["cancel"]) is not bool
+            or type(value["lease_until"]) not in (int, float) or not math.isfinite(value["lease_until"])):
+        raise ValueError("Notebook control belongs to a different or invalid attempt.")
+    return value
 
 
 def control_message(attempt_id, *, cancel=False, clock=None):

@@ -22,7 +22,7 @@ from src.mlflow_regions import set_mlflow_experiment
 from src.shap_reporting import explain_saved_model, resolve_shap_config
 from src.feature_selection import (MODEL_KEYS, validate_selection, reusable_groups, rank_training_features,
                                   columns_for_groups, selection_summary, wrap_tree_model, guard_quality_holdout)
-from src.training_progress import report as report_progress, set_fold
+from src.training_progress import report as report_progress, set_fold, start_fit
 
 class _NullMLflowData:
     @staticmethod
@@ -401,11 +401,14 @@ def run_pipeline(
                                 if cached_groups else list(fold_X.columns))
                 import time
                 fold_started = time.perf_counter()
+                start_fit(model_name, "cv_reused" if cached_groups else "cv_full")
                 fold_model = trainer(
                     fold_X[fold_columns],
                     y_development.iloc[train_indices],
                     random_state,
                 )
+                report_progress(model_name, "fit_completed")
+                report_progress(model_name, "evaluating")
                 predictions = fold_model.predict(
                     fold_validation[fold_columns]
                 )
@@ -434,7 +437,10 @@ def run_pipeline(
                                 fold_model = None
                                 import gc
                                 gc.collect()
+                                start_fit(model_name, "cv_reduced")
                                 reduced_model = trainer(fold_X[columns], y_development.iloc[train_indices], random_state)
+                                report_progress(model_name, "fit_completed")
+                                report_progress(model_name, "evaluating")
                                 row["reduced_metrics"] = list(evaluate(y_development.iloc[val_indices],
                                                                       reduced_model.predict(fold_validation[columns])))
                                 del reduced_model
@@ -532,11 +538,14 @@ def run_pipeline(
     report_progress(best["name"], "final_fit_started")
     selected_columns = ((best.get("feature_selection") or {}).get("selected_features")
                         or list(X_development.columns))
+    start_fit(best["name"], "final")
     best_model = best["trainer"](
         X_development[selected_columns],
         y_development,
         random_state,
     )
+    report_progress(best["name"], "fit_completed")
+    report_progress(best["name"], "evaluating")
     if selected_columns != list(X_development.columns):
         best_model = wrap_tree_model(best_model, list(X_development.columns), selected_columns)
     test_predictions = best_model.predict(X_test)
@@ -708,8 +717,11 @@ def run_pipeline(
             name = result["name"]
             columns = ((result.get("feature_selection") or {}).get("selected_features")
                        or list(X_development.columns))
+            set_fold()
             report_progress(name, "final_fit_started")
+            start_fit(name, "final")
             explained_model = result["trainer"](X_development[columns], y_development, random_state)
+            report_progress(name, "fit_completed")
             if columns != list(X_development.columns):
                 explained_model = wrap_tree_model(explained_model, list(X_development.columns), columns)
             try:

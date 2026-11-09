@@ -67,6 +67,7 @@ def prepare_runtime(job):
 
 def run(job, dataset, output):
     import time
+    from datetime import UTC, datetime
     started = time.perf_counter()
     context, config = job["context"], job["configuration"]
     if config.get('training_backend') != 'kaggle':
@@ -74,6 +75,12 @@ def run(job, dataset, output):
     if (sha256_file(dataset) != job["dataset_sha256"]
             or configuration_digest(config) != context["configuration_sha256"]):
         raise ValueError("Dataset/configuration hash differs from the execution contract.")
+    def signal(stage):
+        print(PREFIX + json.dumps({"context": context, "event": {"control": stage,
+            "source_time": datetime.now(UTC).isoformat(), "source_clock": "runner_monotonic_v1",
+            "source_elapsed_seconds": round(time.perf_counter() - started, 6)}}), flush=True)
+
+    signal("runtime_preparing")
     prepare_runtime(job)
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -89,6 +96,7 @@ def run(job, dataset, output):
         print(PREFIX + json.dumps({"context": context, "event": event}, allow_nan=False), flush=True)
 
     with reporting(progress):
+        signal("runtime_ready")
         if branch == "tree":
             if not any(model.endswith("_lag") for model in selected):
                 result = {"branch": "tree", "status": "skipped", "candidates": []}
@@ -136,7 +144,9 @@ def run(job, dataset, output):
     result["execution_cost"] = cost
     for candidate in result.get("candidates", []):
         candidate["execution_cost"] = cost
+    signal("output_writing")
     write_bundle(result, context, output)
+    signal("output_written")
 
 
 def main():

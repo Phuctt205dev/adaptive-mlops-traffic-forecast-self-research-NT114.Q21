@@ -6,11 +6,30 @@ from unittest.mock import Mock, patch
 
 import requests
 
-from src.cloud_training.kaggle_rpc import api_for, install_http_limits
+from src.cloud_training.kaggle_rpc import api_for, install_http_limits, operation
+from src.cloud_training.telemetry import rejection_summary
 from src.cloud_training.kaggle_transport import ProviderError, SDKTransport
 
 
 class KaggleRPCTests(unittest.TestCase):
+    def test_rejection_preserves_only_safe_reason_and_source_categories(self):
+        response = SimpleNamespace(error="private-token: forbidden dataset /owner/private", version_number=2,
+                                   invalid_dataset_sources=["private-input-name"])
+        api = SimpleNamespace(kernels_push=Mock(return_value=response))
+        result = operation(api, "kernel_push", {"directory": "synthetic", "no_run": True}, None)
+        self.assertEqual(result["diagnostic"]["reason"], "invalid_sources")
+        self.assertEqual(result["diagnostic"]["invalid_sources"], ["invalid_dataset_sources"])
+        self.assertFalse(result["diagnostic"]["retryable"])
+        self.assertNotIn("private", json.dumps(result))
+
+    def test_unknown_provider_text_does_not_become_a_retry_instruction(self):
+        response = SimpleNamespace(error="SECRET=value; arbitrary failure", version_number=None)
+        api = SimpleNamespace(kernels_push=lambda *args, **kwargs: response)
+        result = operation(api, "kernel_push", {"directory": "synthetic", "no_run": True}, None)
+        self.assertEqual(result["diagnostic"], {"reason": "provider_rejected", "invalid_sources": [], "retryable": False})
+        self.assertNotIn("SECRET", json.dumps(result))
+        self.assertFalse(rejection_summary({"reason": "authentication", "retryable": True})["retryable"])
+
     def test_status_read_retries_a_transient_rpc_failure_without_submitting_a_fit(self):
         failure = subprocess.CompletedProcess([], 2, json.dumps({"ok": False, "error_type": "ConnectTimeout"}))
         success = subprocess.CompletedProcess([], 0, json.dumps({"ok": True, "result": {"state": "RUNNING"}}))

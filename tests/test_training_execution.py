@@ -2,6 +2,8 @@
 import copy
 import unittest
 import uuid
+from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -15,6 +17,100 @@ from backend.app.schemas.model_version import TrainingRunCreate
 
 
 class TrainingExecutionTests(unittest.TestCase):
+    def test_publication_timing_is_recorded_after_commit_without_republishing(self):
+        self.assertFalse(service.record_finalization_timing(self.db, self.run.id, 3))
+        for branch in service.BRANCHES:
+            attempt = self.claim(branch)
+            service.branch_ready(self.db, self.run.id, branch, attempt, self.receipt(branch))
+        record = service.publication_gate(self.db, self.run.id)
+        service.publication_gate(self.db, self.run.id)
+        self.assertEqual(sum(event["code"] == "publication_started" for event in record.events_json), 1)
+        service.complete_in_transaction(record)
+        self.db.commit()
+        self.assertTrue(service.record_finalization_timing(self.db, self.run.id, 3))
+        self.assertFalse(service.record_finalization_timing(self.db, self.run.id, 4))
+        record = service.execution(self.db, self.run.id)
+        self.assertEqual(record.branches_json["tree"]["finalization"]["seconds"], 3)
+        self.assertEqual(record.state, "completed")
+
+    def timed(self, sequence, stage, elapsed, **details):
+        return self.event(sequence, model="lstm", stage=stage, source_clock="ml_child_monotonic_v1",
+                          source_time="2026-11-09T00:00:00+00:00", source_elapsed_seconds=elapsed, **details)
+
+    def test_delayed_burst_preserves_source_duration_and_cv_is_not_final_completion(self):
+        attempt = self.claim("lstm")
+        received = datetime(2026, 11, 9, 0, 20, tzinfo=UTC)
+        with patch.object(service, "now", return_value=received):
+            service.progress(self.db, self.run.id, "lstm", attempt, self.timed(1, "fit_started", 10, fit_id=1, fit_purpose="cv_full", fold=1, folds=3))
+            service.progress(self.db, self.run.id, "lstm", attempt, self.timed(2, "fit_completed", 40, fit_id=1, fit_purpose="cv_full", epochs=10, epochs_completed=3, early_stopped=True))
+            service.progress(self.db, self.run.id, "lstm", attempt, self.timed(3, "model_cv_completed", 41))
+            record = service.execution(self.db, self.run.id)
+            view = service.snapshot(record, self.run, self.db.get(Dataset, self.run.dataset_id))
+        self.assertEqual(record.models_json["lstm"]["fits"][0]["seconds"], 30)
+        self.assertTrue(record.models_json["lstm"]["fits"][0]["early_stopped"])
+        self.assertEqual(view["evaluated_models"], 0)
+        self.assertEqual(view["cv_completed_models"], 1)
+        self.assertEqual(view["output_verified_models"], 0)
+        self.assertEqual({event["time"] for event in record.events_json[-3:]}, {received.isoformat()})
+        service.progress(self.db, self.run.id, "lstm", attempt, self.timed(4, "final_fit_started", 50))
+        service.progress(self.db, self.run.id, "lstm", attempt, self.timed(5, "fit_started", 51, fit_id=2, fit_purpose="final"))
+        service.progress(self.db, self.run.id, "lstm", attempt, self.timed(6, "model_evaluated", 70))
+        self.assertEqual(service.execution(self.db, self.run.id).models_json["lstm"]["phase_seconds"]["waiting_final"], 9)
+
+    def test_heartbeat_does_not_make_old_ml_progress_look_fresh(self):
+        attempt = self.claim("lstm")
+        start = datetime(2026, 11, 9, tzinfo=UTC)
+        with patch.object(service, "now", return_value=start):
+            service.progress(self.db, self.run.id, "lstm", attempt, self.event(model="lstm"))
+        with patch.object(service, "now", return_value=start + timedelta(minutes=5)):
+            service.heartbeat(self.db, self.run.id, "lstm", attempt)
+            record = service.execution(self.db, self.run.id)
+            view = service.snapshot(record, self.run, self.db.get(Dataset, self.run.dataset_id))
+        model = next(model for model in view["models"] if model["id"] == "lstm")
+        self.assertEqual(model["ml_age_seconds"], 300)
+        self.assertNotEqual(model["last_ml_received_at"], view["branches"]["lstm"]["heartbeat_at"])
+
+    def test_legacy_cv_flag_is_not_counted_as_finished_ml_and_unknown_timing_stays_unknown(self):
+        record = service.execution(self.db, self.run.id)
+        record.models_json = {"lstm": {"name": "LSTM", "state": "evaluated", "stage": "model_cv_completed", "evaluation_completed": True}}
+        view = service.snapshot(record, self.run, self.db.get(Dataset, self.run.dataset_id))
+        self.assertEqual(view["evaluated_models"], 0)
+        self.assertEqual(view["cv_completed_models"], 1)
+        self.assertEqual(view["models"][0]["phase"], "waiting_final")
+        self.assertNotIn("source_time", view["models"][0])
+
+    def test_timing_and_history_survive_provider_cleanup_without_exposing_snapshot(self):
+        attempt = self.claim("lstm")
+        provider = {"backend": "kaggle", "snapshot": {"secret": "DO_NOT_EXPOSE"}, "reference": "PRIVATE_REFERENCE",
+                    "phase": "branch_ready", "telemetry": {"version": 1, "operations": {"status": {"seconds": 3, "count": 2}}}}
+        service.update_provider(self.db, self.run.id, "lstm", attempt, {**provider, "notebook_cleaned": True, "dataset_cleaned": True})
+        record = service.execution(self.db, self.run.id)
+        view = service.snapshot(record, self.run, self.db.get(Dataset, self.run.dataset_id))
+        self.assertEqual(view["branches"]["lstm"]["observation"]["telemetry"], provider["telemetry"])
+        self.assertNotIn("DO_NOT_EXPOSE", str(view))
+        self.assertNotIn("PRIVATE_REFERENCE", str(view))
+
+    def test_source_clock_regression_invalid_fit_and_partial_timing_are_rejected(self):
+        attempt = self.claim("lstm")
+        service.progress(self.db, self.run.id, "lstm", attempt, self.timed(1, "model_started", 10))
+        invalid = [self.timed(2, "epoch_started", 9), self.event(2, model="lstm", source_time="not-a-clock"),
+                   self.timed(2, "fit_started", 11, fit_id=1),
+                   self.timed(2, "fit_completed", 12, epochs=3, epochs_completed=4),
+                   self.timed(2, "fit_completed", 12, early_stopped="true")]
+        for event in invalid:
+            with self.subTest(event=event), self.assertRaises(ApplicationError):
+                service.progress(self.db, self.run.id, "lstm", attempt, event)
+
+    def test_per_model_history_is_bounded_and_duplicate_event_does_not_advance_it(self):
+        attempt = self.claim("lstm")
+        for sequence in range(1, 62):
+            service.progress(self.db, self.run.id, "lstm", attempt, self.timed(sequence, "epoch_completed", sequence, epoch=sequence, epochs=100))
+        record = service.execution(self.db, self.run.id)
+        self.assertEqual(len(record.models_json["lstm"]["history"]), 48)
+        count = len(record.events_json)
+        self.assertFalse(service.progress(self.db, self.run.id, "lstm", attempt, self.timed(60, "epoch_completed", 60)))
+        self.assertEqual(len(service.execution(self.db, self.run.id).events_json), count)
+
     def test_secondary_stop_callback_keeps_first_failure_and_does_not_duplicate_logs(self):
         tree = self.claim("tree")
         neural = self.claim("lstm")
@@ -155,7 +251,10 @@ class TrainingExecutionTests(unittest.TestCase):
         service.progress(self.db, self.run.id, "tree", attempt, self.event(3, stage="final_fit_started"))
         model = service.execution(self.db, self.run.id).models_json["random_forest_lag"]
         self.assertNotIn("fold", model)
-        self.assertTrue(model["evaluation_completed"])
+        self.assertTrue(model["cv_completed"])
+        self.assertFalse(model["evaluation_completed"])
+        self.assertFalse(model["ml_completed"])
+        self.assertEqual(model["phase"], "final_fit")
 
     def test_receipts_required_and_cannot_change_after_acceptance(self):
         attempt = self.claim()

@@ -58,7 +58,7 @@ class ChildDiagnosticTests(unittest.TestCase):
         output = io.StringIO()
         operation(api, "events", {"reference": "private/probe/1", "context": context}, output)
         packet = json.loads(output.getvalue().removeprefix("TRAFFIC_EXECUTION_EVENT "))["event"]
-        provider = KaggleExecution.__new__(KaggleExecution)
+        provider = KaggleExecution(None, ".", {}, lambda value: None)
         provider.stream, provider.ledger, provider.last_sequence = FakeStream([packet]), {}, 0
         provider.save = lambda **values: provider.ledger.update(copy.deepcopy(values))
         provider.drain(Mock())
@@ -94,6 +94,7 @@ class ChildDiagnosticTests(unittest.TestCase):
         env = {"child": SimpleNamespace(stdout=io.StringIO(line)), "json": json, "re": re,
                "CONFIG": {"context": {"run_id": "synthetic"}}, "queue_events": queue.Queue(),
                "reader_failed": SimpleNamespace(set=Mock())}
+        env["forward"] = env["queue_events"].put_nowait
         exec(compile(ast.Module(body=[reader], type_ignores=[]), "synthetic_reader.py", "exec"), env)
         env["read_output"]()
         return env
@@ -124,7 +125,7 @@ class ChildDiagnosticTests(unittest.TestCase):
         self.assertEqual(packet["event"], {"control": "failed", "failure": self.failure()})
 
     def test_provider_journals_failure_separately_from_progress(self):
-        provider = KaggleExecution.__new__(KaggleExecution)
+        provider = KaggleExecution(None, ".", {}, lambda value: None)
         provider.stream = FakeStream([{"control": "failed", "failure": self.failure()}, {"control": "failed"}])
         provider.ledger = {}
         provider.last_sequence = 0
@@ -136,7 +137,7 @@ class ChildDiagnosticTests(unittest.TestCase):
 
     def test_known_child_failure_is_distinct_from_provider_failure(self):
         for known in (False, True):
-            provider = KaggleExecution.__new__(KaggleExecution)
+            provider = KaggleExecution(None, ".", {}, lambda value: None, background_progress=False)
             provider.ledger = {"failure_diagnostic": self.failure()} if known else {}
             provider.clock = lambda: 1000
             provider.submit, provider.control, provider.drain, provider.sleep = Mock(), Mock(), Mock(), Mock()

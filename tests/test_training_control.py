@@ -53,6 +53,9 @@ class FakeCloud:
         return True
     def cleanup(self):
         return True
+    @contextmanager
+    def measured(self, *args, **kwargs):
+        yield
 
 
 class TrainingControlTests(unittest.TestCase):

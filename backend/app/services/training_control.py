@@ -25,6 +25,7 @@ from src.cloud_training.kaggle_execution import KaggleExecution, TrainingCancell
 from src.cloud_training.kaggle_transport import ProviderError, SDKTransport
 from src.cloud_training.package import configuration_digest, prepare_package
 from src.cloud_training.process import ExecutionProcess, cleanup_execution, execution_directory
+from src.cloud_training.telemetry import operation_timing
 
 
 def failure_facts(error, phase, branch):
@@ -176,7 +177,10 @@ class WorkerController:
         progress = lambda event: self.progress(run_id, branch, attempt, event)
         directory = execution_directory(self.root, str(run_id), branch, attempt)
         phase = 'prepare_input'
+        preparation_start = time.monotonic()
+        preparation = {"backend": "kaggle", "phase": "prepare_input", "telemetry": {}}
         try:
+            self.save_provider(run_id, branch, attempt, preparation)
             if self.barrier_factory:
                 barrier = self.barrier_factory()
                 barrier.__enter__()
@@ -212,6 +216,8 @@ class WorkerController:
                 if not skip:
                     source = self.training._ensure_dataset_downloaded(dataset, run)
                     snapshot = prepare_package(self.project, source, configuration, context, directory / "input", dataset.sha256, profile)
+                    registered_rows = dataset.row_count
+            operation_timing(preparation["telemetry"], "prepare_input", time.monotonic() - preparation_start)
             if cancelled():
                 raise TrainingCancelled("Training stopped before execution.")
             if skip:
@@ -225,6 +231,10 @@ class WorkerController:
                     raise ApplicationError("cloud_training_not_ready", "Cloud execution is not configured on this worker.", 503)
                 phase = 'prepare_notebook'
                 ledger = initial_ledger(snapshot, self.username)
+                ledger["telemetry"] = preparation["telemetry"]
+                ledger["workload"] = {"configuration_sha256": context["configuration_sha256"],
+                    "dataset_sha256": snapshot["files"]["dataset.csv"]["sha256"],
+                    "source_sha256": snapshot["files"]["source.bin"]["sha256"], "registered_dataset_rows": registered_rows}
                 self.save_provider(run_id, branch, attempt, ledger)
                 provider = KaggleExecution(self.transport, directory, ledger,
                     lambda value: self.save_provider(run_id, branch, attempt, value))
@@ -232,13 +242,25 @@ class WorkerController:
                 phase = 'provider_execution'
                 result = provider.run(progress, cancelled)
                 handle["stopped"] = True
-                if not provider.cleanup():
-                    raise RuntimeError("Cloud staging cleanup was not confirmed.")
+                with provider.measured("cloud_cleanup"):
+                    if not provider.cleanup():
+                        raise RuntimeError("Cloud staging cleanup was not confirmed.")
             if cancelled():
                 raise TrainingCancelled("Training stopped before result publication.")
             phase = 'verify_serving'
+            provider = handle["provider"]
+            if provider:
+                provider.phase("verify_serving")
+            verify_started = time.monotonic()
             self.verify_serving(directory, context, result, handle, cancelled)
+            if provider:
+                telemetry = copy.deepcopy(provider.ledger.get("telemetry", {}))
+                operation_timing(telemetry, "verify_serving", time.monotonic() - verify_started)
+                provider.save(telemetry=telemetry)
             phase = 'publish_branch'
+            if provider:
+                provider.phase("publish_branch")
+            publish_started = time.monotonic()
             with self.sessions() as db:
                 # Serialize publication against a concurrent sibling failure.
                 record = state.execution(db, run_id, lock=True)
@@ -246,6 +268,11 @@ class WorkerController:
                 run = db.get(TrainingRun, run_id)
                 receipt = self.bridge.publish_branch(run, branch, result)
                 state.branch_ready(db, run_id, branch, attempt, receipt, skipped=result.get("status") == "skipped")
+            if provider:
+                telemetry = copy.deepcopy(provider.ledger.get("telemetry", {}))
+                operation_timing(telemetry, "publish_branch", time.monotonic() - publish_started)
+                provider.save(telemetry=telemetry)
+                provider.phase("branch_ready")
             cleanup_execution(self.root, str(run_id), branch, attempt)
         except Exception as error:
             handle["failed"] = True
@@ -256,11 +283,18 @@ class WorkerController:
                 # Keep only normalized technical facts, never SDK exception text.
                 try:
                     handle["provider"].save(last_failure={"operation": error.operation, "category": error.category,
-                                                           "http_status": error.http_status})
+                                                           "http_status": error.http_status,
+                                                           "diagnostic": error.diagnostic or {}})
                 except Exception:
                     pass  # Diagnostics must not prevent the fail/stop fence.
             if handle["process"] is not None:
                 handle["stopped"] = handle["process"].stop()
+            if handle["provider"] is None:
+                operation_timing(preparation["telemetry"], "prepare_input", time.monotonic() - preparation_start, failed=True)
+                try:
+                    self.save_provider(run_id, branch, attempt, preparation)
+                except Exception:
+                    pass
             with self.sessions() as db:
                 db.rollback()
                 state.fail_run(db, run_id, branch, attempt,
@@ -365,7 +399,9 @@ class WorkerController:
                         provider = KaggleExecution(self.transport, directory, provider_journal,
                             lambda value, r=run_id, b=branch, a=attempt: self.save_provider(r, b, a, value))
                         stopped = provider.stop()
-                        cleaned_cloud = stopped and provider.cleanup()
+                        with provider.measured("cloud_cleanup"):
+                            cleaned_cloud = stopped and provider.cleanup()
+                        provider_journal = copy.deepcopy(provider.ledger)
                     else:
                         # A local child in a dead container cannot survive. In
                         # a same-container supervisor restart, inspect its exact

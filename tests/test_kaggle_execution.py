@@ -2,6 +2,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import threading
 import tempfile
 import unittest
 from unittest.mock import Mock
@@ -72,6 +73,180 @@ class FakeTransport:
 
 
 class KaggleExecutionTests(unittest.TestCase):
+    def test_remote_cancel_is_latched_and_never_cleared_by_a_lease_renewal(self):
+        from src.cloud_training.control import with_control, source_control
+        self.provider.submit()
+        self.transport.source = with_control(self.transport.source, cancel=True, clock=1000)
+        self.provider.control()
+        self.assertTrue(source_control(self.transport.source)["cancel"])
+        self.assertTrue(self.provider.ledger["cancel_requested"])
+
+    def test_foreign_control_attempt_is_rejected_before_quick_save(self):
+        self.provider.submit()
+        # Change just the mutable control line, leaving the pinned body/config intact.
+        lines = self.transport.source.splitlines()
+        for index, line in enumerate(lines):
+            if line.startswith(CONTROL_PREFIX):
+                value = json.loads(line[len(CONTROL_PREFIX):])
+                value["attempt_id"] = str(uuid.uuid4())
+                lines[index] = CONTROL_PREFIX + json.dumps(value)
+        self.transport.source = "\n".join(lines) + "\n"
+        before = sum(operation == "kernel_push" for operation, _ in self.transport.calls)
+        with self.assertRaises(ValueError):
+            self.provider.control()
+        self.assertEqual(sum(operation == "kernel_push" for operation, _ in self.transport.calls), before)
+
+    def test_progress_delivery_failure_always_closes_the_stream_and_blocks_fetch(self):
+        stream = FakeStream([])
+        stream.stop = Mock(return_value=True)
+        self.provider.stream = stream
+        self.provider.submit = Mock()
+        self.provider._progress_error = ProviderError("Invalid progress stream")
+        self.provider.fetch = Mock()
+        with self.assertRaises(ProviderError):
+            self.provider.run(Mock(), lambda: False)
+        stream.stop.assert_called_once()
+        self.provider.fetch.assert_not_called()
+
+    def test_transient_control_refusal_retries_only_after_unchanged_version_readback(self):
+        self.provider.submit()
+        original, writes = self.transport.call, []
+        def call(operation, **values):
+            if operation == "kernel_push":
+                writes.append(values)
+                if len(writes) == 1:
+                    return {"rejected": True, "diagnostic": {"reason": "rate_limit", "retryable": True}}
+            return original(operation, **values)
+        self.transport.call = call
+        self.provider.control()
+        self.assertEqual(len(writes), 2)
+        self.assertTrue(all(write["no_run"] for write in writes))
+        self.assertFalse(self.provider.ledger["control_pending"])
+        self.assertEqual(self.provider.ledger["version"], 1)
+
+    def test_unknown_rejection_is_diagnosed_and_not_retried(self):
+        self.provider.submit()
+        original, writes = self.transport.call, []
+        def call(operation, **values):
+            if operation == "kernel_push":
+                writes.append(values)
+                return {"rejected": True, "diagnostic": {"reason": "provider_rejected", "raw": "SECRET"}}
+            return original(operation, **values)
+        self.transport.call = call
+        with self.assertRaises(ProviderError) as caught:
+            self.provider.control()
+        self.assertEqual(caught.exception.category, "control_rejected")
+        self.assertEqual(len(writes), 1)
+        self.assertNotIn("SECRET", json.dumps(self.provider.ledger))
+        self.assertFalse(self.provider.ledger["control_pending"])
+
+    def test_refusal_with_invalid_sources_remains_fatal_even_if_flag_says_retryable(self):
+        self.provider.submit()
+        original, writes = self.transport.call, []
+        def call(operation, **values):
+            if operation == "kernel_push":
+                writes.append(values)
+                return {"rejected": True, "diagnostic": {"reason": "rate_limit", "retryable": True,
+                    "invalid_sources": ["invalid_dataset_sources"]}}
+            return original(operation, **values)
+        self.transport.call = call
+        with self.assertRaises(ProviderError):
+            self.provider.control()
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(self.provider.ledger["last_failure"]["diagnostic"]["reason"], "invalid_sources")
+
+    def test_rejected_flag_can_be_reconciled_only_with_advanced_version_and_exact_source(self):
+        self.provider.submit()
+        original = self.transport.call
+        def call(operation, **values):
+            response = original(operation, **values)
+            return {"rejected": True} if operation == "kernel_push" else response
+        self.transport.call = call
+        self.provider.control()
+        self.assertEqual(self.provider.ledger["control_version"], 2)
+        self.assertEqual(self.provider.ledger["confirmed_control_writes"], 1)
+
+    def test_uncertain_write_and_restart_never_repeat_an_unconfirmed_control(self):
+        self.provider.submit()
+        original, writes = self.transport.call, []
+        def call(operation, **values):
+            if operation == "kernel_push":
+                writes.append(values)
+                raise ProviderError("response not received", operation=operation, category="response_timeout")
+            return original(operation, **values)
+        self.transport.call = call
+        with self.assertRaises(ProviderError):
+            self.provider.control()
+        recovered = self.make(self.saved[-1])
+        with self.assertRaises(ProviderError):
+            recovered.control(cancel=True)
+        self.assertEqual(len(writes), 1)
+        self.assertTrue(recovered.ledger["control_pending"])
+
+    def test_restart_reconciles_the_original_control_intent_before_a_new_write(self):
+        self.provider.submit()
+        original = self.transport.call
+        written = [False]
+        def call(operation, **values):
+            if operation == "kernel_get" and written[0]:
+                raise ProviderError("readback unavailable", operation=operation)
+            response = original(operation, **values)
+            if operation == "kernel_push":
+                written[0] = True
+                raise ProviderError("reply unavailable", operation=operation, category="response_timeout")
+            return response
+        self.transport.call = call
+        with self.assertRaises(ProviderError):
+            self.provider.control()
+        recovered = self.make(self.saved[-1])
+        self.transport.call = original
+        recovered.control()
+        self.assertFalse(recovered.ledger["control_pending"])
+        self.assertEqual(recovered.ledger["confirmed_control_writes"], 1)
+        self.assertEqual(sum(op == "kernel_push" for op, _ in self.transport.calls), 2)  # submit + original control
+
+    def test_rpc_operation_timing_uses_one_monotonic_clock_and_records_failed_calls(self):
+        self.provider.submit()
+        clock = [0.0]
+        self.provider.monotonic = lambda: clock[0]
+        original = self.transport.call
+        def call(operation, **values):
+            clock[0] += 7
+            if operation == "status":
+                raise ProviderError("not confirmed")
+            return original(operation, **values)
+        self.transport.call = call
+        with self.assertRaises(ProviderError):
+            self.provider.status()
+        measured = self.provider.ledger["telemetry"]["operations"]["status"]
+        self.assertEqual(measured["seconds"], 7)
+        self.assertEqual(measured["errors"], 1)
+        self.assertNotIn("provider_running_observed", self.provider.ledger["telemetry"]["milestones"])
+
+    def test_progress_is_delivered_while_control_rpc_is_blocked(self):
+        self.provider.submit()
+        blocked, delivered = threading.Event(), threading.Event()
+        class LiveStream(FakeStream):
+            def drain(stream):
+                return super().drain() if blocked.is_set() else []
+        stream = LiveStream([{"sequence": 1, "model": "random_forest_lag", "stage": "model_started"}])
+        self.transport.stream = lambda *args: stream
+        original = self.transport.call
+        def call(operation, **values):
+            if operation == "kernel_push":
+                blocked.set()
+                self.assertTrue(delivered.wait(2), "ML progress was blocked by the control RPC")
+            return original(operation, **values)
+        self.transport.call = call
+        self.provider.background_progress = True
+        try:
+            self.provider._start_progress(lambda event: delivered.set())
+            self.provider.control()
+        finally:
+            self.provider._stop_progress()
+        self.assertEqual(self.provider.last_sequence, 1)
+        self.assertFalse(self.provider._progress_thread.is_alive())
+
     def test_lost_control_reply_reconciles_source_without_another_write(self):
         self.provider.submit()
         self.transport.lost_response = True
@@ -94,11 +269,17 @@ class KaggleExecutionTests(unittest.TestCase):
         self.provider = self.make(self.ledger)
     def make(self, ledger):
         return KaggleExecution(self.transport, self.root, ledger, lambda value: self.saved.append(copy.deepcopy(value)),
-                               clock=lambda: 1000, sleep=lambda seconds: None)
+                               clock=lambda: 1000, sleep=lambda seconds: None, background_progress=False)
 
     def test_submit_pins_private_version_and_fences_before_network(self):
+        original = self.transport.call
+        def fenced(operation, **values):
+            if operation == "dataset_create":
+                self.assertTrue(self.saved[-1]["dataset_pending"])
+            return original(operation, **values)
+        self.transport.call = fenced
         self.assertTrue(self.provider.submit().endswith("/1"))
-        self.assertTrue(self.saved[0]["dataset_pending"])
+        self.assertTrue(any(item["dataset_pending"] for item in self.saved))
         self.assertTrue(any(item["submit_pending"] for item in self.saved))
         self.assertEqual(self.transport.metadata["dataset_sources"], [self.ledger["dataset_reference"] + "/1"])
         self.assertTrue(self.transport.metadata["is_private"])
@@ -197,6 +378,7 @@ class KaggleExecutionTests(unittest.TestCase):
         self.assertEqual(sum(op == 'dataset_create' for op, _ in self.transport.calls), 1)
         self.assertEqual(sum(op == 'kernel_push' and not value.get('no_run')
                              for op, value in self.transport.calls), 1)
+        self.assertFalse(any(op == "kernel_push" and value.get("no_run") for op, value in self.transport.calls))
 
     def test_complete_without_final_event_remains_failed_and_bounded(self):
         elapsed = self.terminal_run()

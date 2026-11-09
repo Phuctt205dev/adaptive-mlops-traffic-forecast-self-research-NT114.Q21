@@ -103,6 +103,12 @@
 .training-monitor-progress { margin: 24px 0; }
 .training-monitor-progress > div { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .training-monitor-progress span { color: #526680; }
+.training-monitor-progress p { color: #526680; line-height: 1.5; }
+.training-monitor-details { margin-top: 18px; padding: 14px; border: 1px solid #e2e8f0; border-radius: 10px; overflow: auto; }
+.training-monitor-details summary { cursor: pointer; font-weight: 600; color: #334155; }
+.training-monitor-details p { color: #526680; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.training-monitor-details h4 { margin: 18px 0 8px; }
+.training-monitor .training-model-state { white-space: normal; line-height: 1.5; }
 .training-monitor-progress progress { appearance: none; width: 100%; height: 12px; border: 0; border-radius: 10px; overflow: hidden; background: #e2e8f0; }
 .training-monitor-progress progress::-webkit-progress-bar { background: #e2e8f0; }
 .training-monitor-progress progress::-webkit-progress-value { background: #0284c7; border-radius: 10px; }

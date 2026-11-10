@@ -61,7 +61,8 @@ chạy nhanh hơn hoặc tương đương coverage.
 
 Phải kiểm artifact sau upload/download, gồm file ẩn `.nojekyll`. Job build
 xanh chỉ chứng minh compile thành công nếu chưa kiểm gói được truyền thật;
-frontend-build hiện tải lại artifact và chạy `frontend-verify` trước acceptance.
+`acceptance` tải artifact sau khi job `frontend-build` hoàn tất và chạy
+`frontend-verify` trước khi ghi nhận kiểm tra thành công.
 
 Scope tính từ backend đã Verify, có thể tích lũy nhiều commit; không gán nhãn
 frontend-only chỉ vì commit mới nhất sửa frontend. Recipe dùng chung vẫn có

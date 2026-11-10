@@ -14,6 +14,10 @@ hướng dẫn này áp dụng cho các thành phần hiện có.
 4. Push sau merge chạy kiểm phát hành và chọn image/rollout theo phạm vi
    thay đổi. Production Manual vẫn cần người có quyền duyệt environment.
 
+`frontend-build` thành công ghi nhận việc build/upload đã xong. Job
+`acceptance` tiếp tục tải và xác minh gói trên runner riêng; PR chỉ đạt khi
+gói tải lại đúng source, cấu hình, attempt và toàn bộ file/hash.
+
 PR không publish image hoặc triển khai production. Chính sách nhánh chỉ bật
 sau khi phiên bản PR gate này đã được kiểm chứng trên GitHub; tài liệu source
 không chứng minh settings đã được áp dụng.

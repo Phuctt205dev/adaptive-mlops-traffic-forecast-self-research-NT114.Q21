@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -289,6 +290,25 @@ class SameRunAndFreshnessTests(unittest.TestCase):
 
 
 class FrontendBuildTests(unittest.TestCase):
+    def test_fresh_verifier_job_recreates_the_build_configuration(self):
+        for event, config in [('pull_request', {'api_url':'https://ci.invalid/api/v1', 'base_path':'/ci/'}),
+                              ('push', CONFIG)]:
+            with self.subTest(event=event), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); producer = root/'producer'; (producer/'dist').mkdir(parents=True)
+                (producer/'dist/index.html').write_text('built output')
+                (producer/'dist/.nojekyll').write_bytes(b'')
+                frontend_release.build_manifest(producer, commit=A, tree='tree', config=config, run_id=1, attempt=2)
+                consumer = root/'downloaded'; shutil.copytree(producer, consumer)
+                # A fresh acceptance runner has no VITE variables from the producer.
+                env = {**ENV, 'GITHUB_EVENT_NAME':event, 'GITHUB_REPOSITORY':'owner/repo',
+                       'GITHUB_ENV':str(root/'environment'), 'FRONTEND_API_URL':CONFIG['api_url'],
+                       'FRONTEND_BASE_PATH':CONFIG['base_path']}
+                with patch.dict(os.environ, env, clear=True), redirect_stdout(io.StringIO()):
+                    pipeline.frontend_config_main()
+                    configured = dict(line.split('=', 1) for line in (root/'environment').read_text().splitlines())
+                    with patch.dict(os.environ, configured), patch.object(pipeline.subprocess, 'run', return_value=Mock(stdout='tree\n')):
+                        pipeline.frontend_verify_main(directory=consumer)
+
     def test_downloaded_artifact_must_preserve_hidden_output_before_acceptance(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);(root/'dist').mkdir()

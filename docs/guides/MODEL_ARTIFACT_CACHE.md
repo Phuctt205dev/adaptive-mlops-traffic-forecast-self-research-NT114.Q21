@@ -50,6 +50,10 @@ Helper flush/inventory được thực thi trong image legacy phải giữ khả
 nạp bằng stdlib; chỉ import module disk cache khi có biến opt-in trên pod mới.
 Fixture thay PVC log bằng emptyDir cũng phải có sizeLimit để qua cùng checker
 disk staging, không bỏ kiểm cho môi trường test.
+Khi dựng cohort legacy từ template chung, fixture loại opt-in cache mới khỏi
+container cũ và dùng bootstrap `full` cho cache seed. Cohort native đích giữ
+`active` và bounded cache. Nếu để init mới tạo index rồi chạy uploader legacy,
+index có thể bị upload lên S3; guard vẫn chặn restore metadata nội bộ từ S3.
 
 Metadata local nằm trong models/.traffic-cache, được loại khỏi uploader/flush và không được
 restore từ object store. Khóa file trên volume dùng chung giữa process/container,

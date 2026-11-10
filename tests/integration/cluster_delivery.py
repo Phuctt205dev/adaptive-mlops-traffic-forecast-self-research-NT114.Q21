@@ -46,6 +46,33 @@ def service(name,app,port=8000):
             'spec':{'selector':{'app':app},'ports':[{'port':port,'targetPort':port}]}}
 
 
+def legacy_workload(value,role,legacy,baseline):
+    """Keep candidate-only cache features out of the pre-migration cohort.
+
+    Images/loaders remain pinned. Candidate init images only seed the tiny
+    fixture cache in explicit full mode, without the new local cache index.
+    Native target manifests are untouched and retain active/bounded caching.
+    """
+    value=copy.deepcopy(value)
+    spec=value['spec'];value['metadata']['name']=legacy;spec['selector']['matchLabels']['app']=legacy
+    spec['template']['metadata']={'labels':{'app':legacy,'traffic-region-cleanup-peer':'true'}}
+    pod=spec['template']['spec'];pod['containers'][0]['image']=baseline
+    for item in [*pod['containers'],*pod.get('initContainers',[])]:
+        item['env']=[e for e in item.get('env',[]) if e['name']!='TRAFFIC_ARTIFACT_CACHE_BYTES']
+        if item['name']=='restore-cache':
+            item['env']=[e for e in item['env'] if e['name']!='TRAFFIC_CACHE_RESTORE_MODE']
+            item['env'].append({'name':'TRAFFIC_CACHE_RESTORE_MODE','value':'full'})
+    if role=='api':
+        pod['containers'][0].pop('lifecycle',None)
+        pod['containers'][0]['readinessProbe']['httpGet']['path']='/api/v1/health/ready'
+        pod['affinity']['podAntiAffinity']['requiredDuringSchedulingIgnoredDuringExecution'][0]['labelSelector']['matchLabels']['app']=legacy
+        sync=pod['initContainers'].pop();sync.pop('restartPolicy',None);sync['name']='artifact-cache-sync';sync['image']=baseline
+        sync['command']=['python','-B','/opt/traffic-release/cache_sync.py']
+        sync['volumeMounts'].append({'name':'legacy-cleanup','mountPath':'/opt/region-cleanup','readOnly':True})
+        pod['volumes'].append({'name':'legacy-cleanup','configMap':{'name':'legacy-cleanup'}});pod['containers'].append(sync)
+    return value
+
+
 class Suite:
     def __init__(self,kubeconfig,release,fixtures,mode='migration'):
         if mode not in {'current','migration'}:raise ValueError('Unknown isolated suite')
@@ -215,17 +242,7 @@ class Suite:
         baseline=json.loads((release[0]/'release.json').read_text())['baseline']['legacy_application_image']
         for role,legacy in [('api','traffic-api'),('tree','traffic-training-tree'),('neural','traffic-training-worker')]:
             first=SLOTS[role][0];value=render(role,first,images,directory=release[0])
-            spec=value['spec'];value['metadata']['name']=legacy;spec['selector']['matchLabels']['app']=legacy
-            spec['template']['metadata']={'labels':{'app':legacy,'traffic-region-cleanup-peer':'true'}}
-            pod=spec['template']['spec'];pod['containers'][0]['image']=baseline
-            if role=='api':
-                pod['containers'][0].pop('lifecycle',None)
-                pod['containers'][0]['readinessProbe']['httpGet']['path']='/api/v1/health/ready'
-                pod['affinity']['podAntiAffinity']['requiredDuringSchedulingIgnoredDuringExecution'][0]['labelSelector']['matchLabels']['app']=legacy
-                sync=pod['initContainers'].pop();sync.pop('restartPolicy',None);sync['name']='artifact-cache-sync';sync['image']=baseline
-                sync['command']=['python','-B','/opt/traffic-release/cache_sync.py']
-                sync['volumeMounts'].append({'name':'legacy-cleanup','mountPath':'/opt/region-cleanup','readOnly':True})
-                pod['volumes'].append({'name':'legacy-cleanup','configMap':{'name':'legacy-cleanup'}});pod['containers'].append(sync)
+            value=legacy_workload(value,role,legacy,baseline)
             self.create(value)
             for slot in SLOTS[role]:self.create(render(role,slot,images,directory=release[0],inactive=True))
             self.cluster.wait(legacy)

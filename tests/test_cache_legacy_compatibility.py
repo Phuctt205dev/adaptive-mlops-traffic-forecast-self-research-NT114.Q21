@@ -1,16 +1,19 @@
 """Candidate helpers must work in the pinned legacy image before mutation."""
 import builtins
-from contextlib import nullcontext
+from contextlib import nullcontext,redirect_stdout
+import io
 import os
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import MagicMock,patch
+from unittest.mock import MagicMock,Mock,patch
 
 from scripts.cicd.capacity import staging_disk
-from tests.integration.cluster_delivery import Suite
+from tests.integration.cluster_delivery import Suite,legacy_workload
+from scripts.cicd.role_manifests import render,SLOTS
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -60,6 +63,46 @@ class LegacyHelperTests(unittest.TestCase):
 
 
 class FixtureStorageTests(unittest.TestCase):
+    def values(self,role):
+        images={r:{'image':'ghcr.io/owner/backend@sha256:'+str(i)*64,'source_id':str(i)*64}
+                for i,r in enumerate(('api','tree','neural','sync'),1)}
+        current=render(role,SLOTS[role][0],images)
+        old=legacy_workload(current,role,'legacy-'+role,'ghcr.io/owner/old@sha256:'+'9'*64)
+        return current,old
+
+    def test_legacy_cohort_does_not_inherit_native_cache_opt_in(self):
+        for role in SLOTS:
+            with self.subTest(role=role):
+                current,old=self.values(role)
+                pod=old['spec']['template']['spec']
+                self.assertFalse(any(e['name']=='TRAFFIC_ARTIFACT_CACHE_BYTES'
+                    for c in [*pod['containers'],*pod.get('initContainers',[])] for e in c.get('env',[])))
+                if role=='api':
+                    native=current['spec']['template']['spec']
+                    self.assertEqual({e['name']:e.get('value') for e in native['initContainers'][-2]['env']}['TRAFFIC_CACHE_RESTORE_MODE'],'active')
+                    self.assertIn('TRAFFIC_ARTIFACT_CACHE_BYTES',{e['name'] for e in native['containers'][0]['env']})
+                    legacy_restore=next(c for c in pod['initContainers'] if c['name']=='restore-cache')
+                    self.assertEqual({e['name']:e.get('value') for e in legacy_restore['env']}['TRAFFIC_CACHE_RESTORE_MODE'],'full')
+                    self.assertEqual(pod['containers'][-1]['name'],'artifact-cache-sync')
+                    self.assertNotIn('restartPolicy',pod['containers'][-1])
+
+    def test_legacy_bootstrap_never_creates_metadata_for_old_uploader(self):
+        from backend.app.services import restore_cache
+        _,old=self.values('api');pod=old['spec']['template']['spec']
+        init=next(c for c in pod['initContainers'] if c['name']=='restore-cache')
+        env={e['name']:e['value'] for e in init['env'] if 'value' in e}
+        env['TRAFFIC_API_RUNTIME_BUCKET']='synthetic'
+        client=Mock();client.get_paginator.return_value.paginate.return_value=[{'Contents':[{'Key':'models/probe.joblib','Size':5}]}]
+        client.get_object.return_value={'Body':io.BytesIO(b'model'),'ETag':'fixture-etag','Metadata':{}}
+        with tempfile.TemporaryDirectory() as directory,patch.dict(os.environ,env,clear=True),\
+             patch.object(restore_cache,'bootstrap_keys',return_value={'models/probe.joblib'}),\
+             patch.dict(sys.modules,{'backend.app.services.region_cleanup_uploader':SimpleNamespace(get_upload_client=lambda:client)}),\
+             patch('backend.app.services.artifact_cache.ArtifactCache',side_effect=AssertionError('Legacy must not create a native cache index')),\
+             redirect_stdout(io.StringIO()):
+            root=Path(directory);restore_cache.restore(root)
+            self.assertEqual((root/'models/probe.joblib').read_bytes(),b'model')
+            self.assertFalse((root/'models/.traffic-cache').exists())
+
     def test_disposable_pvc_replacement_is_bounded_and_capacity_checked(self):
         with tempfile.TemporaryDirectory() as directory:
             source=Path(directory);target=source/'deployment/rke2/roles';target.mkdir(parents=True)

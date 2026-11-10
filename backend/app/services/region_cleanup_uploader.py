@@ -14,6 +14,8 @@ from backend.app.db.models import AuditLog
 from backend.app.db.session import engine, SessionLocal
 from backend.app.services.region_cleanup import COMPLETED, cleanup_requested, database_barrier, pending_cleanup
 from backend.app.services.artifact_paths import owns_key
+from backend.app.services.artifact_cache import configured,internal,sha256_file
+from backend.app.services.restore_cache import MODEL_BINARIES,bootstrap_keys
 
 
 @lru_cache(maxsize=1)
@@ -64,7 +66,22 @@ def file_fingerprint(path):
     return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
-def upload_cycle(root='/cache', *, state=None):
+def upload_cycle(root='/cache', *, state=None,prune=False):
+    cache=configured(Path(root)/'models')
+    if cache:
+        with cache.hold():
+            uploaded=_upload_cycle(root,state=state,cache=cache)
+            if prune:
+                with database_barrier(engine):
+                    with SessionLocal() as db:
+                        if pending_cleanup(db) is not None:return uploaded
+                    pins={key.removeprefix('models/') for key in bootstrap_keys()}
+                    cache.make_room(0,pinned=pins,client=get_upload_client(),bucket=os.environ['TRAFFIC_API_RUNTIME_BUCKET'])
+            return uploaded
+    return _upload_cycle(root,state=state)
+
+
+def _upload_cycle(root,*,state=None,cache=None):
     state = state if state is not None else UploadState()
     state.unchanged = 0
     bucket = os.environ['TRAFFIC_API_RUNTIME_BUCKET']
@@ -75,7 +92,7 @@ def upload_cycle(root='/cache', *, state=None):
         if not parent.exists():
             continue
         for path in parent.rglob('*'):
-            if not path.is_file() or path.is_symlink() or path.name.endswith('.tmp'):
+            if not path.is_file() or path.is_symlink() or path.name.endswith('.tmp') or internal(path.relative_to(root)):
                 continue
             if any(p.is_symlink() for p in path.parents if p != Path(root)):
                 continue
@@ -90,6 +107,7 @@ def upload_cycle(root='/cache', *, state=None):
             if not state.needs_upload(key, fingerprint):
                 state.unchanged += 1
                 continue
+            model=bool(cache and path.is_relative_to(cache.root) and path.suffix.lower() in MODEL_BINARIES)
             # Each object is protected until success or multipart abort, but a
             # whole 1+ GiB cache cycle can no longer starve an admin deletion.
             with database_barrier(engine) as connection:
@@ -110,8 +128,15 @@ def upload_cycle(root='/cache', *, state=None):
                     fingerprint = file_fingerprint(path)
                 except FileNotFoundError:
                     continue
+                if model and cache.clean(path):
+                    remote=client.head_object(Bucket=bucket,Key=key)
+                    clean=cache.clean(path)
+                    if clean and remote.get('ETag')==clean['etag'] and remote['ContentLength']==path.stat().st_size:
+                        state.remember(key,fingerprint);state.unchanged+=1;continue
+                checksum=sha256_file(path) if model else None
+                extra={'ExtraArgs':{'Metadata':{'sha256':checksum}}} if checksum else {}
                 client.upload_file(str(path), bucket, key,
-                    Config=TransferConfig(max_concurrency=1, use_threads=False), Callback=YieldToCleanup(connection))
+                    Config=TransferConfig(max_concurrency=1, use_threads=False), Callback=YieldToCleanup(connection),**extra)
                 count += 1
                 try:
                     stable = file_fingerprint(path) == fingerprint
@@ -119,6 +144,10 @@ def upload_cycle(root='/cache', *, state=None):
                     stable = False
                 if stable:
                     state.remember(key, fingerprint)
+                    if model:
+                        remote=client.head_object(Bucket=bucket,Key=key)
+                        if remote.get('Metadata',{}).get('sha256')==checksum:
+                            cache.record(path,etag=remote.get('ETag'),sha256=checksum)
                 else:
                     state.acknowledged.pop(key, None)
     for key in state.acknowledged.keys() - seen:
@@ -137,7 +166,7 @@ def main():
     while not stop.is_set():
         try:
             with exclusive():
-                uploaded = upload_cycle(state=state)
+                uploaded = upload_cycle(state=state,prune=True)
             print(json.dumps({'artifact_sync': {'uploaded': uploaded, 'unchanged': state.unchanged}}), flush=True)
         except UploadPaused:
             pass

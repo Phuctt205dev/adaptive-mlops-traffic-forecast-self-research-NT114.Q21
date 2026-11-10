@@ -20,6 +20,7 @@ ACCEPTANCE = 'traffic-application-acceptance/v1'
 RUNTIME_PREFIXES = ('scripts/cicd/', 'deployment/', 'requirements/roles/', 'alembic/',
                     '.github/workflows/', 'tests/integration/')
 RUNTIME_FILES = {
+    'backend/app/services/artifact_cache.py',
     'backend/app/services/restore_cache.py', 'backend/app/services/artifact_sync_control.py',
     'backend/app/services/region_cleanup_uploader.py', 'backend/app/services/lifecycle.py',
     'backend/app/services/serving_runtime.py', 'backend/app/services/worker_runtime.py',

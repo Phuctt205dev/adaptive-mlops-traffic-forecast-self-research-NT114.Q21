@@ -138,12 +138,20 @@ có, chỉ list object metadata, không tải/xóa. Init restore dùng cùng hà
 list khi pod bắt đầu. Kiểm trước stage API và kiểm lại sau admission; snapshot
 preflight không bảo đảm bucket bất biến sau đó.
 
-Giới hạn giữ nguyên: **20000 file / 80% của 4GiB**, sáu prefix được phép. Tính
-bytes cộng dồn O(n); vượt budget dừng listing và ghi counts là **lower bound**,
-không gọi đó là tổng inventory đầy đủ. Summary phân biệt file/bytes và giới hạn.
-Preflight không tự sửa lỗi bucket vượt budget của CD45. Cần inventory và giải
-pháp storage được review trước một release có API mới; không tăng ngưỡng/xóa cache
-hoặc bỏ kiểm để làm CI/CD xanh.
+Source ứng viên dùng cache API **6GiB**, budget **20000 file / 80% của6GiB**.
+Production chỉ đổi sau release Apply+Verify. Init dùng `active` mode: binary
+model active/preprocessor được chọn từ DB read-only; metadata model và toàn
+bộ năm prefix còn lại vẫn restore. Binary lịch sử tải khi cần qua serving
+runtime. Preflight đọc mode từ chính manifest ứng viên, dùng cùng selection
+và budget với init; thiếu artifact bắt buộc thì dừng. `full` mode vẫn có cho
+các luồng dùng rõ chế độ đó, không tự fallback từ lỗi `active` sang `full`.
+
+Tính bytes cộng dồn O(n); vượt budget dừng listing và ghi counts là **lower
+bound**, không gọi đó là tổng inventory đầy đủ. Report thêm số binary model
+đã bỏ qua; listing bị giới hạn100000object/60giây quan sát. Cache disk có
+giới hạn, khóa giữa reader/uploader/flush và chỉ thu hồi bản sao đã bền vững;
+không xóa model trên MinIO. Capacity tính thêm disk staging với reserve node,
+không chỉ kiểm free disk tối thiểu. Chi tiết: [model cache](MODEL_ARTIFACT_CACHE.md).
 
 | Lỗi | Hành vi |
 | --- | --- |

@@ -143,6 +143,10 @@
                     "fieldPath": "metadata.name"
                   }
                 }
+              },
+              {
+                "name": "TRAFFIC_ARTIFACT_CACHE_BYTES",
+                "value": "5153960755"
               }
             ],
             "envFrom": [
@@ -187,12 +191,12 @@
             "resources": {
               "limits": {
                 "cpu": "1",
-                "ephemeral-storage": "4Gi",
+                "ephemeral-storage": "7Gi",
                 "memory": "3Gi"
               },
               "requests": {
                 "cpu": "250m",
-                "ephemeral-storage": "3Gi",
+                "ephemeral-storage": "5Gi",
                 "memory": "1536Mi"
               }
             },
@@ -377,6 +381,10 @@
                     "fieldPath": "metadata.name"
                   }
                 }
+              },
+              {
+                "name": "TRAFFIC_CACHE_RESTORE_MODE",
+                "value": "active"
               }
             ],
             "volumeMounts": [
@@ -388,11 +396,13 @@
             "resources": {
               "requests": {
                 "cpu": "25m",
-                "memory": "64Mi"
+                "memory": "64Mi",
+                "ephemeral-storage": "5Gi"
               },
               "limits": {
                 "cpu": "500m",
-                "memory": "256Mi"
+                "memory": "256Mi",
+                "ephemeral-storage": "7Gi"
               }
             }
           },
@@ -419,6 +429,10 @@
                     "fieldPath": "metadata.name"
                   }
                 }
+              },
+              {
+                "name": "TRAFFIC_ARTIFACT_CACHE_BYTES",
+                "value": "5153960755"
               }
             ],
             "envFrom": [
@@ -462,7 +476,7 @@
         "volumes": [
           {
             "emptyDir": {
-              "sizeLimit": "4Gi"
+              "sizeLimit": "6Gi"
             },
             "name": "artifact-cache"
           }

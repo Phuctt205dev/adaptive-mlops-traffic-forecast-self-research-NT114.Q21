@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 import time
+from backend.app.services.artifact_cache import configured,internal
 
 SCHEMA='traffic-artifact-sync/v1'
 DIRECTORIES=('models','results','monitoring','mlruns','data_versions','data')
@@ -47,7 +48,7 @@ def inventory(root,module):
     files={}
     for directory in DIRECTORIES:
         for path in (root/directory).rglob('*'):
-            if not path.is_file() or path.is_symlink() or path.name.endswith('.tmp'):
+            if not path.is_file() or path.is_symlink() or path.name.endswith('.tmp') or internal(path.relative_to(root)):
                 continue
             if any(p.is_symlink() for p in path.parents if p!=root):continue
             key=path.relative_to(root).as_posix()
@@ -56,6 +57,13 @@ def inventory(root,module):
 
 
 def flush(root='/cache',*,module=None,state=None):
+    cache=configured(Path(root)/'models')
+    if cache:
+        with cache.hold():return _flush(root,module=module,state=state)
+    return _flush(root,module=module,state=state)
+
+
+def _flush(root,*,module=None,state=None):
     if module is None:
         from backend.app.services import region_cleanup_uploader as module
     before=inventory(root,module)

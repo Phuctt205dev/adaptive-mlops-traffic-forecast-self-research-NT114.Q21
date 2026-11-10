@@ -467,9 +467,13 @@ class RolesDelivery:
         # Execute the checked candidate's listing rules on an existing sidecar.
         # This works before upgrading the sync image and never downloads/deletes.
         candidate = (self.directory / 'roles/sync/backend/app/services/restore_cache.py').read_text(encoding='utf-8')
+        pod=json.loads((self.directory/'deploy/api.json').read_bytes())['spec']['template']['spec']
+        init=next(c for c in pod['initContainers'] if c['name']=='restore-cache')
+        mode=next((e['value'] for e in init.get('env',[]) if e['name']=='TRAFFIC_CACHE_RESTORE_MODE'),'full')
         source = ("import json,os\nns={'__name__':'restore_preflight'}\nexec(" + repr(candidate) + ",ns)\n"
                   "from backend.app.services.region_cleanup_uploader import get_upload_client\n"
-                  "print(json.dumps(ns['inventory_report'](get_upload_client(),os.environ['TRAFFIC_API_RUNTIME_BUCKET'])))")
+                  "print(json.dumps(ns['inventory_report'](get_upload_client(),os.environ['TRAFFIC_API_RUNTIME_BUCKET'],"
+                  "required_keys=ns['restore_keys']("+repr(mode)+"))))")
         sidecar='artifact-sync'
         if getattr(self,'migration',None) and self.migration.legacy(api['metadata']['name'],'api'):
             source=self.migration.source('inventory')

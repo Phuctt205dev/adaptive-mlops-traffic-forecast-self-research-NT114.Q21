@@ -72,6 +72,8 @@ class CandidatePreflightTests(unittest.TestCase):
         candidate=root/'roles/sync/backend/app/services/restore_cache.py'
         candidate.parent.mkdir(parents=True)
         candidate.write_text(Path(cache.__file__).read_text(encoding='utf-8'),encoding='utf-8')
+        manifest=root/'deploy/api.json';manifest.parent.mkdir()
+        manifest.write_text(json.dumps({'spec':{'template':{'spec':{'initContainers':[{'name':'restore-cache'}]}}}}))
         return op
 
     def test_preflight_executes_checked_candidate_on_existing_sidecar_and_preserves_counts(self):
@@ -100,6 +102,29 @@ class CandidatePreflightTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'preflight'):op.apply()
             op.pause.assert_not_called();op.change.assert_not_called();op.start_guard.assert_not_called()
             self.assertFalse(op.state['started'])
+
+    def test_candidate_preflight_uses_active_mode_from_the_checked_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);op=self.operator(root)
+            (root/'deploy/api.json').write_text(json.dumps({'spec':{'template':{'spec':{'initContainers':[
+                {'name':'restore-cache','env':[{'name':'TRAFFIC_CACHE_RESTORE_MODE','value':'active'}]}]}}}}))
+            client=client_for({'Contents':[{'Key':'models/current.pkl','Size':1},
+                                         {'Key':'models/history.pkl','Size':20*1024**3}]})
+            db=Mock();db.bind.dialect.name='postgresql'
+            db.execute.return_value.all.return_value=[('models/current.pkl',{})]
+            factory=Mock();factory.return_value.__enter__=Mock(return_value=db);factory.return_value.__exit__=Mock(return_value=False)
+            def execute(pod,container,source):
+                with patch.dict(os.environ,{'TRAFFIC_API_RUNTIME_BUCKET':'synthetic'}),\
+                     patch.dict(sys.modules,{'backend.app.services.region_cleanup_uploader':SimpleNamespace(get_upload_client=lambda:client)}),\
+                     patch('backend.app.db.session.SessionLocal',factory),redirect_stdout(io.StringIO()) as output:
+                    exec(source,{})
+                return json.loads(output.getvalue())
+            op.execute=Mock(side_effect=execute)
+            op.restore_preflight({'metadata':{'name':'api'}})
+            self.assertEqual(op.state['restore_inventory']['mode'],'active')
+            self.assertEqual(op.state['restore_inventory']['bytes'],1)
+            self.assertEqual(op.state['restore_inventory']['skipped_model_files'],1)
+            client.get_object.assert_not_called();db.commit.assert_not_called();op.cluster.call.assert_not_called()
 
     def test_legacy_migration_uses_reviewed_loader_and_legacy_sidecar(self):
         with tempfile.TemporaryDirectory() as directory:

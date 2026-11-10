@@ -19,6 +19,9 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
+from contextlib import nullcontext
+from backend.app.services.artifact_cache import configured
+from backend.app.services.restore_cache import bootstrap_keys
 
 PROTECTED = re.compile(r"^/api/v1/regions/[^/]+/(predictions|forecast-dashboard|prediction-window)/?$")
 
@@ -37,6 +40,10 @@ class PredictionRuntime:
         # Serialized file sizes are a cache admission estimate, not a RAM limit.
         self.file_budget = file_budget
         self.dashboard_ttl = dashboard_ttl
+        self.disk_cache = configured(self.root)
+
+    def disk_hold(self):
+        return self.disk_cache.hold() if self.disk_cache else nullcontext()
 
     def _s3(self):
         if self.client is None:
@@ -52,6 +59,9 @@ class PredictionRuntime:
         return self.client
 
     def ensure_file(self, filename):
+        original=Path(filename).absolute()
+        if self.disk_cache and any(p.is_symlink() for p in (original,*original.parents)):
+            raise self.error_class('model_artifact_path_invalid','Model cache cannot follow symlinks.',500)
         path = Path(filename).resolve()
         try:
             relative = path.relative_to(self.root)
@@ -60,6 +70,21 @@ class PredictionRuntime:
         if not relative.parts:
             raise self.error_class("model_artifact_path_invalid", "Active model path is invalid.", 500)
         with self.lock:
+            if self.disk_cache:
+                try:
+                    if path.is_file() and path.stat().st_size>0:
+                        return self.disk_cache.ensure(relative.as_posix(),client=self._s3(),
+                            bucket=os.environ['TRAFFIC_API_RUNTIME_BUCKET'])
+                    from backend.app.services.region_cleanup import database_barrier
+                    from backend.app.db.session import engine
+                    with database_barrier(engine):
+                        pins={k.removeprefix('models/') for k in bootstrap_keys()}
+                        return self.disk_cache.ensure(relative.as_posix(),client=self._s3(),
+                            bucket=os.environ['TRAFFIC_API_RUNTIME_BUCKET'],pinned=pins)
+                except Exception as error:
+                    print('Prediction artifact cache deferred:',type(error).__name__,flush=True)
+                    raise self.error_class('model_artifact_unavailable',
+                        'The requested model is temporarily unavailable. Please try again shortly.',503) from None
             if path.is_file() and path.stat().st_size > 0:
                 return path
             key = "models/" + relative.as_posix()
@@ -90,7 +115,7 @@ class PredictionRuntime:
             return path
 
     def load_model(self, filename):
-        with self.lock:
+        with self.lock,self.disk_hold():
             path = self.ensure_file(filename)
             stat = path.stat()
             key = (str(path), stat.st_mtime_ns, stat.st_size)
@@ -214,10 +239,10 @@ def install_neural_restore(predictions, runtime):
             @functools.wraps(loader)
             def restored(filename):
                 path = predictions._resolve_model_path(filename)
-                runtime.ensure_file(path)
                 # The verified base gate serializes prediction work; use its
                 # same lock for restoration/loading without changing math.
-                with runtime.lock:
+                with runtime.lock,runtime.disk_hold():
+                    runtime.ensure_file(path)
                     return loader(path)
             return restored
 

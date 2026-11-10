@@ -56,8 +56,8 @@ Thiếu/diverged baseline hoặc đường dẫn chưa biết ảnh hưởng ch�
 | Lịch tuần hoặc Run workflow của 01 | Full validation; không deploy production |
 
 Frontend upload giữ cả file ẩn trong `dist` (ví dụ `.nojekyll`) đúng manifest.
-Sau upload, cùng job tải lại artifact và kiểm đủ file/hash/source/config/attempt
-trước khi acceptance nhận build thành công. Không rebuild hoặc sửa manifest
+Job `acceptance` chờ `frontend-build` kết thúc rồi tải artifact và kiểm đủ
+file/hash/source/config/attempt trước khi chấp nhận bản phát hành. Không rebuild hoặc sửa manifest
 để khớp một gói tải xuống bị thiếu file.
 
 `Run workflow` có thể chọn nhánh thử nghiệm: image checks/package và hai suite

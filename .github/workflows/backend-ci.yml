@@ -3,21 +3,9 @@ run-name: "Release #${{ github.run_number }} | ${{ github.event_name }} | ${{ gi
 
 on:
   pull_request:
-    paths:
-      - 'backend/**'
-      - 'src/**'
-      - 'app.py'
-      - 'tests/**'
-      - 'scripts/**'
-      - 'deployment/**'
-      - 'requirements/**'
-      - 'alembic/**'
-      - 'frontend/**'
-      - 'docs/index.html'
-      - '.github/workflows/frontend-ci.yml'
-      - '.github/workflows/deploy-frontend-pages.yml'
-      - '.github/workflows/backend-*.yml'
-      - '.github/workflows/cd-*.yml'
+    # Required acceptance must exist even for a documentation-only PR.
+    # Expensive work is selected below from the PR diff, never CD state.
+    branches: [main, master]
   push:
     branches: [main, master]
     paths:
@@ -70,6 +58,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FRONTEND_API_URL: ${{ vars.VITE_API_BASE_URL }}
           FRONTEND_BASE_PATH: ${{ vars.VITE_BASE_PATH }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: python -B scripts/cicd/pipeline.py scope
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -81,7 +70,7 @@ jobs:
 
   tests:
     needs: scope
-    if: github.event_name == 'pull_request' || needs.scope.outputs.tests == 'true'
+    if: needs.scope.outputs.tests == 'true'
     concurrency:
       group: checks-${{ github.ref }}-${{ github.event_name }}-tests
       cancel-in-progress: true
@@ -447,9 +436,26 @@ jobs:
         with:
           name: isolated-migration-proof-${{ github.sha }}
           path: coverage/migration
+      # Verify in the consumer job, after frontend-build has finished publishing.
+      - name: Bind expected frontend configuration
+        if: needs.frontend-build.result == 'success'
+        env:
+          FRONTEND_API_URL: ${{ vars.VITE_API_BASE_URL }}
+          FRONTEND_BASE_PATH: ${{ vars.VITE_BASE_PATH }}
+        run: python -B scripts/cicd/pipeline.py frontend-config
+      - name: Download the completed frontend artifact
+        if: needs.frontend-build.result == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: frontend-build-${{ github.sha }}
+          path: frontend-checked
+      - name: Verify uploaded frontend before acceptance
+        if: needs.frontend-build.result == 'success'
+        run: python -B scripts/cicd/pipeline.py frontend-verify
       - name: Require complete coverage for this commit and attempt
         env:
           CI_JOB_RESULTS: ${{ toJSON(needs) }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: python -B scripts/cicd/pipeline.py accept
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name != 'pull_request'
@@ -462,7 +468,7 @@ jobs:
 
   frontend-build:
     needs: scope
-    if: github.event_name == 'pull_request' || needs.scope.outputs.frontend == 'true'
+    if: needs.scope.outputs.frontend == 'true'
     concurrency:
       group: checks-${{ github.ref }}-${{ github.event_name }}-frontend
       cancel-in-progress: true
@@ -498,13 +504,6 @@ jobs:
             frontend/frontend-build.json
           if-no-files-found: error
           retention-days: 30
-      - name: Download the uploaded frontend for verification
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: frontend-build-${{ github.sha }}
-          path: frontend-checked
-      - name: Verify uploaded files before accepting the build
-        run: python -B scripts/cicd/pipeline.py frontend-verify
 
   backend-delivery:
     needs: [scope, acceptance]

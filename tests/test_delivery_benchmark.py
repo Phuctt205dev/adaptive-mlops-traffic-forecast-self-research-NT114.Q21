@@ -28,6 +28,51 @@ def measured():
 
 
 class MeasurementTests(unittest.TestCase):
+    def test_pr_merge_is_bound_to_run_head_and_base_before_measurement(self):
+        merge = 'c'*40; base = 'b'*40
+        run = {**RUN, 'event': 'pull_request', 'pull_requests': [{'head': {'sha': A}, 'base': {'sha': base}}]}
+        scope = pipeline.pr_scope(['README.md'], commit=merge, base=base)
+        client = Mock()
+        client.request.return_value = {'sha': merge, 'parents': [{'sha': A}, {'sha': base}]}
+        tested = b.pr_tested_commit(client, run, scope)
+        value = b.measure(run, [job('scope',1,3), job('acceptance',3,5)], scope=scope, tested_commit=tested)
+        self.assertTrue(value['ci_accepted'])
+        self.assertEqual(value['commit'], A)
+        self.assertEqual(value['tested_commit'], merge)
+        self.assertIsNone(value['seconds']['backend_commit_to_verify'])
+
+    def test_unrelated_merge_cannot_be_used_for_pr_measurements(self):
+        scope = pipeline.pr_scope(['README.md'], commit='c'*40, base='b'*40)
+        run = {**RUN, 'event': 'pull_request', 'pull_requests': [{'head': {'sha': A}, 'base': {'sha': 'b'*40}}]}
+        client = Mock()
+        for parents in ([{'sha': A}, {'sha': 'd'*40}], [{'sha': A}], [{'sha': A}, {'sha': 'b'*40}, {'sha': 'd'*40}]):
+            client.request.return_value = {'sha': 'c'*40, 'parents': parents}
+            with self.subTest(parents=parents), self.assertRaises(ValueError):
+                b.pr_tested_commit(client, run, scope)
+        with self.assertRaises(ValueError):
+            b.measure(RUN, [], tested_commit='c'*40)
+
+    def test_docs_pr_measures_only_required_gate_without_fabricating_a_deploy(self):
+        scope = pipeline.pr_scope(['README.md'], commit=A, base='b'*40)
+        value = b.measure({**RUN, 'event': 'pull_request'},
+                          [job('scope', 1, 3), job('acceptance', 3, 5)], scope=scope)
+        self.assertTrue(value['ci_accepted'])
+        self.assertFalse(value['coverage']['tests'])
+        self.assertFalse(value['coverage']['frontend'])
+        self.assertEqual(value['backend'], 'not_observed')
+        self.assertIsNone(value['seconds']['backend_commit_to_verify'])
+        with self.assertRaises(ValueError):
+            b.measure(RUN, [], scope=scope)
+        with self.assertRaises(ValueError):
+            b.measure({**RUN, 'event': 'pull_request'}, [], scope=scope, receipt={})
+
+    def test_frontend_pr_cannot_be_accepted_in_measurements_when_build_is_skipped(self):
+        scope = pipeline.pr_scope(['frontend/src/main.jsx'], commit=A, base='b'*40)
+        value = b.measure({**RUN, 'event': 'pull_request'},
+                          [job('scope', 1, 3), job('acceptance', 3, 5),
+                           job('frontend-build', 3, 4, conclusion='skipped')], scope=scope)
+        self.assertFalse(value['ci_accepted'])
+
     def test_parallel_time_is_not_runner_sum_or_total_workflow(self):
         value=measured()
         self.assertEqual(value['seconds']['ci_wall'],22)

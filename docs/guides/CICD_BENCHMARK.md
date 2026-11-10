@@ -35,6 +35,10 @@ CI đạt; outcome vẫn được đếm riêng. CI đạt nhưng CD lỗi vẫn
 `no_op`, `deferred`, `not_observed` không tính là deployment mới. Collector
 giữ timestamp CI/Verify/Pages đã kiểm tra và run/attempt để đối soát cửa sổ đo.
 Timestamp thiếu vẫn null; không lấy giờ ghi báo cáo thay giờ triển khai.
+Trên PR, `commit` giữ head SHA của nhánh trong REST run; `tested_commit` ghi
+merge SHA thực sự được kiểm. Collector chỉ nhận merge SHA sau khi xác minh
+hai parent đúng head/base của PR trong metadata run; không dùng merge này
+làm nguồn triển khai production hoặc gộp mẫu PR vào benchmark push.
 Collector
 chưa tự tính deployment frequency, change fail rate hay deployment rework
 rate: cần cửa sổ quan sát, danh sách deployment thật và đối soát incident/hotfix.
@@ -57,7 +61,8 @@ chạy nhanh hơn hoặc tương đương coverage.
 
 Phải kiểm artifact sau upload/download, gồm file ẩn `.nojekyll`. Job build
 xanh chỉ chứng minh compile thành công nếu chưa kiểm gói được truyền thật;
-frontend-build hiện tải lại artifact và chạy `frontend-verify` trước acceptance.
+`acceptance` tải artifact sau khi job `frontend-build` hoàn tất và chạy
+`frontend-verify` trước khi ghi nhận kiểm tra thành công.
 
 Scope tính từ backend đã Verify, có thể tích lũy nhiều commit; không gán nhãn
 frontend-only chỉ vì commit mới nhất sửa frontend. Recipe dùng chung vẫn có

@@ -51,6 +51,9 @@ def scenario(scope):
 def scope_profile(scope, commit):
     """Read the previous pipeline too, preserving its always-current coverage."""
     if scope is None: return None, None, set()
+    if scope.get('schema') == pipeline.PR_SCOPE:
+        pipeline.validate_pr_scope(scope, commit, scope.get('base'))
+        return scope, {k:scope[k] for k in ('tests','backend','frontend','current','full')}, pipeline.required_pr_jobs(scope)
     if scope.get('schema') == pipeline.SCOPE:
         pipeline.validate_scope(scope,commit)
         return scope, {k:scope[k] for k in ('tests','backend','frontend','current','full')}, pipeline.required_jobs(scope)
@@ -94,9 +97,33 @@ def jobs_for(client, run):
     return jobs
 
 
-def measure(run, jobs, *, scope=None, receipt=None, commit_at=None, context=None):
+def pr_tested_commit(client, run, scope):
+    """PRs test a synthetic merge; REST head_sha still names the source head."""
+    if run.get('event') != 'pull_request' or scope.get('schema') != pipeline.PR_SCOPE:
+        raise ValueError('Not a PR measurement')
+    tested = scope.get('commit')
+    if not isinstance(tested, str) or not re.fullmatch('[0-9a-f]{40}', tested):
+        raise ValueError('Invalid tested PR commit')
+    if tested == run['head_sha']:
+        return tested
+    merge = client.request('GET', 'git/commits/'+tested)
+    parents = {p['sha'] for p in merge.get('parents', [])}
+    matches = [p for p in run.get('pull_requests', [])
+               if p.get('head', {}).get('sha') == run['head_sha']
+               and (scope.get('base') is None or p.get('base', {}).get('sha') == scope['base'])
+               and parents == {run['head_sha'], p.get('base', {}).get('sha')}]
+    if merge.get('sha') != tested or len(merge.get('parents', [])) != 2 or len(matches) != 1:
+        raise ValueError('PR merge parents differ from the observed run')
+    return tested
+
+
+def measure(run, jobs, *, scope=None, receipt=None, commit_at=None, context=None, tested_commit=None):
     context = context or {}
-    inferred, coverage, required = scope_profile(scope,run['head_sha'])
+    if scope and scope.get('schema') == pipeline.PR_SCOPE and (run.get('event') != 'pull_request' or receipt is not None):
+        raise ValueError('PR measurements cannot authorize or describe production delivery')
+    if tested_commit is not None and run.get('event') != 'pull_request':
+        raise ValueError('Only PR measurements have a separate tested merge commit')
+    inferred, coverage, required = scope_profile(scope,tested_commit or run['head_sha'])
     # Exclude orchestration summary and reusable deployment jobs from CI time.
     ci = [j for j in jobs if j['name'] in CI_JOBS]
     acceptance = [j for j in ci if j['name'] == 'acceptance']
@@ -176,6 +203,7 @@ def measure(run, jobs, *, scope=None, receipt=None, commit_at=None, context=None
                        'backend_commit_to_verify':seconds(commit_at,deployed_at),
                        'pages_commit_to_publish':seconds(commit_at,page_at),
                        'failed_release_to_verified_rollback':recovery},
+            'tested_commit':tested_commit or run['head_sha'],
             'images':images,'backend':outcome,'pages_published':published,'phases':phases,'component_plan':components,
             'jobs':[{'name':j['name'],'conclusion':j.get('conclusion'),
                      'seconds':seconds(j.get('started_at'),j.get('completed_at'))} for j in ci]}
@@ -281,7 +309,8 @@ def main():
         if receipt.get('release_id') != identity.get('release_id'):
             raise ValueError('Measurement receipt differs from accepted release')
     commit_at = client.request('GET','git/commits/'+run['head_sha']).get('committer',{}).get('date')
-    result = measure(run,jobs,scope=scope,receipt=receipt,commit_at=commit_at,context=vars(args))
+    tested = pr_tested_commit(client, run, scope) if scope and scope.get('schema') == pipeline.PR_SCOPE else None
+    result = measure(run,jobs,scope=scope,receipt=receipt,commit_at=commit_at,context=vars(args),tested_commit=tested)
     args.output.mkdir(parents=True,exist_ok=True)
     (args.output/'delivery-metrics.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
     rendered = report(result)

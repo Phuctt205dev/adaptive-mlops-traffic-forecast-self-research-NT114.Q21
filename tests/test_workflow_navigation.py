@@ -13,15 +13,35 @@ WORKFLOWS=ROOT/'.github/workflows'
 class WorkflowNavigationTests(unittest.TestCase):
     def test_frontend_acceptance_checks_the_uploaded_artifact_and_keeps_hidden_output(self):
         source=(WORKFLOWS/'backend-ci.yml').read_text(encoding='utf-8')
-        build=source.split('\n  frontend-build:\n')[1].split('\n  backend-delivery:\n')[0]
-        upload=build.split('name: frontend-build-${{ github.sha }}',1)[1].split('\n      - name:',1)[0]
+        def job(name):
+            return re.split(r'\n  [a-z][a-z0-9-]*:\n', source.split('\n  '+name+':\n')[1], maxsplit=1)[0]
+        build=job('frontend-build')
+        producer_steps=re.split(r'\n      - ',build)[1:]
+        upload=next(s for s in producer_steps if 'actions/upload-artifact@' in s
+                    and 'name: frontend-build-${{ github.sha }}' in s)
         self.assertIn('include-hidden-files: true',upload)
         self.assertIn('frontend/dist/',upload)
         self.assertIn('frontend/frontend-build.json',upload)
-        download=build.index('name: Download the uploaded frontend for verification')
-        self.assertIn('actions/download-artifact@',build[download:])
-        self.assertIn('path: frontend-checked',build[download:])
-        self.assertLess(download,build.index('pipeline.py frontend-verify'))
+        self.assertNotIn('actions/download-artifact@',build)
+        self.assertNotIn('pipeline.py frontend-verify',build)
+        consumer=job('acceptance')
+        self.assertRegex(consumer,r'(?m)^    needs: \[[^\n]*frontend-build')
+        steps=re.split(r'\n      - ',consumer)[1:]
+        config=next(i for i,s in enumerate(steps) if 'pipeline.py frontend-config' in s)
+        download=next(i for i,s in enumerate(steps) if 'actions/download-artifact@' in s
+                      and 'name: frontend-build-${{ github.sha }}' in s)
+        verify=next(i for i,s in enumerate(steps) if 'pipeline.py frontend-verify' in s)
+        accept=next(i for i,s in enumerate(steps) if 'pipeline.py accept' in s)
+        self.assertIn('path: frontend-checked',steps[download])
+        self.assertLess(config,download);self.assertLess(download,verify);self.assertLess(verify,accept)
+        for index in (config,download,verify):
+            condition=re.search(r'^        if: (.+)$',steps[index],re.M)
+            self.assertIsNotNone(condition, 'Frontend consumer steps need explicit scope conditions')
+            expression=condition.group(1).replace('needs.frontend-build','frontend')
+            for result in ('success','failure','skipped','cancelled'):
+                with self.subTest(step=index,producer_result=result):
+                    allowed=eval(expression,{'__builtins__':{}},{'frontend':SimpleNamespace(result=result)})
+                    self.assertEqual(allowed,result=='success')
 
     def condition(self, job, event, ref):
         """Evaluate the actual simple boolean conditions for a healthy graph.

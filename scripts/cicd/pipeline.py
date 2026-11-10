@@ -17,6 +17,7 @@ from scripts.cicd.cd_state import GitHub, Store, emit
 
 SCOPE = 'traffic-application-scope/v1'
 ACCEPTANCE = 'traffic-application-acceptance/v1'
+PR_SCOPE = 'traffic-pull-request-scope/v1'
 RUNTIME_PREFIXES = ('scripts/cicd/', 'deployment/', 'requirements/roles/', 'alembic/',
                     '.github/workflows/', 'tests/integration/')
 RUNTIME_FILES = {
@@ -31,6 +32,59 @@ RUNTIME_FILES = {
 def backend_path(path):
     return (path in {'app.py', 'docs/index.html'} or
             path.startswith(('backend/', 'src/', 'scripts/', 'deployment/', 'requirements/roles/', 'alembic/')))
+
+
+def pr_scope(paths, *, commit, base):
+    """PR checks depend on their merge diff, not production history or secrets."""
+    if not re.fullmatch('[0-9a-f]{40}', commit):
+        raise ValueError('Invalid PR commit')
+    known = paths is not None and isinstance(base, str) and re.fullmatch('[0-9a-f]{40}', base)
+    paths = sorted(set(paths or []))
+    if any(not isinstance(p, str) or not p or p.startswith('/') or '\\' in p or '..' in p.split('/') for p in paths):
+        raise ValueError('Invalid PR paths')
+    tests = frontend = not known
+    for path in paths:
+        if path in {'README.md', 'LICENSE', 'LICENSE.md', 'CONTRIBUTING.md', '.github/pull_request_template.md'} or (
+                path.startswith('docs/') and path.endswith('.md')):
+            continue
+        if path.startswith('frontend/'):
+            frontend = True
+        elif (backend_path(path) or path.startswith(('tests/', 'requirements/')) or
+              path in {'Dockerfile', 'requirements.txt', 'alembic.ini'}):
+            tests = True
+        else:
+            # Workflow edits and unfamiliar inputs must not silently skip checks.
+            tests = frontend = True
+    return {'schema': PR_SCOPE, 'commit': commit, 'base': base if known else None,
+            'paths': paths if known else [], 'tests': bool(tests), 'frontend': bool(frontend),
+            'backend': bool(tests), 'current': False, 'full': False, 'forced': False,
+            'reason': 'pull_request_diff' if known else 'unavailable_pull_request_diff'}
+
+
+def validate_pr_scope(value, commit, base):
+    if not isinstance(value, dict) or value.get('schema') != PR_SCOPE or value.get('commit') != commit:
+        raise ValueError('PR coverage identity differs')
+    if any(type(value.get(k)) is not bool for k in ('tests', 'frontend', 'backend', 'current', 'full', 'forced')):
+        raise ValueError('PR coverage flags must be boolean')
+    if value.get('reason') == 'unavailable_pull_request_diff':
+        expected = pr_scope(None, commit=commit, base=None)
+    else:
+        expected = pr_scope(value.get('paths'), commit=commit, base=base)
+    if value != expected:
+        raise ValueError('PR coverage was modified or downgraded')
+    return value
+
+
+def required_pr_jobs(scope):
+    return {'scope', 'acceptance'} | ({'tests'} if scope['tests'] else set()) | ({'frontend-build'} if scope['frontend'] else set())
+
+
+def require_pr_checks(scope, results):
+    required = required_pr_jobs(scope)
+    for name in ('scope', 'tests', 'frontend-build'):
+        result = results.get(name, {}).get('result')
+        if result not in ({'success'} if name in required else {'success', 'skipped'}):
+            raise ValueError('PR check did not pass: ' + name)
 
 
 def classify(paths, *, baseline, commit, force=False, frontend=False):
@@ -148,6 +202,23 @@ def scope_main():
     from scripts.cicd.frontend_release import PublicationStore, frontend_config
     from scripts.cicd.release import canonical, digest
     env = os.environ
+    if env['GITHUB_EVENT_NAME'] == 'pull_request':
+        base = env.get('PR_BASE_SHA', '')
+        try:
+            if not re.fullmatch('[0-9a-f]{40}', base):
+                raise ValueError('PR base is unavailable')
+            paths = ci_scope.git_paths(Path.cwd(), base, env['GITHUB_SHA'])
+        except (ValueError, UnicodeError, subprocess.SubprocessError, OSError):
+            paths = None
+        value = pr_scope(paths, commit=env['GITHUB_SHA'], base=base)
+        Path('ci-scope.json').write_text(json.dumps(value, indent=2), encoding='utf-8')
+        if env.get('GITHUB_STEP_SUMMARY'):
+            with Path(env['GITHUB_STEP_SUMMARY']).open('a', encoding='utf-8') as stream:
+                stream.write('## PR checks\n\nBackend regression: '+str(value['tests'])+
+                             '\n\nFrontend build: '+str(value['frontend'])+
+                             '\n\nSource: '+value['reason']+'. Production deployment is disabled for PRs.\n')
+        emit({k: value[k] for k in ('backend', 'tests', 'frontend', 'current', 'full')})
+        return
     client = GitHub(env['GITHUB_REPOSITORY'])
     try:
         state = Store(client).load()[0]
@@ -186,14 +257,14 @@ def scope_main():
 def accept_main():
     env = os.environ
     root = Path('coverage')
-    scope = validate_scope(json.loads((root / 'ci-scope.json').read_text()), env['GITHUB_SHA'])
+    raw_scope = json.loads((root / 'ci-scope.json').read_text())
     results = json.loads(env['CI_JOB_RESULTS'])
     if env['GITHUB_EVENT_NAME'] == 'pull_request':
-        required = {'scope', 'tests', 'frontend-build'}
-        if any(results.get(j, {}).get('result') != 'success' for j in required):
-            raise ValueError('PR regression or frontend build did not pass')
+        scope = validate_pr_scope(raw_scope, env['GITHUB_SHA'], env.get('PR_BASE_SHA', ''))
+        require_pr_checks(scope, results)
         emit({'pull_request_checked': True, 'deployable': False})
         return
+    scope = validate_scope(raw_scope, env['GITHUB_SHA'])
     modes = (['current'] if scope['current'] else []) + (['migration'] if scope['full'] else [])
     identity = json.loads((root / 'release/delivery.json').read_text()) if scope['backend'] else None
     proofs = {m: json.loads((root / m / 'kubernetes-delivery-proof.json').read_text()) for m in modes}

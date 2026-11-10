@@ -51,6 +51,9 @@ def scenario(scope):
 def scope_profile(scope, commit):
     """Read the previous pipeline too, preserving its always-current coverage."""
     if scope is None: return None, None, set()
+    if scope.get('schema') == pipeline.PR_SCOPE:
+        pipeline.validate_pr_scope(scope, commit, scope.get('base'))
+        return scope, {k:scope[k] for k in ('tests','backend','frontend','current','full')}, pipeline.required_pr_jobs(scope)
     if scope.get('schema') == pipeline.SCOPE:
         pipeline.validate_scope(scope,commit)
         return scope, {k:scope[k] for k in ('tests','backend','frontend','current','full')}, pipeline.required_jobs(scope)
@@ -96,6 +99,8 @@ def jobs_for(client, run):
 
 def measure(run, jobs, *, scope=None, receipt=None, commit_at=None, context=None):
     context = context or {}
+    if scope and scope.get('schema') == pipeline.PR_SCOPE and (run.get('event') != 'pull_request' or receipt is not None):
+        raise ValueError('PR measurements cannot authorize or describe production delivery')
     inferred, coverage, required = scope_profile(scope,run['head_sha'])
     # Exclude orchestration summary and reusable deployment jobs from CI time.
     ci = [j for j in jobs if j['name'] in CI_JOBS]

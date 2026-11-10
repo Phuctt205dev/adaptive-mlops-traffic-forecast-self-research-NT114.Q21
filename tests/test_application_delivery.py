@@ -102,6 +102,88 @@ class ApplicationScopeTests(unittest.TestCase):
                 pipeline.validate_scope({**scope,field:False},A)
 
 
+class PullRequestChecksTests(unittest.TestCase):
+    def test_pr_work_is_selected_from_its_own_changes(self):
+        cases = [(['README.md', 'docs/guides/CICD_RKE2.md'], False, False),
+                 (['frontend/src/main.jsx'], False, True),
+                 (['backend/app/services/prediction.py'], True, False),
+                 (['tests/test_prediction_service.py'], True, False),
+                 (['docs/index.html'], True, False),
+                 (['.github/workflows/backend-ci.yml'], True, True),
+                 (['unfamiliar/input'], True, True)]
+        for paths, tests, frontend in cases:
+            with self.subTest(paths=paths):
+                scope = pipeline.pr_scope(paths, commit=A, base=B)
+                self.assertEqual((scope['tests'], scope['frontend']), (tests, frontend))
+                self.assertEqual(pipeline.validate_pr_scope(scope, A, B), scope)
+                self.assertFalse(scope['current']); self.assertFalse(scope['full'])
+
+    def test_pr_scope_needs_no_production_state_or_fork_secrets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = {**ENV, 'GITHUB_EVENT_NAME': 'pull_request', 'PR_BASE_SHA': B,
+                   'GITHUB_OUTPUT': str(root/'outputs')}
+            with patch.dict(os.environ, env, clear=True), patch.object(pipeline, 'GitHub') as github, \
+                 patch.object(pipeline.ci_scope, 'git_paths', return_value=['README.md']), \
+                 patch.object(pipeline, 'Path', side_effect=lambda p: root/p) as paths, redirect_stdout(io.StringIO()):
+                paths.cwd.return_value = root
+                pipeline.scope_main()
+                github.assert_not_called()
+            scope = json.loads((root/'ci-scope.json').read_text())
+            self.assertFalse(scope['tests']); self.assertFalse(scope['frontend'])
+
+    def test_unavailable_diff_requires_both_checks(self):
+        for base, paths in [(None, []), (B, None)]:
+            with self.subTest(base=base, paths=paths):
+                scope = pipeline.pr_scope(paths, commit=A, base=base)
+                self.assertTrue(scope['tests']); self.assertTrue(scope['frontend'])
+                pipeline.validate_pr_scope(scope, A, B)
+                with self.assertRaises(ValueError):
+                    pipeline.validate_pr_scope({**scope, 'tests': False}, A, B)
+
+    def test_base_identity_and_required_checks_cannot_be_downgraded(self):
+        scope = pipeline.pr_scope(['backend/app/main.py'], commit=A, base=B)
+        for damaged in ({**scope, 'base': 'c'*40}, {**scope, 'tests': False}, {**scope, 'commit': B}):
+            with self.assertRaises(ValueError):
+                pipeline.validate_pr_scope(damaged, A, B)
+        for result in ('skipped', 'failure', 'cancelled', None):
+            with self.subTest(result=result), self.assertRaises(ValueError):
+                pipeline.require_pr_checks(scope, {'scope': {'result': 'success'},
+                    'tests': {'result': result}, 'frontend-build': {'result': 'skipped'}})
+
+    def test_pr_flags_reject_integer_and_string_coercion(self):
+        scope = pipeline.pr_scope(['README.md'], commit=A, base=B)
+        for value in (0, 1, 'false', None):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                pipeline.validate_pr_scope({**scope, 'tests': value}, A, B)
+
+    def test_docs_gate_accepts_skipped_heavy_jobs_but_not_failed_scope(self):
+        scope = pipeline.pr_scope(['README.md'], commit=A, base=B)
+        results = {'scope': {'result': 'success'}, 'tests': {'result': 'skipped'},
+                   'frontend-build': {'result': 'skipped'}}
+        pipeline.require_pr_checks(scope, results)
+        with self.assertRaises(ValueError):
+            pipeline.require_pr_checks(scope, {**results, 'scope': {'result': 'failure'}})
+        with self.assertRaises(ValueError):
+            pipeline.require_pr_checks(scope, {**results, 'frontend-build': {'result': 'failure'}})
+        with self.assertRaises(ValueError):
+            pipeline.validate_scope(scope, A)
+
+    def test_docs_acceptance_never_produces_a_deployable_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root/'coverage').mkdir()
+            scope = pipeline.pr_scope(['README.md'], commit=A, base=B)
+            (root/'coverage/ci-scope.json').write_text(json.dumps(scope))
+            results = {name: {'result': result} for name, result in
+                       [('scope', 'success'), ('tests', 'skipped'), ('frontend-build', 'skipped')]}
+            env = {**ENV, 'GITHUB_EVENT_NAME': 'pull_request', 'PR_BASE_SHA': B,
+                   'CI_JOB_RESULTS': json.dumps(results), 'GITHUB_OUTPUT': str(root/'outputs')}
+            with patch.dict(os.environ, env, clear=True), patch.object(pipeline, 'Path', side_effect=lambda p: root/p), redirect_stdout(io.StringIO()):
+                pipeline.accept_main()
+            self.assertFalse((root/'coverage/ci-acceptance.json').exists())
+            self.assertIn('deployable=false', (root/'outputs').read_text())
+
+
 class ApplicationAcceptanceTests(unittest.TestCase):
     def test_app_fast_path_needs_no_controller_proof_but_every_image_job(self):
         proof=proof_for(['backend/app/services/prediction.py'])

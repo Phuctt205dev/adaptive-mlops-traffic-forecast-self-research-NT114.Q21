@@ -28,6 +28,27 @@ def measured():
 
 
 class MeasurementTests(unittest.TestCase):
+    def test_docs_pr_measures_only_required_gate_without_fabricating_a_deploy(self):
+        scope = pipeline.pr_scope(['README.md'], commit=A, base='b'*40)
+        value = b.measure({**RUN, 'event': 'pull_request'},
+                          [job('scope', 1, 3), job('acceptance', 3, 5)], scope=scope)
+        self.assertTrue(value['ci_accepted'])
+        self.assertFalse(value['coverage']['tests'])
+        self.assertFalse(value['coverage']['frontend'])
+        self.assertEqual(value['backend'], 'not_observed')
+        self.assertIsNone(value['seconds']['backend_commit_to_verify'])
+        with self.assertRaises(ValueError):
+            b.measure(RUN, [], scope=scope)
+        with self.assertRaises(ValueError):
+            b.measure({**RUN, 'event': 'pull_request'}, [], scope=scope, receipt={})
+
+    def test_frontend_pr_cannot_be_accepted_in_measurements_when_build_is_skipped(self):
+        scope = pipeline.pr_scope(['frontend/src/main.jsx'], commit=A, base='b'*40)
+        value = b.measure({**RUN, 'event': 'pull_request'},
+                          [job('scope', 1, 3), job('acceptance', 3, 5),
+                           job('frontend-build', 3, 4, conclusion='skipped')], scope=scope)
+        self.assertFalse(value['ci_accepted'])
+
     def test_parallel_time_is_not_runner_sum_or_total_workflow(self):
         value=measured()
         self.assertEqual(value['seconds']['ci_wall'],22)

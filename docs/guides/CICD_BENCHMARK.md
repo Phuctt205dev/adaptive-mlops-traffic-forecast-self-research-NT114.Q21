@@ -115,6 +115,9 @@ chưa phải kiểm định nhân quả hay độ ổn định dài hạn.
 2. Chạy GitHub CI đầy đủ cho gói thay đổi controller/workflow; các case current
    và migration phải có proof đúng SHA/attempt. Chạy nhiều push nhanh kiểm việc
    hủy CI cũ và chặn source cũ trước claim; không hủy transaction production.
+   Trước merge có thể Run workflow trên nhánh thử nghiệm: frontend luôn được
+   build ở lượt full; image/package vẫn chạy, backend/Pages deploy bị chặn
+   bởi event khác push. Image dùng cho kind vẫn phải được publish sau checks.
 3. Kiểm scenario matrix trên môi trường tách biệt: đúng artifact/component,
    giữ queued training/model active; case rollout/flush failure phải phục hồi
    theo bằng chứng. Không dùng production/CD45 làm phép gây lỗi.

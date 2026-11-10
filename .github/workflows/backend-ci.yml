@@ -135,7 +135,11 @@ jobs:
 
   image:
     needs: [scope, tests]
-    if: github.event_name != 'pull_request' && needs.scope.outputs.backend == 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    # A manual full check may target a branch. Deployment still requires a
+    # default-branch push in the separate backend/Pages caller conditions.
+    if: >-
+      github.event_name != 'pull_request' && needs.scope.outputs.backend == 'true' &&
+      (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || github.event_name == 'workflow_dispatch')
     concurrency:
       group: checks-${{ github.ref }}-${{ github.event_name }}-image-${{ matrix.role }}
       cancel-in-progress: true

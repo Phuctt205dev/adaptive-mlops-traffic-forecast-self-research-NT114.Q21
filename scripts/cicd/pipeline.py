@@ -156,7 +156,9 @@ def scope_main():
         baseline, paths = None, []
     # A missing/diverged baseline selects every safety check, never a fast path.
     frontend = True
-    if env['GITHUB_EVENT_NAME'] != 'pull_request':
+    # Explicit/weekly full checks also validate an unchanged frontend. Only
+    # ordinary pushes deduplicate against the existing Pages publication.
+    if env['GITHUB_EVENT_NAME'] not in {'pull_request','workflow_dispatch','schedule'}:
         try:
             published, _ = PublicationStore(client).load()
             tree = subprocess.run(['git', 'rev-parse', env['GITHUB_SHA'] + ':frontend'],

@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from scripts.cicd import pipeline, ci_coverage, github_gate, frontend_release, prepare_artifact, cd_pending
+from scripts.cicd.release import canonical, digest
 from tests.test_ci_coverage import identity as old_identity, suite
 from tests import test_cicd as gate_fixtures
 from tests.test_prepare_artifact import FakeClient
@@ -34,6 +35,44 @@ def proof_for(paths, *, frontend=False):
 
 
 class ApplicationScopeTests(unittest.TestCase):
+    def test_ordinary_push_still_skips_an_already_published_frontend(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            env={**ENV,'GITHUB_REPOSITORY':'owner/repo','GITHUB_OUTPUT':str(root/'outputs')}
+            identifier=digest(canonical({'source':'frontend-tree',**CONFIG}))
+            with patch.dict(os.environ,env,clear=True),patch.object(pipeline,'GitHub') as client, \
+                 patch.object(pipeline,'Store') as store,patch.object(pipeline.ci_scope,'git_paths',return_value=[]), \
+                 patch.object(frontend_release,'PublicationStore') as published, \
+                 patch.object(frontend_release,'frontend_config',return_value=CONFIG), \
+                 patch.object(pipeline.subprocess,'run',return_value=Mock(stdout='frontend-tree\n')), \
+                 patch.object(pipeline,'Path',side_effect=lambda p:root/p) as paths,redirect_stdout(io.StringIO()):
+                paths.cwd.return_value=root
+                client.return_value.repository='owner/repo'
+                store.return_value.load.return_value=({'last_success':{'commit':B}},None)
+                published.return_value.load.return_value=({'deployment_id':identifier},None)
+                pipeline.scope_main()
+            scope=json.loads((root/'ci-scope.json').read_text())
+            for flag in ('backend','tests','frontend','current','full','forced'):self.assertFalse(scope[flag])
+
+    def test_manual_and_weekly_full_check_include_frontend_even_if_already_published(self):
+        for event in ('workflow_dispatch','schedule'):
+            with self.subTest(event=event),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory)
+                env={**ENV,'GITHUB_EVENT_NAME':event,'GITHUB_REPOSITORY':'owner/repo',
+                     'GITHUB_OUTPUT':str(root/'outputs')}
+                with patch.dict(os.environ,env,clear=True),patch.object(pipeline,'GitHub'), \
+                     patch.object(pipeline,'Store') as store,patch.object(pipeline.ci_scope,'git_paths',return_value=[]), \
+                     patch.object(frontend_release,'PublicationStore') as published, \
+                     patch.object(pipeline,'Path',side_effect=lambda p:root/p) as paths,redirect_stdout(io.StringIO()):
+                    paths.cwd.return_value=root
+                    store.return_value.load.return_value=({'last_success':{'commit':B}},None)
+                    pipeline.scope_main()
+                    published.assert_not_called()
+                scope=json.loads((root/'ci-scope.json').read_text())
+                for flag in ('backend','tests','frontend','current','full','forced'):
+                    self.assertTrue(scope[flag])
+                    if flag!='forced':self.assertIn(flag+'=true\n',(root/'outputs').read_text())
+
     def test_frontend_tests_docs_and_app_have_distinct_work(self):
         cases=[(['frontend/src/main.jsx'],False,False,False),
                (['tests/test_prediction_service.py'],False,True,False),

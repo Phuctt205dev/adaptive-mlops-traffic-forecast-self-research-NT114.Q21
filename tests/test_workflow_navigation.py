@@ -1,6 +1,7 @@
 """Display labels must not disconnect workflow triggers or machine gates."""
 from pathlib import Path
 import re
+from types import SimpleNamespace
 import unittest
 
 from scripts.cicd import pipeline
@@ -10,6 +11,46 @@ WORKFLOWS=ROOT/'.github/workflows'
 
 
 class WorkflowNavigationTests(unittest.TestCase):
+    def condition(self, job, event, ref):
+        """Evaluate the actual simple boolean conditions for a healthy graph.
+
+        These conditions use the shared Python/Actions subset (strings,
+        attributes, comparisons and booleans); dependencies are successful.
+        """
+        source=(WORKFLOWS/'backend-ci.yml').read_text(encoding='utf-8')
+        # Match to the next job, preserving indented job attributes/steps.
+        body=re.split(r'\n  [a-z][a-z0-9-]*:\n',source.split('\n  '+job+':\n')[1],maxsplit=1)[0]
+        expression=re.search(r'^    if: (.+)$',body,re.M).group(1)
+        if expression=='>-':
+            expression=' '.join(re.search(r'^    if: >-\n((?:      .+\n)+)',body,re.M).group(1).split())
+        expression=expression.replace('&&',' and ').replace('||',' or ')
+        expression=re.sub(r'!(?!=)',' not ',expression).strip()
+        expression=expression.replace('needs.backend-delivery','backend_delivery')
+        github=SimpleNamespace(event_name=event,ref=ref,
+                 event=SimpleNamespace(repository=SimpleNamespace(default_branch='master')))
+        outputs=SimpleNamespace(backend='true',tests='true',frontend='true',current='true',full='true')
+        needs=SimpleNamespace(scope=SimpleNamespace(outputs=outputs),acceptance=SimpleNamespace(result='success'))
+        variables=SimpleNamespace(RKE2_CD_ENABLED='true')
+        return bool(eval(expression,{'__builtins__':{}},{'github':github,'needs':needs,'vars':variables,
+                         'backend_delivery':SimpleNamespace(outputs=SimpleNamespace(outcome='success')),
+                         'always':lambda:True,'cancelled':lambda:False,'format':lambda text,value:text.format(value)}))
+
+    def test_manual_branch_full_check_reaches_images_but_cannot_deploy(self):
+        for event,ref,images in [('workflow_dispatch','refs/heads/ci/check',True),
+                                ('workflow_dispatch','refs/heads/master',True),
+                                ('schedule','refs/heads/master',True),
+                                ('push','refs/heads/master',True),
+                                ('push','refs/heads/ci/check',False),
+                                ('pull_request','refs/pull/1/merge',False)]:
+            with self.subTest(event=event,ref=ref):
+                self.assertEqual(self.condition('image',event,ref),images)
+                self.assertEqual(self.condition('backend-delivery',event,ref),event=='push' and ref=='refs/heads/master')
+                self.assertEqual(self.condition('frontend-publication',event,ref),event=='push' and ref=='refs/heads/master')
+        self.assertTrue(self.condition('frontend-build','workflow_dispatch','refs/heads/ci/check'))
+        self.assertTrue(self.condition('current-runtime','workflow_dispatch','refs/heads/ci/check'))
+        self.assertTrue(self.condition('legacy-migration','workflow_dispatch','refs/heads/ci/check'))
+        self.assertFalse(self.condition('frontend-publication','workflow_dispatch','refs/heads/ci/check'))
+
     def test_main_run_calls_backend_after_acceptance_without_a_second_automatic_listener(self):
         ci=(WORKFLOWS/'backend-ci.yml').read_text(encoding='utf-8')
         cd=(WORKFLOWS/'backend-deploy.yml').read_text(encoding='utf-8')

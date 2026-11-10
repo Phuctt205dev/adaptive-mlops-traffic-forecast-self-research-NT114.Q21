@@ -55,6 +55,12 @@ Thiếu/diverged baseline hoặc đường dẫn chưa biết ảnh hưởng ch�
 | Legacy adapter/baseline, scope/proof/harness, pipeline acceptance contract, lịch sử không rõ | current-runtime và 3 ca legacy-migration |
 | Lịch tuần hoặc Run workflow của 01 | Full validation; không deploy production |
 
+`Run workflow` có thể chọn nhánh thử nghiệm: image checks/package và hai suite
+Kubernetes vẫn chạy theo source của nhánh đó. Lượt manual/lịch tuần cũng build
+frontend dù nội dung đã publish, để kiểm đủ đầu ra. Image mới được publish
+bằng content tag sau checks để cluster cô lập tải; backend/Pages production
+vẫn chỉ được gọi khi push nhánh mặc định và qua toàn bộ gate hiện có.
+
 Không sử dụng kết quả kiểm định kỳ của một commit khác làm proof ứng viên.
 Current/migration giữ image thật, PostgreSQL/S3/flush và Kubernetes riêng;
 HTTP business/Airflow REST là fixture. Giới hạn và ca kiểm ở

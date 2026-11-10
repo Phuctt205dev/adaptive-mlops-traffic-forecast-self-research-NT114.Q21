@@ -23,6 +23,12 @@ Frontend-only có thể bỏ backend delivery. Backend lỗi/deferred thì front
 phụ thuộc phải chờ. PR/lịch tuần/Run workflow của01 không deploy production.
 Chọn **Re-run all jobs** khi cần kiểm lại một run; không ghép proof các attempt.
 
+Để kiểm gói cải tạo trước merge: chọn **Run workflow**, chọn nhánh thử nghiệm.
+Full check gồm frontend build, image/package, current và migration. Nó có thể
+publish content image phục vụ cluster kiểm cô lập; không gọi backend deploy
+hoặc Pages production. Push thường vẫn bỏ frontend build khi đã publish đúng
+nội dung/cấu hình và không có nhu cầu kiểm full.
+
 ## 2. Thao tác khi cập nhật ứng dụng
 
 1. Push nhánh mặc định trong phạm vi được giao, mở run mới nhất của01.

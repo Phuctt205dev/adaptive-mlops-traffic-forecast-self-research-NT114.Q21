@@ -11,6 +11,18 @@ WORKFLOWS=ROOT/'.github/workflows'
 
 
 class WorkflowNavigationTests(unittest.TestCase):
+    def test_frontend_acceptance_checks_the_uploaded_artifact_and_keeps_hidden_output(self):
+        source=(WORKFLOWS/'backend-ci.yml').read_text(encoding='utf-8')
+        build=source.split('\n  frontend-build:\n')[1].split('\n  backend-delivery:\n')[0]
+        upload=build.split('name: frontend-build-${{ github.sha }}',1)[1].split('\n      - name:',1)[0]
+        self.assertIn('include-hidden-files: true',upload)
+        self.assertIn('frontend/dist/',upload)
+        self.assertIn('frontend/frontend-build.json',upload)
+        download=build.index('name: Download the uploaded frontend for verification')
+        self.assertIn('actions/download-artifact@',build[download:])
+        self.assertIn('path: frontend-checked',build[download:])
+        self.assertLess(download,build.index('pipeline.py frontend-verify'))
+
     def condition(self, job, event, ref):
         """Evaluate the actual simple boolean conditions for a healthy graph.
 

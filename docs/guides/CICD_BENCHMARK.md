@@ -55,6 +55,10 @@ chạy nhanh hơn hoặc tương đương coverage.
 | Runtime/manifest | Các case current phải chạy; phần legacy/contract không rõ vẫn full theo scope. |
 | No-op | Không build/rollout thừa; Verify không bị gọi nhầm là deployment mới. |
 
+Phải kiểm artifact sau upload/download, gồm file ẩn `.nojekyll`. Job build
+xanh chỉ chứng minh compile thành công nếu chưa kiểm gói được truyền thật;
+frontend-build hiện tải lại artifact và chạy `frontend-verify` trước acceptance.
+
 Scope tính từ backend đã Verify, có thể tích lũy nhiều commit; không gán nhãn
 frontend-only chỉ vì commit mới nhất sửa frontend. Recipe dùng chung vẫn có
 thể làm nhiều role đổi source_id; bộ đo không hứa mọi sửa một file chỉ build

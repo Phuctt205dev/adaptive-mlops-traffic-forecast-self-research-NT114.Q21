@@ -207,6 +207,21 @@ class SameRunAndFreshnessTests(unittest.TestCase):
 
 
 class FrontendBuildTests(unittest.TestCase):
+    def test_downloaded_artifact_must_preserve_hidden_output_before_acceptance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);(root/'dist').mkdir()
+            (root/'dist/index.html').write_text('checked build')
+            hidden=root/'dist/.nojekyll';hidden.write_bytes(b'\n')
+            env={**ENV,'VITE_API_BASE_URL':CONFIG['api_url'],'VITE_BASE_PATH':CONFIG['base_path']}
+            frontend_release.build_manifest(root,commit=A,tree='tree',config=CONFIG,run_id=1,attempt=2)
+            with patch.dict(os.environ,env,clear=True), \
+                 patch.object(pipeline.subprocess,'run',return_value=Mock(stdout='tree\n')):
+                pipeline.frontend_verify_main(directory=root)
+                hidden.unlink()  # Simulate upload-artifact's default hidden-file exclusion.
+                with self.assertRaisesRegex(ValueError,'files differ'):
+                    pipeline.frontend_verify_main(directory=root)
+            self.assertIn('dist/.nojekyll',json.loads((root/'frontend-build.json').read_text())['files'])
+
     def test_verified_files_config_and_attempt_must_be_the_ones_built(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);(root/'dist').mkdir();(root/'dist/index.html').write_text('checked build')

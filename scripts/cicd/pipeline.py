@@ -212,22 +212,31 @@ def frontend_config_main():
     emit(config)
 
 
-def frontend_manifest_main():
-    from scripts.cicd.frontend_release import build_manifest
+def frontend_build_identity():
     env=os.environ
     tree=subprocess.run(['git','rev-parse',env['GITHUB_SHA']+':frontend'],
                         check=True,capture_output=True,text=True).stdout.strip()
-    build_manifest('frontend',commit=env['GITHUB_SHA'],tree=tree,
-                   config={'api_url':env['VITE_API_BASE_URL'],'base_path':env['VITE_BASE_PATH']},
-                   run_id=env['GITHUB_RUN_ID'],attempt=env['GITHUB_RUN_ATTEMPT'])
+    return {'commit':env['GITHUB_SHA'],'tree':tree,
+            'config':{'api_url':env['VITE_API_BASE_URL'],'base_path':env['VITE_BASE_PATH']},
+            'run_id':env['GITHUB_RUN_ID'],'attempt':env['GITHUB_RUN_ATTEMPT']}
+
+
+def frontend_manifest_main():
+    from scripts.cicd.frontend_release import build_manifest
+    build_manifest('frontend',**frontend_build_identity())
+
+
+def frontend_verify_main(directory='frontend-checked'):
+    from scripts.cicd.frontend_release import verify_build
+    verify_build(directory,**frontend_build_identity())
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('scope', 'accept', 'frontend-config', 'frontend-manifest'))
+    parser.add_argument('action', choices=('scope', 'accept', 'frontend-config', 'frontend-manifest', 'frontend-verify'))
     action = parser.parse_args().action
     {'scope': scope_main, 'accept': accept_main, 'frontend-config': frontend_config_main,
-     'frontend-manifest':frontend_manifest_main}[action]()
+     'frontend-manifest':frontend_manifest_main,'frontend-verify':frontend_verify_main}[action]()
 
 
 if __name__ == '__main__':

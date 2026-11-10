@@ -492,11 +492,19 @@ jobs:
         with:
           name: frontend-build-${{ github.sha }}
           overwrite: true
+          include-hidden-files: true
           path: |
             frontend/dist/
             frontend/frontend-build.json
           if-no-files-found: error
           retention-days: 30
+      - name: Download the uploaded frontend for verification
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: frontend-build-${{ github.sha }}
+          path: frontend-checked
+      - name: Verify uploaded files before accepting the build
+        run: python -B scripts/cicd/pipeline.py frontend-verify
 
   backend-delivery:
     needs: [scope, acceptance]

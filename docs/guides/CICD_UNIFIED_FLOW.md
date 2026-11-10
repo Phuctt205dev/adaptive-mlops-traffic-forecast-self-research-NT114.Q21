@@ -55,6 +55,11 @@ Thiếu/diverged baseline hoặc đường dẫn chưa biết ảnh hưởng ch�
 | Legacy adapter/baseline, scope/proof/harness, pipeline acceptance contract, lịch sử không rõ | current-runtime và 3 ca legacy-migration |
 | Lịch tuần hoặc Run workflow của 01 | Full validation; không deploy production |
 
+Frontend upload giữ cả file ẩn trong `dist` (ví dụ `.nojekyll`) đúng manifest.
+Sau upload, cùng job tải lại artifact và kiểm đủ file/hash/source/config/attempt
+trước khi acceptance nhận build thành công. Không rebuild hoặc sửa manifest
+để khớp một gói tải xuống bị thiếu file.
+
 `Run workflow` có thể chọn nhánh thử nghiệm: image checks/package và hai suite
 Kubernetes vẫn chạy theo source của nhánh đó. Lượt manual/lịch tuần cũng build
 frontend dù nội dung đã publish, để kiểm đủ đầu ra. Image mới được publish

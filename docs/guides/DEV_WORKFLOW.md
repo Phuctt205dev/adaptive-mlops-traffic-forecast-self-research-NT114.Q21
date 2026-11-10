@@ -109,3 +109,13 @@ push nhánh chính.
 Trước khi bật, kiểm PR docs/frontend/backend và kiểm lỗi/skip bắt buộc; giữ
 bản cấu hình cũ để phục hồi nếu chính sách gây chặn ngoài dự kiến. Không
 tự thay quyền environment hoặc bật Auto khi sửa chính sách PR.
+
+## Vì sao PR tài liệu có nhiều job Skipped?
+
+PR chỉ sửa README hoặc tài liệu Markdown trong `docs/` vẫn có `scope` và
+`acceptance`. Các job backend, frontend, image và triển khai có thể được bỏ
+qua đúng phạm vi; dev không cần kích hoạt chúng chỉ để mọi ô đều xanh.
+
+Điều cần xem là `acceptance` thành công và scope đúng các file đã sửa. Nếu
+acceptance lỗi, đọc bước lỗi trước khi merge; trạng thái Skipped của các job
+không liên quan không thay cho kết quả của check bắt buộc.

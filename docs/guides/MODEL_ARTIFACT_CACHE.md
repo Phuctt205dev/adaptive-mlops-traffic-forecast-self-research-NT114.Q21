@@ -45,8 +45,13 @@ sau thay active vẫn tải lại được từ MinIO. Không tự Activate ho�
 
 ## Disk cache và độ bền dữ liệu
 
-`TRAFFIC_ARTIFACT_CACHE_BYTES` bật bounded cache ở API/sidecar. Metadata local
-nằm trong models/.traffic-cache, được loại khỏi uploader/flush và không được
+`TRAFFIC_ARTIFACT_CACHE_BYTES` bật bounded cache ở API/sidecar.
+Helper flush/inventory được thực thi trong image legacy phải giữ khả năng
+nạp bằng stdlib; chỉ import module disk cache khi có biến opt-in trên pod mới.
+Fixture thay PVC log bằng emptyDir cũng phải có sizeLimit để qua cùng checker
+disk staging, không bỏ kiểm cho môi trường test.
+
+Metadata local nằm trong models/.traffic-cache, được loại khỏi uploader/flush và không được
 restore từ object store. Khóa file trên volume dùng chung giữa process/container,
 giữ suốt lúc model/preprocessor loader đọc file, upload và explicit flush.
 Lock contention có deadline; không cam kết inference không bao giờ trả503.

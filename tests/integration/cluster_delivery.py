@@ -84,7 +84,7 @@ class Suite:
             # does not require a storage provisioner or production log volume.
             for volume in pod['volumes']:
                 if 'persistentVolumeClaim' in volume:
-                    volume.pop('persistentVolumeClaim');volume['emptyDir']={}
+                    volume.pop('persistentVolumeClaim');volume['emptyDir']={'sizeLimit':'16Mi'}
             pod['volumes'].append({'name':'fixtures','configMap':{'name':'fixture-runtime'}})
             for item in [*pod['containers'],*pod.get('initContainers',[])]:
                 item.setdefault('volumeMounts',[]).append({'name':'fixtures','mountPath':'/fixtures','readOnly':True})

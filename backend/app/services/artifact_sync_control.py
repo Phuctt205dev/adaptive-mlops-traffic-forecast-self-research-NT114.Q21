@@ -2,13 +2,26 @@
 import argparse
 from contextlib import contextmanager
 import json
+import os
 from pathlib import Path
 import sys
 import time
-from backend.app.services.artifact_cache import configured,internal
 
 SCHEMA='traffic-artifact-sync/v1'
 DIRECTORIES=('models','results','monitoring','mlruns','data_versions','data')
+
+
+def internal(path):
+    return '.traffic-cache' in Path(path).parts
+
+
+def managed_cache(root):
+    # Migration executes this checked helper inside a pinned legacy image.
+    # Keep the non-opted-in protocol stdlib-only; that image cannot import
+    # candidate modules. New native pods explicitly opt into the disk cache.
+    if 'TRAFFIC_ARTIFACT_CACHE_BYTES' not in os.environ:return None
+    from backend.app.services.artifact_cache import configured
+    return configured(Path(root)/'models')
 
 
 def capabilities():
@@ -57,7 +70,7 @@ def inventory(root,module):
 
 
 def flush(root='/cache',*,module=None,state=None):
-    cache=configured(Path(root)/'models')
+    cache=managed_cache(root)
     if cache:
         with cache.hold():return _flush(root,module=module,state=state)
     return _flush(root,module=module,state=state)

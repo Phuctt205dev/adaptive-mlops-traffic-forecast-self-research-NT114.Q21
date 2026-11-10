@@ -117,12 +117,16 @@ class GitHubArtifactClient:
         return self.open('actions/artifacts/' + str(artifact_id) + '/zip')
 
 
-def select_artifact(client, run_id, commit):
+def select_artifact(client, run_id, commit, *, current_run=False):
     if not re.fullmatch('[1-9][0-9]*', str(run_id)) or not re.fullmatch('[0-9a-f]{40}', commit):
         raise PreparationError('invalid_source_identity')
     run = client.get('actions/runs/' + str(run_id))
+    terminal = run.get('status') == 'completed' and run.get('conclusion') == 'success'
+    if current_run:
+        from scripts.cicd.github_gate import same_run
+        terminal = same_run(run, run_id, commit, int(os.environ.get('GITHUB_RUN_ATTEMPT', '0')))
     if (str(run.get('id')) != str(run_id) or run.get('head_sha') != commit
-            or run.get('status') != 'completed' or run.get('conclusion') != 'success'
+            or not terminal
             or run.get('event') != 'push'
             or (run.get('head_repository') or {}).get('full_name', '').lower() != client.repository.lower()):
         raise PreparationError('source_run_mismatch')
@@ -256,12 +260,12 @@ def publish(package, destination, deadline, *, sleep=time.sleep):
             sleep(min(.1 * 2 ** attempt, deadline.timeout()))
 
 
-def prepare(client, run_id, commit, destination):
+def prepare(client, run_id, commit, destination, *, current_run=False):
     destination = Path(destination).absolute()
     if destination.exists() or any(p.is_symlink() for p in (destination, *destination.parents)):
         raise PreparationError('destination_not_fresh')
     destination.parent.mkdir(parents=True, exist_ok=True)
-    artifact = select_artifact(client, run_id, commit)
+    artifact = select_artifact(client, run_id, commit, current_run=current_run)
     with tempfile.TemporaryDirectory(prefix='traffic-package-', dir=destination.parent) as temporary:
         stage = Path(temporary).resolve()
         if not stage.is_relative_to(destination.parent.resolve()) or stage == destination.parent.resolve():
@@ -280,9 +284,10 @@ def main():
     parser.add_argument('--run-id', required=True)
     parser.add_argument('--commit', required=True)
     parser.add_argument('--destination', required=True)
+    parser.add_argument('--current-run', action='store_true')
     args = parser.parse_args()
     result = prepare(GitHubArtifactClient(os.environ['GITHUB_REPOSITORY'], os.environ['GH_TOKEN']),
-                     args.run_id, args.commit, args.destination)
+                     args.run_id, args.commit, args.destination, current_run=args.current_run)
     print(json.dumps(result))
     if os.environ.get('GITHUB_OUTPUT'):
         with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as stream:

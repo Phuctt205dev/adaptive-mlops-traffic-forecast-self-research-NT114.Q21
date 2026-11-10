@@ -94,6 +94,17 @@ def report(directory, commit, run_id, attempt, outcome):
              '- Evidence retention: 30 days (sanitized receipt/diagnostics artifact).']
     if receipt.get('failed_phase') or receipt.get('phase'):
         lines.append('- Phase: `'+identifier(receipt.get('failed_phase') or receipt.get('phase'))+'`')
+    if receipt.get('components'):
+        lines += ['', '| Component | Action | Reason |', '| --- | --- | --- |']
+        for item in receipt['components']:
+            lines.append('| '+identifier(item.get('component'))+' | '+identifier(item.get('action'))+' | '+identifier(item.get('reason'))+' |')
+    inventory=receipt.get('restore_inventory')
+    if inventory:
+        fields=('files','bytes','max_files','max_bytes')
+        if all(type(inventory.get(k)) is int for k in fields):
+            lines += ['', '- Restore inventory: '+str(inventory['files'])+' files / '+str(inventory['bytes'])+' bytes; '
+                      'limits '+str(inventory['max_files'])+' files / '+str(inventory['max_bytes'])+' bytes. '
+                      +('Full listing.' if inventory.get('complete') is True else 'Observed lower bound; listing stopped at budget.')]
     execution=receipt.get('execution_failure',{})
     if execution:
         lines.append('- Runtime operation: `'+identifier(execution.get('container') or execution.get('workload'))+

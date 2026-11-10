@@ -5,6 +5,54 @@ import os
 from pathlib import Path, PurePosixPath
 
 DIRECTORIES = ('models', 'results', 'monitoring', 'mlruns', 'data_versions', 'data')
+MAX_BYTES = 4 * 1024**3 * 4 // 5
+MAX_FILES = 20000
+
+
+class RestoreBudgetExceeded(RuntimeError):
+    def __init__(self, report):
+        self.report = report
+        super().__init__('Artifact cache exceeds the reviewed restore budget: '
+                         f"files={report['files']}/{report['max_files']}, "
+                         f"bytes={report['bytes']}/{report['max_bytes']}")
+
+
+def inventory(client, bucket, *, max_bytes=MAX_BYTES, max_files=MAX_FILES):
+    """Bounded listing shared by preflight/init. No object keys in the report.
+
+    On overflow counts are observed lower bounds. Init lists again because
+    preflight cannot reserve space or prevent subsequent object writes.
+    """
+    if type(max_bytes) is not int or max_bytes < 0 or type(max_files) is not int or max_files < 0:
+        raise ValueError('Invalid restore budget')
+    entries, total = [], 0
+    for page in client.get_paginator('list_objects_v2').paginate(Bucket=bucket):
+        for item in page.get('Contents', []):
+            key = item['Key']
+            parts = PurePosixPath(key).parts
+            if not parts or parts[0] not in DIRECTORIES or key.endswith('/'):
+                continue
+            if key.startswith('/') or '\\' in key or any(p in {'', '.', '..'} for p in key.split('/')):
+                raise RuntimeError('Unsafe artifact cache key')
+            size = item['Size']
+            if type(size) is not int or size < 0:
+                raise ValueError('Invalid artifact object size')
+            entries.append((key, size))
+            total += size
+            report = {'schema': 'traffic-restore-inventory/v1', 'files': len(entries), 'bytes': total,
+                      'max_files': max_files, 'max_bytes': max_bytes, 'complete': False,
+                      'within_budget': len(entries) <= max_files and total <= max_bytes}
+            if not report['within_budget']:
+                raise RestoreBudgetExceeded(report)
+    return entries, {'schema': 'traffic-restore-inventory/v1', 'files': len(entries), 'bytes': total,
+                     'max_files': max_files, 'max_bytes': max_bytes, 'complete': True, 'within_budget': True}
+
+
+def inventory_report(client, bucket, **budgets):
+    try:
+        return inventory(client, bucket, **budgets)[1]
+    except RestoreBudgetExceeded as error:
+        return error.report
 
 
 def prepare(root):
@@ -12,24 +60,13 @@ def prepare(root):
         (root / name).mkdir(parents=True, exist_ok=True)
 
 
-def restore(root, *, max_bytes=4 * 1024**3 * 4 // 5):
+def restore(root, *, max_bytes=MAX_BYTES):
     from contextlib import closing
     from backend.app.services.region_cleanup_uploader import get_upload_client
     client = get_upload_client()
     bucket = os.environ['TRAFFIC_API_RUNTIME_BUCKET']
     prepare(root)
-    entries = []
-    for page in client.get_paginator('list_objects_v2').paginate(Bucket=bucket):
-        for item in page.get('Contents', []):
-            key = item['Key']
-            parts = PurePosixPath(key).parts
-            if not parts or parts[0] not in DIRECTORIES or key.endswith('/'):
-                continue
-            if key.startswith('/') or '\\' in key or any(p in {'','.','..'} for p in key.split('/')):
-                raise RuntimeError('Unsafe artifact cache key')
-            entries.append((key, int(item['Size'])))
-            if len(entries) > 20000 or sum(size for _, size in entries) > max_bytes:
-                raise RuntimeError('Artifact cache exceeds the reviewed restore budget')
+    entries, _ = inventory(client, bucket, max_bytes=max_bytes)
     for key, size in entries:
         path = root.joinpath(*PurePosixPath(key).parts)
         if path.is_symlink() or any(p.is_symlink() for p in path.parents):

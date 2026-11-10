@@ -1,14 +1,28 @@
-name: 02 Backend CD
-run-name: "Backend CD #${{ github.run_number }} | ${{ github.event_name == 'workflow_run' && format('CI #{0} attempt {1}', github.event.workflow_run.run_number, github.event.workflow_run.run_attempt) || format('CI run {0}', inputs.ci_run_id) }} | ${{ inputs.operation || 'release' }}"
+name: 02 Backend Delivery
+run-name: "Backend delivery #${{ github.run_number }} | CI run ${{ inputs.ci_run_id }} | ${{ inputs.operation || 'release' }}"
 
 on:
-  workflow_run:
-    workflows: ['01 Backend CI']
-    types: [completed]
+  workflow_call:
+    inputs:
+      ci_run_id:
+        required: true
+        type: string
+      source_sha:
+        required: true
+        type: string
+      source_attempt:
+        required: true
+        type: string
+      current_run:
+        type: boolean
+        default: false
+    outputs:
+      outcome:
+        value: ${{ jobs.record-result.outputs.outcome || jobs.inspect.outputs.reason }}
   workflow_dispatch:
     inputs:
       ci_run_id:
-        description: Successful default-branch 01 Backend CI push run to deliver
+        description: Checked default-branch application push run to deliver
         required: true
         type: string
       operation:
@@ -31,9 +45,7 @@ jobs:
   inspect:
     if: >-
       vars.RKE2_CD_ENABLED == 'true' &&
-      (github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.status == 'completed' &&
-       github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
+      (github.event_name == 'workflow_dispatch' || inputs.current_run)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -46,24 +58,34 @@ jobs:
       ci_number: ${{ steps.provenance.outputs.ci_number }}
       ci_attempt: ${{ steps.provenance.outputs.ci_attempt }}
       operation: ${{ steps.provenance.outputs.operation }}
+      eligible: ${{ steps.provenance.outputs.eligible }}
+      application: ${{ steps.provenance.outputs.application }}
+      reason: ${{ steps.provenance.outputs.reason }}
     steps:
       # The validation code comes from the protected default branch, never a PR.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ inputs.source_sha || github.event.repository.default_branch }}
           persist-credentials: false
       - name: Verify source run and selected deployment protection
         id: provenance
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CI_RUN_ID: ${{ inputs.ci_run_id || github.event.workflow_run.id }}
-          CI_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
-          CI_TRIGGER_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+          CI_TRIGGER_SHA: ${{ inputs.source_sha }}
+          CI_TRIGGER_ATTEMPT: ${{ inputs.source_attempt }}
+          CURRENT_RUN: ${{ inputs.current_run }}
           DELIVERY_OPERATION: ${{ inputs.operation || 'release' }}
-        run: python -B scripts/cicd/github_gate.py --run-id "$CI_RUN_ID"
+        run: |
+          if [ "$CURRENT_RUN" = true ]; then
+            python -B scripts/cicd/github_gate.py --run-id "$CI_RUN_ID" --expected-commit "$CI_TRIGGER_SHA" --expected-attempt "$CI_TRIGGER_ATTEMPT" --current-run
+          else
+            python -B scripts/cicd/github_gate.py --run-id "$CI_RUN_ID"
+          fi
 
   deploy:
     needs: inspect
+    if: needs.inspect.outputs.eligible == 'true'
     environment: ${{ needs.inspect.outputs.environment }}
     runs-on: [self-hosted, Windows, X64, rke2-deploy]
     timeout-minutes: 55
@@ -89,9 +111,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_CI_RUN: ${{ needs.inspect.outputs.run_id }}
           EXPECTED_COMMIT: ${{ needs.inspect.outputs.sha }}
+          CURRENT_RUN: ${{ inputs.current_run }}
         run: |
           $destination = Join-Path $env:RUNNER_TEMP ('traffic-artifact-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT)
-          python -B scripts/cicd/prepare_artifact.py --run-id $env:SOURCE_CI_RUN --commit $env:EXPECTED_COMMIT --destination $destination
+          $currentRunArgs = @()
+          if ($env:CURRENT_RUN -eq 'true') { $currentRunArgs += '--current-run' }
+          python -B scripts/cicd/prepare_artifact.py --run-id $env:SOURCE_CI_RUN --commit $env:EXPECTED_COMMIT --destination $destination @currentRunArgs
           if ($LASTEXITCODE -ne 0) { throw 'Release preparation failed before CD claim.' }
       - name: Claim this deployment under the saved mode
         id: claim
@@ -105,9 +130,18 @@ jobs:
           SOURCE_CI_RUN: ${{ needs.inspect.outputs.run_id }}
           SOURCE_CI_ATTEMPT: ${{ needs.inspect.outputs.ci_attempt }}
           DELIVERY_OPERATION: ${{ needs.inspect.outputs.operation }}
+          CURRENT_RUN: ${{ inputs.current_run }}
+          APPLICATION_RELEASE: ${{ needs.inspect.outputs.application }}
         run: |
-          python -B scripts/cicd/github_gate.py --run-id $env:SOURCE_CI_RUN --expected-commit $env:EXPECTED_COMMIT --expected-attempt $env:SOURCE_CI_ATTEMPT --check-only
+          $currentRunArgs = @()
+          if ($env:CURRENT_RUN -eq 'true') { $currentRunArgs += '--current-run' }
+          $sourceCheck = python -B scripts/cicd/github_gate.py --run-id $env:SOURCE_CI_RUN --expected-commit $env:EXPECTED_COMMIT --expected-attempt $env:SOURCE_CI_ATTEMPT --check-only @currentRunArgs
           if ($LASTEXITCODE -ne 0) { throw 'The selected CI must still be fully successful before CD claim.' }
+          if (($sourceCheck | ConvertFrom-Json).eligible -eq $false) {
+            [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "began=false`n")
+            Write-Output 'Release superseded before claim; no deployment transaction was started.'
+            exit 0
+          }
           python -B scripts/cicd/cd_state.py begin
           if ($LASTEXITCODE -ne 0) { throw 'Deployment claim failed.' }
       - name: Deliver the approved immutable release
@@ -149,6 +183,8 @@ jobs:
     if: always() && needs.inspect.result == 'success' && needs.deploy.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      outcome: ${{ steps.finish.outputs.outcome }}
     permissions:
       contents: write
       actions: write
@@ -176,10 +212,11 @@ jobs:
           DELIVERY_BEGAN: ${{ needs.deploy.outputs.began }}
         run: python -B scripts/cicd/cd_state.py finish --receipt-directory receipt
       - name: Release a dependent frontend only after backend verification
-        if: steps.finish.outputs.outcome == 'success'
+        if: steps.finish.outputs.outcome == 'success' && !inputs.current_run
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_COMMIT: ${{ needs.inspect.outputs.sha }}
           FRONTEND_API_URL: ${{ vars.VITE_API_BASE_URL }}
           FRONTEND_BASE_PATH: ${{ vars.VITE_BASE_PATH }}
-        run: python -B scripts/cicd/frontend_release.py dispatch --commit "$EXPECTED_COMMIT" --backend-run "$GITHUB_RUN_ID"
+          ARTIFACT_RUN_ID: ${{ needs.inspect.outputs.run_id }}
+        run: python -B scripts/cicd/frontend_release.py dispatch --commit "$EXPECTED_COMMIT" --backend-run "$GITHUB_RUN_ID" --artifact-run-id "$ARTIFACT_RUN_ID"

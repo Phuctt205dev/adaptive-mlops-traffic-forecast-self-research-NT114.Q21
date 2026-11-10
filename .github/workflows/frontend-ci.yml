@@ -1,12 +1,8 @@
-name: 03 Frontend CI
+name: 93 Frontend Check (manual)
 run-name: "Frontend CI #${{ github.run_number }} | ${{ github.event_name }} | ${{ github.head_ref || github.ref_name }}"
 
 on:
-  pull_request:
-    paths: ['frontend/**', '.github/workflows/frontend-ci.yml']
-  push:
-    branches: [main, master]
-    paths: ['frontend/**', '.github/workflows/frontend-ci.yml']
+  workflow_dispatch:
 
 permissions:
   contents: read

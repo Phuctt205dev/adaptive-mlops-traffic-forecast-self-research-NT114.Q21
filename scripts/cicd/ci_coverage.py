@@ -110,9 +110,27 @@ def read_artifact(repository,run_id,name,fetch):
         return json.loads(archive.read('ci-acceptance.json'))
 
 
-def check_run(repository,run,fetch,*,artifact=read_artifact):
+def check_run(repository,run,fetch,*,artifact=read_artifact,require_backend=True):
     run_id=str(run['id']);attempt=run['run_attempt'];commit=run['head_sha']
     proof=artifact(repository,run_id,'ci-acceptance-'+commit,fetch)
+    from scripts.cicd import pipeline
+    if proof.get('schema') == pipeline.ACCEPTANCE:
+        scope = pipeline.check_acceptance(proof, run)
+        if require_backend and not scope['backend']:
+            raise ValueError('This application run contains no backend release')
+        jobs = []
+        for page in range(1, 21):
+            data = fetch(f'repos/{repository}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page={page}')
+            jobs.extend(data['jobs'])
+            if len(data['jobs']) < 100:
+                break
+        else:
+            raise ValueError('CI job listing exceeds its budget')
+        for name in pipeline.required_jobs(scope):
+            matches = [j for j in jobs if j.get('name') == name]
+            if len(matches) != 1 or matches[0].get('status') != 'completed' or matches[0].get('conclusion') != 'success':
+                raise ValueError('Required application job missing, skipped or unsuccessful: ' + name)
+        return proof
     if (proof.get('schema')!=SCHEMA or proof.get('commit')!=commit or proof.get('ci_run_id')!=run_id
             or proof.get('ci_attempt')!=str(attempt) or proof.get('deployable') is not True):
         raise ValueError('CI acceptance does not match the successful run attempt')

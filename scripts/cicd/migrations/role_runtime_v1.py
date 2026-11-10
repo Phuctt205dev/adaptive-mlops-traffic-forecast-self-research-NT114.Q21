@@ -22,7 +22,7 @@ class Migration:
         return name==self.plan['roles'][role]
 
     def source(self,action):
-        if action not in {'preflight','flush'}:raise ValueError('Unsupported migration operation')
+        if action not in {'preflight','flush','inventory'}:raise ValueError('Unsupported migration operation')
         helper=(self.op.directory/'roles/sync/backend/app/services/artifact_sync_control.py').read_text(encoding='utf-8')
         path=self.plan['uploader_path'];expected=self.plan['uploader_sha256']
         code="""import hashlib,importlib.util,json,sys
@@ -45,8 +45,12 @@ exec(HELPER,n)
         code=code.replace('PATH',repr(path)).replace('EXPECTED',repr(expected)).replace('HELPER',repr(helper))
         if action=='preflight':
             code+="files=n['inventory']('/cache',m);print(json.dumps({'legacy_uploader_verified':True,'inventory_files':len(files)}))"
-        else:
+        elif action=='flush':
             code+="print(json.dumps(n['flush']('/cache',module=m)))"
+        else:
+            cache=(self.op.directory/'roles/sync/backend/app/services/restore_cache.py').read_text(encoding='utf-8')
+            code+=("import os\nr={'__name__':'migration_restore_preflight'}\nexec("+repr(cache)+",r)\n"
+                   "print(json.dumps(r['inventory_report'](m.get_upload_client(),os.environ['TRAFFIC_API_RUNTIME_BUCKET'])))")
         return code
 
     def preflight(self,originals):

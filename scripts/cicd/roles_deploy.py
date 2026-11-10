@@ -98,6 +98,9 @@ class RolesDelivery:
     def save(self, **values):
         previous_phase=self.state.get('phase')
         self.state.update(values, updated_at=now())
+        if self.state.get('phase') != previous_phase:
+            history=self.state.get('phase_history',[])
+            self.state['phase_history']=[*history[-31:],{'phase':self.state['phase'],'at':self.state['updated_at']}]
         self.path.parent.mkdir(parents=True, exist_ok=True)
         p = self.path.with_suffix('.tmp')
         p.write_text(json.dumps(self.state, indent=2), encoding='utf-8')
@@ -446,10 +449,35 @@ class RolesDelivery:
         if self.migration:
             self.migration.preflight(originals)
         airflow_changed=self.airflow_changed()
+        components=[]
+        for role in ('api','tree','neural'):
+            components.append({'component':role,'action':'deploy' if targets[role] in changes else 'keep',
+                               'reason':'image_or_manifest_changed' if targets[role] in changes else 'desired_state_unchanged'})
+        components.append({'component':'airflow','action':'deploy' if airflow_changed else 'keep',
+                           'reason':'dag_source_changed' if airflow_changed else 'desired_state_unchanged'})
+        self.save(components=components)
         if changes or airflow_changed:
             self.capacity(api,changes,airflow_changed)
+        if targets['api'] in changes and not idle['active'] and not idle['running']:
+            self.restore_preflight(api)
         return {'active':active,'target':targets['api'],'targets':targets,'originals':originals,
                 'changes':changes,'airflow_changed':airflow_changed,'idle':idle}
+
+    def restore_preflight(self, api):
+        # Execute the checked candidate's listing rules on an existing sidecar.
+        # This works before upgrading the sync image and never downloads/deletes.
+        candidate = (self.directory / 'roles/sync/backend/app/services/restore_cache.py').read_text(encoding='utf-8')
+        source = ("import json,os\nns={'__name__':'restore_preflight'}\nexec(" + repr(candidate) + ",ns)\n"
+                  "from backend.app.services.region_cleanup_uploader import get_upload_client\n"
+                  "print(json.dumps(ns['inventory_report'](get_upload_client(),os.environ['TRAFFIC_API_RUNTIME_BUCKET'])))")
+        sidecar='artifact-sync'
+        if getattr(self,'migration',None) and self.migration.legacy(api['metadata']['name'],'api'):
+            source=self.migration.source('inventory')
+            sidecar=self.migration.plan['api_sidecar']
+        report = self.execute(self.cluster.pod(api), sidecar, source)
+        self.save(restore_inventory=report)
+        if report.get('complete') is not True or report.get('within_budget') is not True:
+            raise RuntimeError('Artifact cache preflight exceeded the reviewed restore budget; inspect inventory counts')
 
     def capacity(self,api,changes,airflow_changed):
         from scripts.cicd.capacity import verify
@@ -633,7 +661,7 @@ class RolesDelivery:
                 self.flag('release',True)
                 self.cluster.call('wait','--for=condition=complete','job/'+self.state['guard_job'],'--timeout=30s',json_output=False)
         self.resource_proof()
-        self.save(rolled_back=True,recovery_required=False,phase='rolled_back')
+        self.save(rolled_back=True,recovery_required=False,recovered_at=now(),phase='rolled_back')
 
     def resource_proof(self):
         names={(p['kind'],p['name']) for p in self.inverses}
@@ -680,6 +708,7 @@ class RolesDelivery:
             self.monitor_start()
             self.save(phase='stage_api')
             if plan['target'] in plan['changes']:
+                self.restore_preflight(self.api())
                 self.change('deployment',plan['target'],plan['changes'][plan['target']])
                 self.cluster.wait(plan['target'])
             self.health(plan['target'],'api')
@@ -724,7 +753,7 @@ class RolesDelivery:
             self.resource_proof()
             self.save(completed=True,recovery_required=False,phase='completed',proof=proof)
         except Exception as error:
-            self.save(recovery_required=True,failed_phase=self.state.get('phase'),error_type=type(error).__name__,phase='rollback')
+            self.save(recovery_required=True,failed_at=now(),failed_phase=self.state.get('phase'),error_type=type(error).__name__,phase='rollback')
             try:
                 self.monitor_stop()
             except Exception:
@@ -768,7 +797,7 @@ def main():
     except Exception as error:
         op.save(error_type=type(error).__name__,failed_phase=op.state.get('failed_phase',op.state.get('phase','preflight')))
         if args.action=='Verify' and op.state.get('completed'):
-            op.save(completed=False,recovery_required=True,phase='verify_failed_after_release')
+            op.save(completed=False,recovery_required=True,failed_at=now(),phase='verify_failed_after_release')
         print(json.dumps({'delivery_failed':True,'error_type':type(error).__name__,
                           'reason':str(error) if isinstance(error,(ValueError,RuntimeError)) else 'Details omitted.',
                           'recovery_required':op.state.get('recovery_required',True)}))

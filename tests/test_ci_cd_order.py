@@ -109,12 +109,12 @@ class CICDOrderingTests(unittest.TestCase):
 
     def test_workflow_waits_for_completed_success_and_rechecks_before_claim(self):
         text = (ROOT / '.github/workflows/backend-deploy.yml').read_text(encoding='utf-8')
-        self.assertIn('types: [completed]', text)
+        self.assertIn('workflow_call:', text)
+        self.assertNotIn('workflow_run:', text.split('\njobs:\n')[0])
         inspect = text.split('\n  inspect:\n')[1].split('\n  deploy:\n')[0]
-        self.assertIn("github.event.workflow_run.status == 'completed'", inspect)
-        self.assertIn("github.event.workflow_run.conclusion == 'success'", inspect)
-        self.assertIn('CI_TRIGGER_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}', inspect)
-        self.assertIn('CI_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}', inspect)
+        self.assertIn('--current-run', inspect)
+        self.assertIn('CI_TRIGGER_ATTEMPT: ${{ inputs.source_attempt }}', inspect)
+        self.assertIn('CI_TRIGGER_SHA: ${{ inputs.source_sha }}', inspect)
         deploy = text.split('\n  deploy:\n')[1].split('\n  record-result:\n')[0]
         self.assertIn('needs: inspect', deploy)
         claim = deploy.split('id: claim')[1].split('\n      - name:')[0]

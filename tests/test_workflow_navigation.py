@@ -1,24 +1,26 @@
 """Display labels must not disconnect workflow triggers or machine gates."""
-import ast
 from pathlib import Path
 import re
 import unittest
 
-from scripts.cicd.ci_coverage import COMMON_JOBS
+from scripts.cicd import pipeline
 
 ROOT=Path(__file__).resolve().parents[1]
 WORKFLOWS=ROOT/'.github/workflows'
 
 
 class WorkflowNavigationTests(unittest.TestCase):
-    def test_backend_completion_listener_matches_the_actual_ci_label(self):
+    def test_main_run_calls_backend_after_acceptance_without_a_second_automatic_listener(self):
         ci=(WORKFLOWS/'backend-ci.yml').read_text(encoding='utf-8')
         cd=(WORKFLOWS/'backend-deploy.yml').read_text(encoding='utf-8')
-        name=re.search(r'^name: (.+)$',ci,re.M).group(1)
-        listener=re.search(r'^    workflows: (\[.+\])$',cd,re.M)
-        self.assertIsNotNone(listener,'Backend CD must subscribe to a CI workflow')
-        self.assertEqual(ast.literal_eval(listener.group(1)),[name])
-        self.assertRegex(cd,r'types: \[completed\]')
+        self.assertNotIn('workflow_run:',cd)
+        self.assertIn('workflow_call:',cd)
+        caller=ci.split('\n  backend-delivery:\n')[1].split('\n  frontend-publication:\n')[0]
+        self.assertIn('needs: [scope, acceptance]',caller)
+        self.assertIn("needs.acceptance.result == 'success'",caller)
+        self.assertIn("github.event_name == 'push'",caller)
+        self.assertIn('uses: ./.github/workflows/backend-deploy.yml',caller)
+        self.assertIn('current_run: true',caller)
 
     def test_required_job_names_still_match_the_coverage_gate(self):
         source=(WORKFLOWS/'backend-ci.yml').read_text(encoding='utf-8').split('\njobs:\n',1)[1]
@@ -31,7 +33,9 @@ class WorkflowNavigationTests(unittest.TestCase):
                 roles=re.search(r'^        role: \[(.+)\]$',body,re.M).group(1).split(',')
                 actual.update(name+' ('+role.strip()+')' for role in roles)
             else:actual.add(name)
-        self.assertEqual(actual,COMMON_JOBS|{'legacy-migration'})
+        scope=pipeline.classify([],baseline=None,commit='a'*40,frontend=True)
+        expected=pipeline.required_jobs(scope)|{'backend-delivery','frontend-publication','summary'}
+        self.assertEqual(actual,expected)
 
     def test_all_file_based_workflow_dispatch_and_lookup_targets_exist(self):
         references=set()

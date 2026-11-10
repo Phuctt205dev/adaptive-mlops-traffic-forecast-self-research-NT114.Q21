@@ -1,5 +1,13 @@
 # Vận hành CI/CD backend trên RKE2
 
+> **Source cải tạo10/11/2026:** luồng push thường ngày nằm trong
+> **01 Application Delivery**, gọi backend/Pages trong cùng run. Đọc
+> [luồng mới](CICD_UNIFIED_FLOW.md) và [cách đọc Actions](ACTIONS_DEMO.md).
+> Source chưa thay bằng chứng nghiệm thu production. Các mốc Auto/nghiệm thu
+> 05–08/11 bên dưới là lịch sử; trạng thái sau phục hồi10/11 ở My-worklog.
+> Phần bootstrap/quyền/recovery bên dưới vẫn là tài liệu tham khảo, không phải
+> yêu cầu chạy lại setup hoặc Apply các gói cũ.
+
 > Rà soát 08/11/2026: runtime thống nhất và gói tối ưu CI đã nghiệm thu;
 > Auto đang bật theo lựa chọn đã lưu. Xem [luồng hiện hành](CICD_UNIFIED_FLOW.md)
 > và [cách đọc Actions để trình bày](ACTIONS_DEMO.md). Mốc rollback/tạm tắt CD
@@ -20,7 +28,7 @@ thu live của bản nâng cấp phải tra handoff; tài liệu source không t
 | --- | --- |
 | `.github/workflows/backend-ci.yml` | PR/push: test backend/ML, dựng gói source theo danh sách cho phép; push nhánh mặc định đạt test mới build/publish image GHCR. |
 | `.github/workflows/backend-deploy.yml` | Xác minh CI đúng repo/nhánh/commit và cổng duyệt thật, chờ `rke2-production`, giao job cho runner `rke2-deploy`. |
-| `.github/workflows/frontend-ci.yml` | Build frontend trong PR/push; workflow Pages hiện có tiếp tục phát hành frontend. |
+| `.github/workflows/frontend-ci.yml` | Kiểm frontend thủ công; PR/push dùng frontend-build của Application Delivery. |
 | `scripts/cicd/release.py` | Build/Verify gói source, hash từng file, ràng buộc commit/base image/schema. |
 | `scripts/cicd/prepare_artifact.py` | Tải ZIP trọn vẹn, kiểm digest GitHub, CRC, manifest và image binding trước khi nhận quyền CD. |
 | `scripts/cicd/deploy.py` | Plan/Apply/Verify/Rollback; patch có kiểm UID/resourceVersion/spec, không apply manifest nền. |
@@ -124,7 +132,7 @@ Khi dựng lại, kiểm Settings → Actions để workflow từ **mọi cộng
 ## Publish source, image và bật CD
 
 1. Review/commit/push source theo quyền Git của nhiệm vụ; không force-add runtime lịch sử, results hoặc nhật ký. CI cần file runtime mới được theo dõi trong Git.
-2. Xem lượt **01 Backend CI** đầu tiên; chỉ tiếp tục khi các job bắt buộc đạt và có artifact `backend-release-<commit>` cùng image digest GHCR. Máy local không có TensorFlow không thay bằng chứng job neural trên GitHub.
+2. Xem phần CI của **01 Application Delivery**; chỉ tiếp tục khi các job bắt buộc đạt và có artifact `backend-release-<commit>` cùng image digest GHCR. Máy local không có TensorFlow không thay bằng chứng job neural trên GitHub.
 3. Xác nhận node pull được image. Package GHCR mới có thể private. Với image chứa source công khai đã review, chủ repo có thể chọn public trong Package Settings; nếu giữ private, cấu hình pull Secret có credential đọc package phù hợp. Không dùng GITHUB_TOKEN hết hạn của một job làm credential pull lâu dài.
 4. Bật CD bằng **một** trong hai cách theo lựa chọn registry:
 
@@ -138,11 +146,11 @@ Khi dựng lại, kiểm Settings → Actions để workflow từ **mọi cộng
 
 EnableCD kiểm reviewer, runner online và đúng namespace UID trước khi đặt biến true; lựa chọn registry vẫn cần nghiệm thu pull thật. Không tự đổi package sang public hoặc tự tạo Secret từ token cá nhân.
 
-Lượt CI đã hoàn tất lúc CD còn false sẽ không tự chạy lại deploy khi bật biến. Để phát hành bản đó: GitHub → Actions → 02 Backend CD → Run workflow → nhập ID lượt 01 Backend CI **push nhánh mặc định** đã đạt. Manual yêu cầu duyệt môi trường; Auto theo chế độ đã lưu. Xem [hướng dẫn đọc Actions](ACTIONS_DEMO.md).
+Lượt kiểm đã hoàn tất lúc CD còn false sẽ không tự chạy lại deploy khi bật biến. Khi được giao phát hành nguồn đó: Actions → 02 Backend Delivery → Run workflow → nhập ID run Application Delivery **push nhánh mặc định** đã đạt. Nguồn cũ bị thay thế phải được bỏ qua. Manual yêu cầu duyệt môi trường; Auto theo chế độ đã lưu. Xem [hướng dẫn Actions](ACTIONS_DEMO.md).
 
 ## Mỗi lần phát hành
 
-Push vào nhánh mặc định → **01 Backend CI** kiểm source/image/artifact và coverage → **02 Backend CD** kiểm nguồn rồi chọn mode đã lưu. Manual chờ **Review deployments → rke2-production → Approve and deploy** một lần cho release; Auto dùng `rke2-production-auto` và đi tới runner. Cùng engine Apply/Verify, không xác nhận từng lệnh kubectl.
+Push nhánh mặc định → **01 Application Delivery** kiểm source/image/artifact và coverage → gọi backend delivery trong cùng run khi liên quan. Manual chờ **Review deployments → rke2-production → Approve and deploy** một lần cho release; Auto dùng `rke2-production-auto` và đi tới runner. Cùng engine Apply/Verify, không xác nhận từng lệnh kubectl. Pages dùng artifact frontend đã build một lần, sau backend Verify hoặc khi backend hiện hành tương thích.
 
 Runner xác minh artifact đúng commit và image digest. Preflight kiểm namespace UID, trạng thái training, migration head, cache API 4Gi, dung lượng restore dưới 80%, disk headroom và entrypoint. Runner giữ khóa bảo trì từ Job độc lập, pause DAG theo trạng thái đã ghi rồi cập nhật hai worker/API. Trong cửa sổ giữ khóa, các request ứng dụng chịu barrier có thể tạm trả busy; không cam kết zero downtime. Auth/health và một số route đọc vùng không bị barrier này chặn.
 

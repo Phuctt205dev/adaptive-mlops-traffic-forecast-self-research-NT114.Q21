@@ -1,5 +1,5 @@
-name: 01 Backend CI
-run-name: "Backend CI #${{ github.run_number }} | ${{ github.event_name }} | ${{ github.head_ref || github.ref_name }}"
+name: 01 Application Delivery
+run-name: "Release #${{ github.run_number }} | ${{ github.event_name }} | ${{ github.head_ref || github.ref_name }}"
 
 on:
   pull_request:
@@ -12,6 +12,10 @@ on:
       - 'deployment/**'
       - 'requirements/**'
       - 'alembic/**'
+      - 'frontend/**'
+      - 'docs/index.html'
+      - '.github/workflows/frontend-ci.yml'
+      - '.github/workflows/deploy-frontend-pages.yml'
       - '.github/workflows/backend-*.yml'
       - '.github/workflows/cd-*.yml'
   push:
@@ -25,19 +29,22 @@ on:
       - 'deployment/**'
       - 'requirements/**'
       - 'alembic/**'
+      - 'frontend/**'
+      - 'docs/index.html'
+      - '.github/workflows/frontend-ci.yml'
+      - '.github/workflows/deploy-frontend-pages.yml'
       - '.github/workflows/backend-*.yml'
       - '.github/workflows/cd-*.yml'
   workflow_dispatch:
   schedule:
-    # Weekly full validation only; workflow_run CD accepts push events only.
+    # Weekly full validation only; deployment jobs accept push events only.
     - cron: '17 20 * * 0'
 
 permissions:
   contents: read
 
-concurrency:
-  group: backend-ci-${{ github.ref }}
-  cancel-in-progress: true
+# CI jobs cancel obsolete work individually. Never cancel the whole run once
+# its reusable backend delivery has acquired the production transaction.
 
 jobs:
   scope:
@@ -45,6 +52,10 @@ jobs:
     timeout-minutes: 5
     outputs:
       full: ${{ steps.scope.outputs.full }}
+      current: ${{ steps.scope.outputs.current }}
+      backend: ${{ steps.scope.outputs.backend }}
+      tests: ${{ steps.scope.outputs.tests }}
+      frontend: ${{ steps.scope.outputs.frontend }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -57,15 +68,23 @@ jobs:
         id: scope
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python -B scripts/cicd/ci_scope.py
+          FRONTEND_API_URL: ${{ vars.VITE_API_BASE_URL }}
+          FRONTEND_BASE_PATH: ${{ vars.VITE_BASE_PATH }}
+        run: python -B scripts/cicd/pipeline.py scope
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ci-scope-${{ github.sha }}
+          overwrite: true
           path: ci-scope.json
           if-no-files-found: error
           retention-days: 30
 
   tests:
+    needs: scope
+    if: github.event_name == 'pull_request' || needs.scope.outputs.tests == 'true'
+    concurrency:
+      group: checks-${{ github.ref }}-${{ github.event_name }}-tests
+      cancel-in-progress: true
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
@@ -88,6 +107,7 @@ jobs:
           cache: pip
           cache-dependency-path: |
             requirements/ci.txt
+            requirements/backend.txt
             requirements/roles/constraints.txt
       - name: Install test dependencies
         run: python -m pip install -c requirements/roles/constraints.txt -r requirements/ci.txt
@@ -100,20 +120,25 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: offline-model-fixtures-${{ github.sha }}
+          overwrite: true
           path: fixtures/
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: checked-source-${{ github.sha }}
+          overwrite: true
           path: release/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
 
   image:
-    needs: tests
-    if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    needs: [scope, tests]
+    if: github.event_name != 'pull_request' && needs.scope.outputs.backend == 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    concurrency:
+      group: checks-${{ github.ref }}-${{ github.event_name }}-image-${{ matrix.role }}
+      cancel-in-progress: true
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     strategy:
@@ -214,9 +239,21 @@ jobs:
           if value is None: raise RuntimeError('Published digest was not confirmed')
           pathlib.Path('image-'+os.environ['ROLE']+'.json').write_text(json.dumps(value))
           PY
+      - name: Summarize this role image decision
+        env:
+          ROLE: ${{ matrix.role }}
+          REUSED: ${{ steps.metadata.outputs.reusable }}
+          SOURCE_ID: ${{ steps.metadata.outputs.source_id }}
+        run: |
+          python - <<'PY'
+          import os
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as out:
+              out.write('## Image '+os.environ['ROLE']+'\n\nAction: **'+('Reuse' if os.environ['REUSED']=='true' else 'Build')+'**\n\nSource ID: `'+os.environ['SOURCE_ID']+'`\n')
+          PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: role-image-${{ matrix.role }}-${{ github.sha }}
+          overwrite: true
           path: image-${{ matrix.role }}.json
           if-no-files-found: error
           retention-days: 7
@@ -242,6 +279,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: backend-release-${{ github.sha }}
+          overwrite: true
           path: release/
           include-hidden-files: true
           if-no-files-found: error
@@ -249,6 +287,10 @@ jobs:
 
   current-runtime:
     needs: [package, scope]
+    if: needs.scope.outputs.current == 'true'
+    concurrency:
+      group: checks-${{ github.ref }}-${{ github.event_name }}-current
+      cancel-in-progress: true
     runs-on: ubuntu-24.04
     # Six balanced safety cases; manifest/no-op cycles are consolidated.
     timeout-minutes: 35
@@ -293,6 +335,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: isolated-current-proof-${{ github.sha }}
+          overwrite: true
           path: |
             results/cicd/kubernetes-delivery-proof.json
             results/cicd/kubernetes-delivery-progress.json
@@ -308,6 +351,9 @@ jobs:
   legacy-migration:
     needs: [package, scope]
     if: needs.scope.outputs.full == 'true'
+    concurrency:
+      group: checks-${{ github.ref }}-${{ github.event_name }}-migration
+      cancel-in-progress: true
     runs-on: ubuntu-24.04
     # The real legacy migration took ~20 minutes before the recovery cases.
     # Keep production grace/drain; only the three legacy-specific cases run here.
@@ -353,6 +399,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: isolated-migration-proof-${{ github.sha }}
+          overwrite: true
           path: |
             results/cicd/kubernetes-delivery-proof.json
             results/cicd/kubernetes-delivery-progress.json
@@ -367,7 +414,7 @@ jobs:
 
   acceptance:
     if: always()
-    needs: [scope, tests, image, package, current-runtime, legacy-migration]
+    needs: [scope, tests, frontend-build, image, package, current-runtime, legacy-migration]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -382,12 +429,12 @@ jobs:
           name: ci-scope-${{ github.sha }}
           path: coverage
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && needs.scope.outputs.backend == 'true'
         with:
           name: backend-release-${{ github.sha }}
           path: coverage/release
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && needs.scope.outputs.current == 'true'
         with:
           name: isolated-current-proof-${{ github.sha }}
           path: coverage/current
@@ -399,11 +446,160 @@ jobs:
       - name: Require complete coverage for this commit and attempt
         env:
           CI_JOB_RESULTS: ${{ toJSON(needs) }}
-        run: python -B scripts/cicd/ci_coverage.py
+        run: python -B scripts/cicd/pipeline.py accept
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name != 'pull_request'
         with:
           name: ci-acceptance-${{ github.sha }}
+          overwrite: true
           path: coverage/ci-acceptance.json
+          if-no-files-found: error
+          retention-days: 30
+
+  frontend-build:
+    needs: scope
+    if: github.event_name == 'pull_request' || needs.scope.outputs.frontend == 'true'
+    concurrency:
+      group: checks-${{ github.ref }}-${{ github.event_name }}-frontend
+      cancel-in-progress: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Bind build configuration before compiling
+        env:
+          FRONTEND_API_URL: ${{ vars.VITE_API_BASE_URL }}
+          FRONTEND_BASE_PATH: ${{ vars.VITE_BASE_PATH }}
+        run: python -B scripts/cicd/pipeline.py frontend-config
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - name: Bind exact files, source, configuration and CI attempt
+        run: python -B scripts/cicd/pipeline.py frontend-manifest
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: frontend-build-${{ github.sha }}
+          overwrite: true
+          path: |
+            frontend/dist/
+            frontend/frontend-build.json
+          if-no-files-found: error
+          retention-days: 30
+
+  backend-delivery:
+    needs: [scope, acceptance]
+    if: >-
+      always() && !cancelled() && needs.acceptance.result == 'success' &&
+      needs.scope.outputs.backend == 'true' && github.event_name == 'push' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      vars.RKE2_CD_ENABLED == 'true'
+    permissions:
+      contents: write
+      actions: write
+    uses: ./.github/workflows/backend-deploy.yml
+    with:
+      ci_run_id: ${{ github.run_id }}
+      source_sha: ${{ github.sha }}
+      source_attempt: ${{ github.run_attempt }}
+      current_run: true
+    secrets: inherit
+
+  frontend-publication:
+    needs: [scope, acceptance, backend-delivery]
+    if: >-
+      always() && !cancelled() && needs.acceptance.result == 'success' &&
+      needs.scope.outputs.frontend == 'true' && github.event_name == 'push' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (needs.scope.outputs.backend != 'true' || needs.backend-delivery.outputs.outcome == 'success')
+    permissions:
+      contents: write
+      actions: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/deploy-frontend-pages.yml
+    with:
+      source_sha: ${{ github.sha }}
+      artifact_run_id: ${{ github.run_id }}
+    secrets: inherit
+
+  summary:
+    if: always()
+    needs: [scope, tests, frontend-build, image, package, current-runtime, legacy-migration, acceptance, backend-delivery, frontend-publication]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        continue-on-error: true
+        with:
+          persist-credentials: false
+      - name: Summarize this application release
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python - <<'PY'
+          import json,os
+          results=json.loads(os.environ['RESULTS'])
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as out:
+              out.write('## Application release\n\nCandidate source: `'+os.environ['GITHUB_SHA']+'`\n\n')
+              out.write('| Stage | Result |\n| --- | --- |\n')
+              for name,value in results.items(): out.write('| '+name+' | '+value['result']+' |\n')
+              backend=results['backend-delivery']
+              pages=results['frontend-publication']
+              out.write('\nBackend outcome: **'+(backend.get('outputs',{}).get('outcome') or backend['result'])+'**\n')
+              out.write('\nPages published: **'+pages.get('outputs',{}).get('published','not run')+'**; '+pages.get('outputs',{}).get('reason','see stage result')+'\n')
+              out.write('\nBuild and deployment decisions are separate. Read image summaries and the backend receipt for per-role Deploy/Keep decisions and recovery.\n')
+          PY
+      - name: Download scope for measurements
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ci-scope-${{ github.sha }}
+          path: metrics-input/scope
+      - name: Download acceptance for measurements
+        if: github.event_name != 'pull_request' && needs.acceptance.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ci-acceptance-${{ github.sha }}
+          path: metrics-input/acceptance
+      - name: Download receipt for measurements
+        if: needs.backend-delivery.result != 'skipped'
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: delivery-receipt-${{ github.sha }}-${{ github.run_attempt }}
+          path: metrics-input/receipt
+      - name: Measure CI and actual delivery evidence
+        id: measurements
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BENCHMARK_EXPERIMENT: ${{ vars.CI_BENCHMARK_EXPERIMENT }}
+          BENCHMARK_WORKLOAD: ${{ vars.CI_BENCHMARK_WORKLOAD }}
+          BENCHMARK_CACHE_STATE: ${{ vars.CI_BENCHMARK_CACHE_STATE }}
+          BENCHMARK_RUNNER_PROFILE: ubuntu-24.04
+        run: python -B scripts/cicd/benchmark.py collect
+      - name: Mark unavailable measurements explicitly
+        if: steps.measurements.outcome == 'failure'
+        run: echo 'CI/CD measurements unavailable; inspect the collector step. Deployment results above remain authoritative.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve measurements
+        if: steps.measurements.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: delivery-metrics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: delivery-metrics/
+          overwrite: true
           if-no-files-found: error
           retention-days: 30

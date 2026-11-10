@@ -1,5 +1,11 @@
 # 90 CD Control: Manual / Auto
 
+> Source cải tạo10/11: **01 Application Delivery** gọi backend delivery và
+> publish artifact frontend trong cùng run, xem [luồng mới](CICD_UNIFIED_FLOW.md).
+> Manual/Auto, mode epoch, ownership và failure latch giữ nguyên. 91 CD Retry
+> giới hạn12 dispatch/6giờ; hết budget giữ pending để xem xét. Chưa phát hành
+> hoặc đổi mode production chỉ từ việc cập nhật source/hướng dẫn.
+
 Code vẫn push vào `master` như hiện tại; CI kiểm/build như trước. Chế độ chỉ
 chọn có cần duyệt deployment trước khi giao việc cho runner.
 
@@ -32,10 +38,12 @@ trước thử lại. Không hủy công việc đang chạy hoặc xóa hàng c
 
 Công tắc áp dụng cho backend. Luồng thống nhất bổ sung gate cho frontend:
 Pages chỉ publish khi nội dung backend tương ứng đã Apply+Verify hoặc không
-đổi so với bản đã Verify. Backend đạt gọi lại Pages cho frontend mới nhất
-tương thích. Bản frontend đã publish được ghi riêng, không thay mode/chốt CD.
-Luồng này đã được nghiệm thu; xem [trạng thái và hợp đồng hiện hành](CICD_UNIFIED_FLOW.md)
-và [cách đọc Actions](ACTIONS_DEMO.md). Migration runtime ngày 07/11 đã hoàn tất.
+đổi so với bản đã Verify. Trong source mới, Pages là job tiếp theo trong cùng
+run và dùng đúng artifact đã build. Retry deferred có thể dispatch riêng Pages
+với artifact nguồn; không build lại. Publication record không thay mode/chốt CD.
+Gate cũ đã được nghiệm thu; graph cải tạo10/11 còn cần CI/nghiệm thu riêng,
+xem [hợp đồng mới](CICD_UNIFIED_FLOW.md) và [cách đọc Actions](ACTIONS_DEMO.md).
+Migration runtime ngày07/11 đã hoàn tất, không lặp cho mỗi release.
 
 ## Job cũ khi đổi chế độ
 

@@ -22,6 +22,17 @@ class DeliveryOrdering(unittest.TestCase):
         op.state={'commit':'a'*40,'patched':[],'guard_held':False}; op.inverses=[]
         return op
 
+    def test_phase_history_records_transitions_once_and_is_bounded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            op=self.operator(directory)
+            with patch('scripts.cicd.roles_deploy.now',return_value='2026-11-10T00:00:00Z'):
+                op.save(phase='plan');op.save(completed=False)
+                self.assertEqual(len(op.state['phase_history']),1)
+                for index in range(40):op.save(phase='phase-'+str(index))
+            history=json.loads(op.path.read_text())['phase_history']
+            self.assertEqual(len(history),32)
+            self.assertEqual(history[-1],{'phase':'phase-39','at':'2026-11-10T00:00:00Z'})
+
     def test_private_inverse_is_written_before_mutation_but_never_in_public_receipt(self):
         with tempfile.TemporaryDirectory() as directory:
             op=self.operator(directory)
@@ -163,6 +174,7 @@ class DeliveryOrdering(unittest.TestCase):
             op.api=Mock(); op.start_guard=Mock(); op.change=Mock(); op.health=Mock(); op.endpoints=Mock()
             op.route=Mock(); op.business=Mock(side_effect=[{},RuntimeError('Preview failed')]); op.rollback=Mock()
             op.monitor_start=Mock(); op.monitor_stop=Mock()
+            op.restore_preflight=Mock()  # Budget ordering is exercised separately with the actual candidate source.
             op.public_health=Mock()
             with self.assertRaisesRegex(RuntimeError,'Preview failed'):
                 op.apply()

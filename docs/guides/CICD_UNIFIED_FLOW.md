@@ -50,19 +50,22 @@ Thiếu/diverged baseline hoặc đường dẫn chưa biết ảnh hưởng ch�
 | --- | --- |
 | Frontend thuần | Frontend build/manifest, acceptance, kiểm backend tương thích, Pages |
 | Tests hoặc docs thuần | Kiểm liên quan; không yêu cầu image/deploy app. docs/index.html là input API, không thuộc docs thuần |
-| App/ML thông thường | Regression, package, 4 image checks; Kubernetes controller suite được skip có chủ đích |
-| scripts/cicd, manifest/runtime, lifecycle/cache/restore/startup, dependency role/base, schema, workflow hoặc bộ integration | Kiểm trên cùng ứng viên bằng 6 ca current-runtime |
+| Hai script kiểm UI đã biết (Feature Importance/Training Monitor) | Regression, không tự yêu cầu backend/legacy; các rollout helper khác vẫn phân loại thận trọng |
+| App/ML, manifest API/tree/neural hiện có, DAG cloud hoặc dependency role | Regression, package, 4 image checks; bỏ cụm thử Kubernetes; CD vẫn preflight/Verify/rollback |
+| scripts/cicd, hợp đồng runtime, deployment mới/chưa nhận diện, lifecycle/cache/restore, schema, workflow hoặc bộ integration | Kiểm trên cùng ứng viên bằng 6 ca current-runtime |
 | Legacy adapter/baseline, scope/proof/harness, pipeline acceptance contract, lịch sử không rõ | current-runtime và 3 ca legacy-migration |
-| Lịch tuần hoặc Run workflow của 01 | Full validation; không deploy production |
+| Lịch tuần hoặc Run workflow chọn validation=full | Full validation; không deploy production |
+| Run workflow chọn validation=daily (mặc định) | Theo scope tích lũy như push; không deploy production |
 
 Frontend upload giữ cả file ẩn trong `dist` (ví dụ `.nojekyll`) đúng manifest.
+Frontend chạy `npm test` (Node test runner) trước `npm run build`.
 Job `acceptance` chờ `frontend-build` kết thúc rồi tải artifact và kiểm đủ
 file/hash/source/config/attempt trước khi chấp nhận bản phát hành. Không rebuild hoặc sửa manifest
 để khớp một gói tải xuống bị thiếu file.
 
-`Run workflow` có thể chọn nhánh thử nghiệm: image checks/package và hai suite
-Kubernetes vẫn chạy theo source của nhánh đó. Lượt manual/lịch tuần cũng build
-frontend dù nội dung đã publish, để kiểm đủ đầu ra. Image mới được publish
+`Run workflow` có thể chọn nhánh thử nghiệm và validation=daily/full. Chọn
+full hoặc lịch tuần chạy hai suite Kubernetes và build frontend dù nội dung
+đã publish; daily chọn theo diff và publication hiện có. Image mới được publish
 bằng content tag sau checks để cluster cô lập tải; backend/Pages production
 vẫn chỉ được gọi khi push nhánh mặc định và qua toàn bộ gate hiện có.
 
@@ -81,6 +84,11 @@ Proof mới `traffic-application-acceptance/v1` gắn SHA/run/attempt, image bin
 và suite được yêu cầu. Proof legacy vẫn đọc được để phục hồi lịch sử; không
 sửa/bỏ hash của proof cũ. Rerun phải dùng **Re-run all jobs**: artifact mới
 ghi đè đúng tên trong cùng run, nhưng attempt cũ không được ghép với attempt mới.
+
+Scope `traffic-application-scope/v2` chọn đường daily cho manifest/DAG/dependency
+thường ngày. Reader v1 được giữ theo chính sách cũ: không diễn giải lại proof
+đã phát hành thành coverage nhẹ hơn. Thay pipeline tự yêu cầu full; giảm phạm
+vi chỉ áp dụng ứng viên mới sau khi baseline mới đã được Verify.
 
 ## 3. Build khác với deploy
 

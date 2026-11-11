@@ -56,7 +56,7 @@ chạy nhanh hơn hoặc tương đương coverage.
 | Frontend-only | Build một lần; Pages nhận đúng dist/config/source; backend không bị cập nhật khi runtime đầu vào giữ nguyên. |
 | API-only | Image và deployment theo thay đổi thực của recipe/manifest; worker giữ nguyên nếu desired state không đổi. |
 | Worker/DAG | API giữ nguyên nếu không liên quan; DAG đúng bản, không sinh training thật để thử CI/CD. |
-| Runtime/manifest | Các case current phải chạy; phần legacy/contract không rõ vẫn full theo scope. |
+| Runtime/manifest | Manifest role hiện có đi đường daily với image checks và CD Verify; engine/storage/protocol/deployment mới vẫn current, legacy/proof contract hoặc lịch sử không rõ vẫn full. Tách các profile khi so thời gian. |
 | No-op | Không build/rollout thừa; Verify không bị gọi nhầm là deployment mới. |
 
 Phải kiểm artifact sau upload/download, gồm file ẩn `.nojekyll`. Job build

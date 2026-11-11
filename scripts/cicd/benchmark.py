@@ -54,7 +54,7 @@ def scope_profile(scope, commit):
     if scope.get('schema') == pipeline.PR_SCOPE:
         pipeline.validate_pr_scope(scope, commit, scope.get('base'))
         return scope, {k:scope[k] for k in ('tests','backend','frontend','current','full')}, pipeline.required_pr_jobs(scope)
-    if scope.get('schema') == pipeline.SCOPE:
+    if scope.get('schema') in pipeline.SCOPE_SCHEMAS:
         pipeline.validate_scope(scope,commit)
         return scope, {k:scope[k] for k in ('tests','backend','frontend','current','full')}, pipeline.required_jobs(scope)
     ci_scope.validate(scope,commit)

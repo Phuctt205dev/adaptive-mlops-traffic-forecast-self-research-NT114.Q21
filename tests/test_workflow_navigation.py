@@ -1,5 +1,6 @@
 """Display labels must not disconnect workflow triggers or machine gates."""
 from pathlib import Path
+import json
 import re
 from types import SimpleNamespace
 import unittest
@@ -24,6 +25,10 @@ class WorkflowNavigationTests(unittest.TestCase):
         self.assertIn('frontend/frontend-build.json',upload)
         self.assertNotIn('actions/download-artifact@',build)
         self.assertNotIn('pipeline.py frontend-verify',build)
+        self.assertLess(build.index('- run: npm ci'),build.index('- run: npm test'))
+        self.assertLess(build.index('- run: npm test'),build.index('- run: npm run build'))
+        package=json.loads((ROOT/'frontend/package.json').read_text(encoding='utf-8'))
+        self.assertEqual(package['scripts']['test'],'node --test')
         consumer=job('acceptance')
         self.assertRegex(consumer,r'(?m)^    needs: \[[^\n]*frontend-build')
         steps=re.split(r'\n      - ',consumer)[1:]
@@ -43,7 +48,7 @@ class WorkflowNavigationTests(unittest.TestCase):
                     allowed=eval(expression,{'__builtins__':{}},{'frontend':SimpleNamespace(result=result)})
                     self.assertEqual(allowed,result=='success')
 
-    def condition(self, job, event, ref):
+    def condition(self, job, event, ref, *, scope=None, accepted=True):
         """Evaluate the actual simple boolean conditions for a healthy graph.
 
         These conditions use the shared Python/Actions subset (strings,
@@ -60,12 +65,34 @@ class WorkflowNavigationTests(unittest.TestCase):
         expression=expression.replace('needs.backend-delivery','backend_delivery')
         github=SimpleNamespace(event_name=event,ref=ref,
                  event=SimpleNamespace(repository=SimpleNamespace(default_branch='master')))
-        outputs=SimpleNamespace(backend='true',tests='true',frontend='true',current='true',full='true')
-        needs=SimpleNamespace(scope=SimpleNamespace(outputs=outputs),acceptance=SimpleNamespace(result='success'))
+        outputs=SimpleNamespace(**{k:str(scope[k]).lower() for k in ('backend','tests','frontend','current','full')}) if scope else \
+            SimpleNamespace(backend='true',tests='true',frontend='true',current='true',full='true')
+        needs=SimpleNamespace(scope=SimpleNamespace(outputs=outputs),acceptance=SimpleNamespace(result='success' if accepted else 'failure'))
         variables=SimpleNamespace(RKE2_CD_ENABLED='true')
         return bool(eval(expression,{'__builtins__':{}},{'github':github,'needs':needs,'vars':variables,
                          'backend_delivery':SimpleNamespace(outputs=SimpleNamespace(outcome='success')),
                          'always':lambda:True,'cancelled':lambda:False,'format':lambda text,value:text.format(value)}))
+
+    def test_daily_manifest_graph_skips_clusters_and_requires_acceptance_to_deploy(self):
+        daily=pipeline.classify(['deployment/rke2/roles/tree.json'],baseline='b'*40,commit='a'*40)
+        expected={'image':True,'frontend-build':False,'current-runtime':False,'legacy-migration':False,'backend-delivery':True}
+        for job,allowed in expected.items():
+            with self.subTest(job=job):
+                self.assertEqual(self.condition(job,'push','refs/heads/master',scope=daily),allowed)
+        self.assertFalse(self.condition('backend-delivery','push','refs/heads/master',scope=daily,accepted=False))
+        for event in ('workflow_dispatch','pull_request','schedule'):
+            self.assertFalse(self.condition('backend-delivery',event,'refs/heads/master',scope=daily))
+        controller=pipeline.classify(['scripts/cicd/roles_deploy.py'],baseline='b'*40,commit='a'*40)
+        self.assertTrue(self.condition('current-runtime','push','refs/heads/master',scope=controller))
+        full=pipeline.classify([],baseline='b'*40,commit='a'*40,force=True)
+        self.assertTrue(self.condition('legacy-migration','workflow_dispatch','refs/heads/ci/check',scope=full))
+
+    def test_manual_input_defaults_to_daily_and_is_wired_into_scope(self):
+        source=(WORKFLOWS/'backend-ci.yml').read_text(encoding='utf-8')
+        dispatch=source.split('\n  workflow_dispatch:\n')[1].split('\n  schedule:')[0]
+        self.assertIn('options: [daily, full]',dispatch)
+        self.assertIn('default: daily',dispatch)
+        self.assertIn("VALIDATION_MODE: ${{ inputs.validation || 'daily' }}",source)
 
     def test_manual_branch_full_check_reaches_images_but_cannot_deploy(self):
         for event,ref,images in [('workflow_dispatch','refs/heads/ci/check',True),

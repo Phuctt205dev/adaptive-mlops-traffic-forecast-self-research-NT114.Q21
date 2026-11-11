@@ -15,7 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.cicd import ci_scope
 from scripts.cicd.cd_state import GitHub, Store, emit
 
-SCOPE = 'traffic-application-scope/v1'
+LEGACY_SCOPE = 'traffic-application-scope/v1'
+SCOPE = 'traffic-application-scope/v2'
+SCOPE_SCHEMAS = {LEGACY_SCOPE, SCOPE}
 ACCEPTANCE = 'traffic-application-acceptance/v1'
 PR_SCOPE = 'traffic-pull-request-scope/v1'
 RUNTIME_PREFIXES = ('scripts/cicd/', 'deployment/', 'requirements/roles/', 'alembic/',
@@ -26,6 +28,22 @@ RUNTIME_FILES = {
     'backend/app/services/region_cleanup_uploader.py', 'backend/app/services/lifecycle.py',
     'backend/app/services/serving_runtime.py', 'backend/app/services/worker_runtime.py',
     'backend/app/services/region_cleanup_runtime.py', 'src/cloud_training/airflow_control.py',
+}
+# Ordinary edits to existing roles/DAGs use image checks and the real CD
+# preflight/Verify/rollback. Replaying a disposable cluster is reserved for
+# controller/storage/protocol changes. New deployment paths stay conservative.
+DAILY_DEPLOYMENT_FILES = {
+    'deployment/rke2/roles/api.json', 'deployment/rke2/roles/tree.json',
+    'deployment/rke2/roles/neural.json',
+    'deployment/rke2/runtime/traffic_region_training_cloud.py',
+}
+DEEP_PREFIXES = ('scripts/cicd/', '.github/workflows/', 'tests/integration/', 'alembic/')
+# These browser checks exercise synthetic API responses and are not packaged
+# in application roles. Other scripts/shap tools include real rollout helpers
+# and must not inherit this exemption.
+UI_CHECK_FILES = {
+    'scripts/shap/check_feature_importance_ui.py',
+    'scripts/cloud_training/check_training_monitor_ui.py',
 }
 
 
@@ -87,21 +105,39 @@ def require_pr_checks(scope, results):
             raise ValueError('PR check did not pass: ' + name)
 
 
-def classify(paths, *, baseline, commit, force=False, frontend=False):
+def classify_v1(paths, *, baseline, commit, force=False, frontend=False):
+    """Frozen reader for accepted releases created before daily validation."""
     legacy = ci_scope.classify(paths, baseline=baseline, commit=commit, force=force)
     contract_changed = 'scripts/cicd/pipeline.py' in paths
     full = legacy['full'] or contract_changed
     current = full or any(p.startswith(RUNTIME_PREFIXES) or p in RUNTIME_FILES for p in paths)
     backend = full or current or any(backend_path(p) for p in paths)
     tests = backend or any(p.startswith('tests/') or p in {'requirements/ci.txt', 'requirements/backend.txt'} for p in paths)
-    return {'schema': SCOPE, 'commit': commit, 'baseline': legacy['baseline'], 'paths': sorted(set(paths)),
+    return {'schema': LEGACY_SCOPE, 'commit': commit, 'baseline': legacy['baseline'], 'paths': sorted(set(paths)),
             'backend': backend, 'tests': tests, 'frontend': bool(frontend), 'current': current,
             'full': full, 'forced': force,
             'reason': 'application_contract_changed' if contract_changed else legacy['reason']}
 
 
+def classify(paths, *, baseline, commit, force=False, frontend=False):
+    paths = sorted(set(paths))
+    release_paths = [p for p in paths if p not in UI_CHECK_FILES]
+    value = classify_v1(release_paths, baseline=baseline, commit=commit, force=force, frontend=frontend)
+    current = value['full'] or any(
+        p.startswith(DEEP_PREFIXES) or p in RUNTIME_FILES or
+        (p.startswith('deployment/') and p not in DAILY_DEPLOYMENT_FILES) for p in release_paths)
+    value.update(schema=SCOPE, current=current, paths=paths)
+    # A new or unfamiliar deployment input still builds a backend release,
+    # even if it isn't under one of the application source directories.
+    value['backend'] = current or any(backend_path(p) for p in release_paths)
+    value['tests'] = value['backend'] or any(
+        p.startswith('tests/') or p in UI_CHECK_FILES or
+        p in {'requirements/ci.txt', 'requirements/backend.txt'} for p in paths)
+    return value
+
+
 def validate_scope(value, commit):
-    if not isinstance(value, dict) or value.get('schema') != SCOPE or value.get('commit') != commit:
+    if not isinstance(value, dict) or value.get('schema') not in SCOPE_SCHEMAS or value.get('commit') != commit:
         raise ValueError('Application scope identity differs')
     paths = value.get('paths')
     if (not isinstance(paths, list) or paths != sorted(set(paths)) or
@@ -110,8 +146,9 @@ def validate_scope(value, commit):
     for key in ('backend', 'tests', 'frontend', 'current', 'full', 'forced'):
         if type(value.get(key)) is not bool:
             raise ValueError('Application scope flags must be boolean')
-    expected = classify(paths, baseline=value.get('baseline'), commit=commit,
-                        force=value['forced'], frontend=value['frontend'])
+    classifier = classify_v1 if value['schema'] == LEGACY_SCOPE else classify
+    expected = classifier(paths, baseline=value.get('baseline'), commit=commit,
+                          force=value['forced'], frontend=value['frontend'])
     if value != expected:
         raise ValueError('Application coverage was downgraded or modified')
     return value
@@ -198,6 +235,17 @@ def current_source(repository, commit, fetch):
     return inputs(commit) == inputs(latest)
 
 
+def full_validation(env):
+    if env['GITHUB_EVENT_NAME'] == 'schedule':
+        return True
+    if env['GITHUB_EVENT_NAME'] != 'workflow_dispatch':
+        return False
+    mode = env.get('VALIDATION_MODE', 'full')
+    if mode not in {'daily', 'full'}:
+        raise ValueError('Unknown validation mode')
+    return mode == 'full'
+
+
 def scope_main():
     from scripts.cicd.frontend_release import PublicationStore, frontend_config
     from scripts.cicd.release import canonical, digest
@@ -228,9 +276,10 @@ def scope_main():
         baseline, paths = None, []
     # A missing/diverged baseline selects every safety check, never a fast path.
     frontend = True
-    # Explicit/weekly full checks also validate an unchanged frontend. Only
-    # ordinary pushes deduplicate against the existing Pages publication.
-    if env['GITHUB_EVENT_NAME'] not in {'pull_request','workflow_dispatch','schedule'}:
+    # Explicit/weekly full checks also validate an unchanged frontend.
+    # Daily manual checks deduplicate just like ordinary pushes.
+    force = full_validation(env)
+    if not force:
         try:
             published, _ = PublicationStore(client).load()
             tree = subprocess.run(['git', 'rev-parse', env['GITHUB_SHA'] + ':frontend'],
@@ -240,7 +289,7 @@ def scope_main():
         except Exception:
             frontend = True
     value = classify(paths, baseline=baseline, commit=env['GITHUB_SHA'], frontend=frontend,
-                     force=env['GITHUB_EVENT_NAME'] in {'schedule', 'workflow_dispatch'})
+                     force=force)
     # PRs need regression but do not build/publish production images or proofs.
     validate_scope(value,env['GITHUB_SHA'])
     Path('ci-scope.json').write_text(json.dumps(value, indent=2), encoding='utf-8')
@@ -251,6 +300,8 @@ def scope_main():
             for key in ('tests','backend','frontend','current','full'):
                 stream.write('| '+key+' | '+str(value[key])+' |\n')
             stream.write('\nUnknown impact selects full validation. Scope includes all changes since the verified backend.\n')
+            stream.write('\nValidation: ' + ('full' if value['full'] else 'controller' if value['current'] else 'daily') +
+                         '. Daily releases retain image checks and production preflight/Verify/rollback.\n')
     emit({k: value[k] for k in ('backend', 'tests', 'frontend', 'current', 'full')})
 
 

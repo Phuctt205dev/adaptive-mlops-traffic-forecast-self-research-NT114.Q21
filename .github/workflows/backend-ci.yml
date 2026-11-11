@@ -24,6 +24,12 @@ on:
       - '.github/workflows/backend-*.yml'
       - '.github/workflows/cd-*.yml'
   workflow_dispatch:
+    inputs:
+      validation:
+        description: 'daily: checks for changed parts; full: isolated Kubernetes suites (neither deploys)'
+        type: choice
+        options: [daily, full]
+        default: daily
   schedule:
     # Weekly full validation only; deployment jobs accept push events only.
     - cron: '17 20 * * 0'
@@ -59,6 +65,7 @@ jobs:
           FRONTEND_API_URL: ${{ vars.VITE_API_BASE_URL }}
           FRONTEND_BASE_PATH: ${{ vars.VITE_BASE_PATH }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          VALIDATION_MODE: ${{ inputs.validation || 'daily' }}
         run: python -B scripts/cicd/pipeline.py scope
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -489,6 +496,8 @@ jobs:
           FRONTEND_BASE_PATH: ${{ vars.VITE_BASE_PATH }}
         run: python -B scripts/cicd/pipeline.py frontend-config
       - run: npm ci
+        working-directory: frontend
+      - run: npm test
         working-directory: frontend
       - run: npm run build
         working-directory: frontend

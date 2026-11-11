@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 from pathlib import Path
@@ -7,7 +8,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import uuid
 
 from sqlalchemy import create_engine
@@ -280,6 +281,62 @@ class TrainingControlTests(unittest.TestCase):
             read.assert_not_called()  # Fresh queued runs have a 15s grace period.
             delete.assert_not_called()
             self.assertEqual(self.bridge.store.objects, {'models/active/preserve.pkl': b'preserve'})
+
+    def test_deployed_tree_environment_reconciles_failed_airflow_dispatch(self):
+        from backend.app.core.config import Settings
+        from backend.app.services import airflow_client
+
+        manifest = json.loads((Path(__file__).resolve().parents[1]
+            / 'deployment/rke2/roles/tree.json').read_text(encoding='utf-8'))
+        worker = next(c for c in manifest['spec']['template']['spec']['containers'] if c['name'] == 'worker')
+        environment = {e['name']: e['value'] for e in worker['env'] if 'value' in e}
+        with patch.dict('os.environ', environment, clear=True):
+            settings = Settings(_env_file=None, airflow_admin_username='synthetic',
+                                airflow_admin_password='synthetic-password')
+        with self.sessions() as db:
+            run = db.get(TrainingRun, self.run_id)
+            configuration = json.loads(json.dumps(run.configuration_json))
+            document = {'dag_id': settings.training_dag_id, 'dag_run_id': run.airflow_dag_run_id,
+                        'state': 'failed', 'conf': {'training_run_id': str(run.id),
+                            'region_id': str(run.region_id), 'dataset_id': str(run.dataset_id)}}
+            state.execution(db, self.run_id).created_at = datetime.now(UTC) - timedelta(minutes=1)
+            db.commit()
+
+        response = Mock(status_code=200)
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.iter_content.return_value = [json.dumps(document).encode()]
+        session = Mock()
+        session.__enter__ = Mock(return_value=session)
+        session.__exit__ = Mock(return_value=False)
+
+        def airflow_read(url, **kwargs):
+            # There is no Airflow server on the worker's loopback interface.
+            if url != ('http://airflow-webserver:8080/api/v1/dags/'
+                       + settings.training_dag_id + '/dagRuns/' + document['dag_run_id']):
+                raise airflow_client.requests.ConnectionError('Synthetic unreachable worker-local endpoint')
+            return response
+
+        session.get.side_effect = airflow_read
+        with patch.object(airflow_client, 'get_settings', return_value=settings), \
+             patch('backend.app.core.config.get_settings', return_value=settings), \
+             patch.object(airflow_client.requests, 'Session', return_value=session), \
+             patch('backend.app.services.training_control.delete_prefix') as delete:
+            self.controllers['tree'].sweep()
+            delete.assert_not_called()
+
+        with self.sessions() as db:
+            run = db.get(TrainingRun, self.run_id)
+            visible = state.visible_runs(db, run.region_id)
+            self.assertEqual(visible[0]['state'], 'failed')
+            self.assertEqual(visible[0]['error_code'], 'dispatch_failed')
+            self.assertEqual(run.status.value, 'failed')
+            self.assertEqual(run.configuration_json, configuration)
+            self.assertTrue(all(b['attempt_id'] is None for b in state.execution(db, run.id).branches_json.values()))
+        session.get.assert_called_once()
+        session.post.assert_not_called()
+        self.assertFalse(session.trust_env)
+        self.assertEqual(self.bridge.store.objects, {'models/active/preserve.pkl': b'preserve'})
 
     def test_sibling_failure_blocks_publication_and_cleans_only_this_run(self):
         tree, neural = self.controllers["tree"], self.controllers["recurrent"]

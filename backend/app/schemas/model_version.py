@@ -1,9 +1,9 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from dataclasses import asdict
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.app.db.models import ModelVersionStatus, TrainingRunStatus
 from src.shap_config import resolve_shap_config
@@ -66,8 +66,8 @@ class TrainingRunCreate(BaseModel):
     train_end_date: str
     artifact_root: str = "models/regions"
     model_role: str = "candidate"
-    cv_splits: int = 3
-    random_state: int = 42
+    cv_splits: int = Field(default=3, ge=2)
+    random_state: int = Field(default=42, ge=0, le=4294967295)
     selected_models: list[str] = Field(
         default_factory=lambda: [
             "random_forest_lag",
@@ -77,14 +77,27 @@ class TrainingRunCreate(BaseModel):
             "gru",
         ]
     )
-    recurrent_sequence_length: int = 72
-    recurrent_epochs: int = 3
-    recurrent_batch_size: int = 32
-    final_test_ratio: float = 0.15
+    recurrent_sequence_length: int = Field(default=72, ge=1)
+    recurrent_epochs: int = Field(default=3, ge=1)
+    recurrent_batch_size: int = Field(default=32, ge=1)
+    final_test_ratio: float = Field(default=0.15, gt=0, lt=0.5)
     trigger_source: str | None = None
     shap: dict = Field(default_factory=dict)
     drift_current_end: str | None = None
     retrain_source_model_id: uuid.UUID | None = None
+
+    @field_validator("train_start_date", "train_end_date")
+    @classmethod
+    def validate_training_date(cls, value):
+        if date.fromisoformat(value).isoformat() != value:
+            raise ValueError("Use a date in YYYY-MM-DD format.")
+        return value
+
+    @model_validator(mode="after")
+    def validate_training_window(self):
+        if self.train_start_date >= self.train_end_date:
+            raise ValueError("Training start date must be before the end date.")
+        return self
 
     @field_validator("shap")
     @classmethod

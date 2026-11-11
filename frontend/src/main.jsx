@@ -4,6 +4,8 @@ import { api, getStoredToken, setStoredToken } from "./api";
 import ModelQualityPanel from "./ModelQualityPanel";
 import FeatureImportancePanel from "./FeatureImportancePanel";
 import TrainingMonitor from "./TrainingMonitor";
+import TrainingConfiguration from "./TrainingConfiguration.jsx";
+import { normalizeTrainingConfiguration } from "./trainingConfiguration.js";
 import "./styles.css";
 
 const pages = [
@@ -823,6 +825,7 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
   const [uploading, setUploading] = useState(false);
   const [activeTraining, setActiveTraining] = useState(null);
   const [trainingDataset, setTrainingDataset] = useState(null);
+  const trainingDefaultsKey = useRef("");
   const [trainForm, setTrainForm] = useState({
     train_start_date: "",
     train_end_date: "",
@@ -838,11 +841,13 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
 
   useEffect(() => {
     const latestValidDataset = datasets.find((dataset) => dataset.status === "valid");
+    const key = `${selectedRegion?.id}:${latestValidDataset?.id}`;
+    if (trainingDefaultsKey.current === key) return;
+    trainingDefaultsKey.current = key;
     const window = trainingWindowForDataset(latestValidDataset);
-    if (!window) return;
     setTrainForm((current) => ({
       ...current,
-      ...window,
+      ...(window || { train_start_date: "", train_end_date: "" }),
     }));
   }, [selectedRegion?.id, datasets]);
 
@@ -953,23 +958,12 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
   async function train(dataset, selectedModels = defaultTrainingModels, trainingConfigOverride = null) {
     setMessage("");
     try {
-      const window = trainingWindowForDataset(dataset);
-      const trainingConfig = {
+      const trainingConfig = normalizeTrainingConfiguration({
         ...trainForm,
-        ...(window || {}),
         ...(trainingConfigOverride || {}),
-      };
-      if (!trainingConfig.train_start_date || !trainingConfig.train_end_date) {
-        throw new Error("Dataset date range is unavailable. Upload a valid dataset before training.");
-      }
+      });
       const result = await api.trainDataset(dataset.id, {
         ...trainingConfig,
-        cv_splits: Number(trainingConfig.cv_splits),
-        random_state: Number(trainingConfig.random_state),
-        recurrent_sequence_length: Number(trainingConfig.recurrent_sequence_length || 72),
-        recurrent_epochs: Number(trainingConfig.recurrent_epochs || 3),
-        recurrent_batch_size: Number(trainingConfig.recurrent_batch_size || 32),
-        final_test_ratio: Number(trainingConfig.final_test_ratio || 0.15),
         selected_models: selectedModels,
       });
       setActiveTraining({
@@ -1056,19 +1050,7 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
             </div>
           )}
         </Card>
-        <Card title="Training Configuration">
-          <p className="muted">
-            These values are used when you click Train on a valid dataset.
-          </p>
-          <div className="form-grid">
-            {Object.entries(trainForm).map(([key, value]) => (
-              <label key={key}>
-                {key}
-                <input value={value} onChange={(e) => setTrainForm({ ...trainForm, [key]: e.target.value })} />
-              </label>
-            ))}
-          </div>
-        </Card>
+        <TrainingConfiguration value={trainForm} onChange={setTrainForm} />
       </div>
       <Card title="Datasets">
         <Table
@@ -1735,13 +1717,7 @@ function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshR
 
   async function submitRetrain(dataset, selectedModels, modalTrainForm) {
     const payload = {
-      ...modalTrainForm,
-      cv_splits: Number(modalTrainForm.cv_splits),
-      random_state: Number(modalTrainForm.random_state),
-      recurrent_sequence_length: Number(modalTrainForm.recurrent_sequence_length || 72),
-      recurrent_epochs: Number(modalTrainForm.recurrent_epochs || 3),
-      recurrent_batch_size: Number(modalTrainForm.recurrent_batch_size || 32),
-      final_test_ratio: Number(modalTrainForm.final_test_ratio || 0.15),
+      ...normalizeTrainingConfiguration(modalTrainForm),
       selected_models: selectedModels,
     };
     const result = await api.trainDataset(dataset.id, payload);

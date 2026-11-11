@@ -22,7 +22,7 @@ from backend.app.db.models import (
 )
 
 
-SPLIT_POLICY = "time_series_cv_70_15_15"
+SPLIT_POLICY = "expanding_window_cv_with_final_holdout"
 MODEL_VERSION_PATTERN = re.compile(r"^model_v(?P<number>\d+)$")
 
 

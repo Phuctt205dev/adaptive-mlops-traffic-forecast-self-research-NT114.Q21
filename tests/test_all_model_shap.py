@@ -73,10 +73,11 @@ class AllModelShapTests(unittest.TestCase):
                 selected_models=["random_forest_lag", "xgboost_lag", "lightgbm_lag"],
                 cv_splits=2, explain_all_models=True)
             self.assertEqual(set(info["shap_reports"]), {"RandomForest", "XGBoost", "LightGBM"})
-            self.assertEqual({call[1] for call in calls}, {40})
+            # Shared 15% rounding reserves 7 of 48 rows for Final Test.
+            self.assertEqual({call[1] for call in calls}, {41})
             self.assertEqual(len(calls), 3)
             for name, _, end, model_path in calls:
-                self.assertLess(str(end), "2025-01-02 16:00:00")
+                self.assertLess(str(end), "2025-01-02 17:00:00")
                 metadata = info["shap_reports"][name]
                 report = json.loads(Path(metadata["source_report"]).read_bytes())
                 self.assertEqual(report["context"]["training_run_id"], run_id)

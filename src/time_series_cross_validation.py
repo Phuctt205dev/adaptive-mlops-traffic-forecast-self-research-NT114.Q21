@@ -12,6 +12,7 @@ from src.shap_reporting import explain_saved_model, file_sha256, resolve_shap_co
 from src.feature_selection import (validate_selection, reusable_groups, rank_training_features,
                                   columns_for_groups, selection_summary, MODEL_KEYS, guard_quality_holdout)
 from src.training_progress import epoch_callbacks, report as report_progress, set_fold, start_fit
+from src.training_configuration import final_test_size
 
 from src.lstm_sequences import (
     DEFAULT_SEQUENCE_LENGTH,
@@ -164,13 +165,8 @@ def _split_by_dynamic_window(
     production = ordered.loc[ordered[TIME_COLUMN] >= train_end].copy()
     if offline.empty:
         raise ValueError("Training window khong co du lieu offline.")
-    if not 0 < final_test_ratio < 0.5:
-        raise ValueError("final_test_ratio phai nam trong khoang (0, 0.5).")
-
-    final_test_rows = max(1, int(round(len(offline) * final_test_ratio)))
+    final_test_rows = final_test_size(len(offline), final_test_ratio)
     development_rows = len(offline) - final_test_rows
-    if development_rows <= 1:
-        raise ValueError("Training window qua ngan de tao Development va Final Test.")
 
     development = offline.iloc[:development_rows].copy()
     final_test = offline.iloc[development_rows:].copy()

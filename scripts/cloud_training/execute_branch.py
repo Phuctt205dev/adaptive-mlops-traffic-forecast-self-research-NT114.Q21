@@ -106,6 +106,7 @@ def run(job, dataset, output):
                     train_start_date=config["train_start_date"], train_end_date=config["train_end_date"],
                     model_role="candidate", random_state=int(config.get("random_state", 42)),
                     cv_splits=int(config.get("cv_splits", 3)), data_path=str(dataset),
+                    final_test_ratio=float(config.get("final_test_ratio", 0.15)),
                     artifact_root=str(output), region_id=context["region_id"], dataset_id=context["dataset_id"],
                     mlflow_tracking_uri=os.environ["MLFLOW_TRACKING_URI"], selected_models=selected,
                     shap_config=config.get("shap"),

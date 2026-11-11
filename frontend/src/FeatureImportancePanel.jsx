@@ -91,21 +91,7 @@ export default function FeatureImportancePanel({ region, enabled }) {
       {visible && !average && <div className="alert alert-info">Update the backend to view reports for all five models.</div>}
       {average?.status === "ready" && <>
         <ContributionChart key={`average:${chartKey}`} rows={average.features} label="Average input contributions across five models" />
-        <details className="quality-details"><summary>View details</summary>
-          <p>Random Forest, XGBoost, LightGBM, LSTM and GRU each have the same weight: 20%. Each report is converted to percentages before averaging. Related encoded inputs are grouped together.</p>
-          <p>All reports belong to the training run selected by Activate on the Models page. Percentages show relative influence, not prediction accuracy or whether an input increases or decreases a prediction. This average does not choose features for retraining.</p>
-          <div className="table-wrap"><table><thead><tr><th>Input</th><th>Average contribution</th><th>Present in reports</th></tr></thead>
-            <tbody>{average.features.map((row) => <tr key={row.label}><td>{row.label}</td>
-              <td>{row.share_percent.toLocaleString("en", { maximumFractionDigits: 1 })}%</td><td>{row.reports_present} of 5</td></tr>)}</tbody>
-          </table></div>
-        </details>
       </>}
-      {models.length > 0 && <details className="quality-details"><summary>Report availability</summary>
-        <div className="table-wrap"><table><thead><tr><th>Model</th><th>Report</th></tr></thead>
-          <tbody>{models.map((model) => <tr key={model.model_name}><td>{model.model_name}</td>
-            <td>{model.status === "ready" ? model.features.some((row) => row.mean_abs_shap > 0) ? "Ready" : "No measurable contribution" : model.message}</td></tr>)}</tbody>
-        </table></div>
-      </details>}
     </section>
 
     <section className="card feature-panel" aria-labelledby="feature-model-title">
@@ -123,21 +109,6 @@ export default function FeatureImportancePanel({ region, enabled }) {
         {leading ? <div className="feature-highlight"><span>Most influential input for {selected.model_name}</span><strong>{leading.label}</strong></div>
           : <div className="alert alert-info">No measurable input contribution in this report.</div>}
         <ContributionChart key={`model:${selected.model_name}:${chartKey}`} rows={rows} label="Input contributions to selected model predictions" />
-        <details className="quality-details"><summary>View details</summary>
-          <p>Percentages show each input’s share of total SHAP influence, not prediction accuracy. Choosing a model here only changes this report.</p>
-          {selected.sequence_length && <p>Influence is added across the previous {selected.sequence_length} hours in each input sequence, then averaged across sequences.</p>}
-          <dl className="quality-report-meta">
-            <div><dt>Model</dt><dd>{selected.model_name}</dd></div>
-            <div><dt>Activated version</dt><dd>{visible.model_version}</dd></div>
-            <div><dt>Dataset</dt><dd>{visible.dataset_filename}</dd></div>
-            <div><dt>Records explained</dt><dd>{selected.sample_count}</dd></div>
-            <div><dt>Report created</dt><dd>{new Date(selected.generated_at).toLocaleString()}</dd></div>
-          </dl>
-          <div className="table-wrap"><table><thead><tr><th>Input</th><th>Model features</th><th>Mean influence</th></tr></thead>
-            <tbody>{rows.map((row) => <tr key={row.label}><td>{row.label}</td><td>{row.features.join(", ")}</td>
-              <td>{row.mean_abs_shap.toLocaleString("en", { maximumFractionDigits: 2 })}</td></tr>)}</tbody>
-          </table></div>
-        </details>
       </>}
     </section>
   </div>;

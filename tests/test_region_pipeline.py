@@ -1,7 +1,7 @@
 import os
 import tempfile
 import unittest
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from unittest.mock import patch
 
 import numpy as np
@@ -93,10 +93,10 @@ class RegionPipelineTests(unittest.TestCase):
             self.assertEqual(model_info["dataset_id"], "dataset-a")
             self.assertEqual(model_info["shap_report"]["status"], "completed")
             explain.assert_called_once()
-            # 48 rows split into 40 development and 8 untouched Final Test.
-            self.assertEqual(len(explain.call_args.args[1]), 40)
+            # Shared rounding reserves 7 of 48 rows for the default 15% test.
+            self.assertEqual(len(explain.call_args.args[1]), 41)
             self.assertNotIn("traffic_volume", explain.call_args.args[1].columns)
-            self.assertEqual(explain.call_args.kwargs["timestamps"].max(), pd.Timestamp("2025-01-02 15:00"))
+            self.assertEqual(explain.call_args.kwargs["timestamps"].max(), pd.Timestamp("2025-01-02 16:00"))
             self.assertTrue(
                 model_info["model_file"].startswith(
                     os.path.join(region_root, "models")
@@ -108,6 +108,31 @@ class RegionPipelineTests(unittest.TestCase):
                     os.path.join(region_root, "data_versions", "version_log.csv")
                 )
             )
+
+    def test_nondefault_holdout_keeps_final_test_out_of_all_tree_fits(self):
+        from src import pipeline
+        fitted_rows = []
+
+        def train(features, target, seed):
+            self.assertEqual(seed, 17)
+            fitted_rows.append(features.index.tolist())
+            return train_constant(features, target, seed)
+
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+            data_path = os.path.join(directory, "synthetic.csv")
+            make_raw_training_csv(data_path, rows=72)
+            stack.enter_context(patch.object(pipeline, "mlflow", pipeline._NullMLflow()))
+            for name in ("train_random_forest", "train_xgboost", "train_lightgbm"):
+                stack.enter_context(patch.object(pipeline, name, side_effect=train))
+            explain = stack.enter_context(patch.object(pipeline, "explain_saved_model", return_value={"status": "disabled"}))
+            info = run_pipeline("2025-01-01", "2025-01-04", data_path=data_path, data_audit_path="",
+                                artifact_root=directory, cv_splits=4, random_state=17, final_test_ratio=0.25)
+            self.assertEqual(info["final_test_ratio"], 0.25)
+            self.assertEqual(info["split_policy"]["final_test_start"], "2025-01-03T06:00:00")
+            self.assertEqual(len(explain.call_args.args[1]), 54)
+            self.assertEqual(len(fitted_rows), 3 * 4 + 1)
+            self.assertTrue(all(max(indices) < 54 for indices in fitted_rows))
+            self.assertEqual(set(row["model_name"] for row in info["model_comparison"]), {"RandomForest", "XGBoost", "LightGBM"})
 
 
 if __name__ == "__main__":

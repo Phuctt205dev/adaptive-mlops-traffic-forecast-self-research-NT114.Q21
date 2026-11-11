@@ -256,6 +256,7 @@ def run_pipeline(
     feature_selection=None,
     training_run_id=None,
     explain_all_models=False,
+    final_test_ratio=0.15,
 ):
     """
     Train all supported models and save the best validation-MAE model.
@@ -324,7 +325,7 @@ def run_pipeline(
             "source_path": data_path,
         },
     )
-    train_part, val_part, test_part = split_data(df)
+    train_part, val_part, test_part = split_data(df, final_test_ratio=final_test_ratio)
     selection_config = guard_quality_holdout(selection_config, test_part["date_time"].min())
     development_part = pd.concat(
         [train_part, val_part],
@@ -494,6 +495,7 @@ def run_pipeline(
                     "train_end_date": train_end_date,
                     "random_state": random_state,
                     "cv_splits": cv_splits,
+                    "final_test_ratio": final_test_ratio,
                     "data_path": data_path,
                 }
             )
@@ -606,6 +608,20 @@ def run_pipeline(
         "validation_RMSE": round(float(best["validation_rmse"]), 4),
         "validation_MAPE": round(float(best["validation_mape"]), 4),
         "cv_splits": int(cv_splits),
+        "final_test_ratio": float(final_test_ratio),
+        "split_policy": {
+            "mode": "dynamic_training_window",
+            "cv_method": "expanding_window",
+            "cv_splits": int(cv_splits),
+            "shuffle": False,
+            "train_start_date": str(train_start_date),
+            "train_end_date": str(train_end_date),
+            "development_start": development_part["date_time"].min().isoformat(),
+            "development_end": development_part["date_time"].max().isoformat(),
+            "final_test_start": test_part["date_time"].min().isoformat(),
+            "final_test_end": test_part["date_time"].max().isoformat(),
+            "final_test_ratio": float(final_test_ratio),
+        },
         "test_MAE": round(float(test_mae), 4),
         "test_RMSE": round(float(test_rmse), 4),
         "test_MAPE": round(float(test_mape), 4),

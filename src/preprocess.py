@@ -4,6 +4,8 @@ import os
 import pandas as pd
 import numpy as np
 
+from src.training_configuration import final_test_size
+
 
 DEFAULT_AUDIT_PATH = (
     "data/processed/TrafficVolumeData_hourly_audit.csv"
@@ -122,33 +124,15 @@ def preprocess(df):
     return df
 
 
-def split_data(df):
-    # =========================
-    # 🔥 TIME-BASED SPLIT
-    # =========================
-    # GIỮ LOGIC CŨ:
-    # - sort theo thời gian
-    # - chia 70% train, 15% val, 15% test
-    #
-    # UPDATE:
-    # - bỏ filter cứng date_time < 2014-01-01
-    # - lý do: khi drift worker retrain với dữ liệu 2014,
-    #   model cần được phép học thêm dữ liệu mới.
-    # =========================
+def split_data(df, final_test_ratio=0.15):
+    """Reserve the latest rows for test, using the same rounding as neural CV.
 
-    df = df.sort_values(
-        "date_time"
-    )
-
-    n = len(df)
-
-    train_end = int(
-        n * 0.7
-    )
-
-    val_end = int(
-        n * 0.85
-    )
+    The first two slices are joined as Development by the CV pipeline. Their
+    historical 70:15 proportions are retained within that development window.
+    """
+    df = df.sort_values("date_time")
+    val_end = len(df) - final_test_size(len(df), final_test_ratio)
+    train_end = int(val_end * 70 / 85)
 
     train_df = df[
         :train_end

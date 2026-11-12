@@ -65,7 +65,7 @@ export default function FeatureImportancePanel({ region, enabled }) {
   const visible = report?.region_id === region?.id
     && (report?.active_model_version_id ?? null) === (region?.active_model_version_id ?? null) ? report : null;
   const average = visible?.model_average;
-  const models = !region?.active_model_version_id ? [] : visible?.model_reports?.length ? visible.model_reports
+  const models = !region?.active_model_version_id ? [] : Array.isArray(visible?.model_reports) ? visible.model_reports
     : visible?.model_variant ? [{ ...visible, model_name: visible.model_variant, is_serving: true }] : [];
   const selected = models.find((model) => model.model_name === selectedModel)
     || models.find((model) => model.is_serving) || models[0];
@@ -76,21 +76,21 @@ export default function FeatureImportancePanel({ region, enabled }) {
   return <div className="feature-sections">
     <section className="card feature-panel" aria-labelledby="feature-average-title">
       <div className="quality-heading">
-        <div><h2 id="feature-average-title">Average across five models</h2>
+        <div><h2 id="feature-average-title">Average across trained models</h2>
           <p className="feature-subtitle">Reports from the activated training run</p></div>
         <button type="button" disabled={loading || !region?.id}
           onClick={() => setRefresh((value) => value + 1)}>{loading ? "Updating…" : "Refresh"}</button>
       </div>
       {error && <div className="alert alert-error" role="alert">{error}</div>}
       {loading && !visible && <p role="status">Loading feature importance…</p>}
-      {average && <p className="feature-coverage"><strong>{average.used_reports} of 5</strong> model reports included</p>}
+      {average && <p className="feature-coverage"><strong>{average.used_reports} of {average.total_models}</strong> trained model reports included</p>}
       {!region?.active_model_version_id && <div className="alert alert-info">Activate a model on the Models page to choose a training run.</div>}
       {region?.active_model_version_id && average?.status === "incomplete" && <div className="alert alert-info">
-        The five-model average needs a verified report with measurable contributions from every model. Train all five models to create missing reports. Available reports can be viewed below.
+        The average needs a verified report with measurable contributions from each trained model. Some reports are missing or unavailable. Available reports can be viewed below.
       </div>}
-      {visible && !average && <div className="alert alert-info">Update the backend to view reports for all five models.</div>}
+      {visible && !average && <div className="alert alert-info">Update the backend to view the average for this training run.</div>}
       {average?.status === "ready" && <>
-        <ContributionChart key={`average:${chartKey}`} rows={average.features} label="Average input contributions across five models" />
+        <ContributionChart key={`average:${chartKey}`} rows={average.features} label="Average input contributions across trained models" />
       </>}
     </section>
 

@@ -11,7 +11,7 @@ from playwright.sync_api import sync_playwright, expect
 
 ROOT = Path(__file__).resolve().parents[2]
 BASE = "/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/"
-OUTPUT = ROOT / "results/feature-importance/five-model-ui"
+OUTPUT = ROOT / "results/feature-importance/trained-models-ui"
 
 
 def main():
@@ -93,9 +93,20 @@ def main():
                 "is_serving": name == body["model_variant"]} for name in ("RandomForest", "XGBoost", "LightGBM", "LSTM", "GRU")]
             body["model_reports"][-1]["features"][0]["label"] = "Humidity"
             body["model_average"] = {"status": "ready", "used_reports": 5, "total_models": 5, "features": copy.deepcopy(average_rows)}
+            cohorts = {"single": ["RandomForest"], "two": ["RandomForest", "GRU"],
+                       "three": ["RandomForest", "XGBoost", "LightGBM"],
+                       "four": ["RandomForest", "XGBoost", "LightGBM", "LSTM"],
+                       "three_missing": ["RandomForest", "XGBoost", "LightGBM"]}
+            if state["scenario"] in cohorts:
+                names = cohorts[state["scenario"]]
+                body["model_reports"] = [row for row in body["model_reports"] if row["model_name"] in names]
+                body["model_average"].update(used_reports=len(names), total_models=len(names))
+                if state["scenario"] == "three_missing":
+                    body["model_reports"][1].update(status="unavailable", message="No saved report for XGBoost.", features=[])
+                    body["model_average"].update(status="incomplete", used_reports=2, features=[])
             if not active:
                 body["model_reports"] = []
-                body["model_average"].update(status="incomplete", used_reports=0, features=[])
+                body["model_average"].update(status="incomplete", used_reports=0, total_models=0, features=[])
             if state["scenario"] == "broken_active":
                 body.update(status="unavailable", message="The saved report does not match this model.", features=[])
                 body["model_reports"][1].update(status="unavailable", message="No saved report for XGBoost.", features=[])
@@ -132,7 +143,7 @@ def main():
             page.goto(f"http://127.0.0.1:{server.server_port}{BASE}")
             assert not calls
             page.get_by_role("button", name="Feature Importance", exact=True).click()
-            history = page.get_by_role("region", name="Average across five models", exact=True)
+            history = page.get_by_role("region", name="Average across trained models", exact=True)
             active = page.get_by_role("region", name="Model details", exact=True)
             expect(history.locator(".feature-coverage")).to_contain_text("5 of 5")
             expect(history.locator(".feature-row")).to_have_count(10)
@@ -149,6 +160,25 @@ def main():
             expect(history.locator("details")).to_have_count(0)
             expect(active.locator("details")).to_have_count(0)
             cases.append("show all inputs; extra details and report availability removed from both sections")
+            for scenario, names in (("single", ["RandomForest"]), ("two", ["RandomForest", "GRU"]),
+                                    ("three", ["RandomForest", "XGBoost", "LightGBM"]),
+                                    ("four", ["RandomForest", "XGBoost", "LightGBM", "LSTM"])):
+                state["scenario"] = scenario
+                history.get_by_role("button", name="Refresh", exact=True).click()
+                expect(history.locator(".feature-coverage")).to_contain_text(f"{len(names)} of {len(names)}")
+                expect(history.locator(".feature-row")).to_have_count(10)
+                picker = active.get_by_label("Model", exact=True)
+                expect(picker.locator("option")).to_have_count(len(names))
+                assert picker.locator("option").evaluate_all("options => options.map(o => o.value)") == names
+                picker.select_option(names[-1])
+                expect(active.locator(".feature-highlight")).to_contain_text(names[-1])
+                expect(history).not_to_contain_text("Train all five")
+            cases.append("one/two/three/four trained models each render an average and only their own options")
+            state["scenario"] = "three"
+            history.get_by_role("button", name="Refresh", exact=True).click()
+            expect(history.locator(".feature-coverage")).to_contain_text("3 of 3")
+            expect(active.get_by_label("Model", exact=True)).to_have_value("RandomForest")
+            cases.append("refresh to a smaller cohort replaces a selected model that was not trained")
             for width, height in ((1440, 1080), (390, 844), (320, 740)):
                 page.set_viewport_size({"width": width, "height": height})
                 assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), width
@@ -156,6 +186,16 @@ def main():
                 page.screenshot(path=str(OUTPUT / f"history-{width}.png"), full_page=True)
             cases.append("desktop and mobile 390/320, readable type, contained charts")
             page.set_viewport_size({"width": 1440, "height": 1080})
+            state["scenario"] = "three_missing"
+            history.get_by_role("button", name="Refresh", exact=True).click()
+            expect(history.locator(".feature-coverage")).to_contain_text("2 of 3")
+            expect(history.locator(".feature-row")).to_have_count(0)
+            expect(history).to_contain_text("Some reports are missing or unavailable")
+            expect(active.get_by_label("Model", exact=True).locator("option")).to_have_count(3)
+            active.get_by_label("Model", exact=True).select_option("XGBoost")
+            expect(active).to_contain_text("No saved report for XGBoost")
+            cases.append("missing report stays visible for a trained model and does not change the average denominator")
+            state["scenario"] = "ready"
             page.locator(".region-dropdown-trigger").click()
             page.get_by_role("option", name="No Active Region", exact=False).click()
             expect(history).to_contain_text("Activate a model")

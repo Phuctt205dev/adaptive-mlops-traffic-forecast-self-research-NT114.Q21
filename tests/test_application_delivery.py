@@ -27,8 +27,8 @@ def delivery_identity():
             'image':old_identity()['images']['api']['image']}
 
 
-def proof_for(paths, *, frontend=False):
-    scope=pipeline.classify(paths,baseline=B,commit=A,frontend=frontend)
+def proof_for(paths, *, frontend=False, force=False):
+    scope=pipeline.classify(paths,baseline=B,commit=A,frontend=frontend,force=force)
     proofs={mode:suite(mode) for mode,selected in [('current',scope['current']),('migration',scope['full'])] if selected}
     results={name:{'result':'success'} for name in pipeline.required_results(scope)}
     return pipeline.aggregate(scope,proofs,results,commit=A,run_id=1,attempt=2,
@@ -60,7 +60,7 @@ class ApplicationScopeTests(unittest.TestCase):
             with self.subTest(event=event),tempfile.TemporaryDirectory() as directory:
                 root=Path(directory)
                 env={**ENV,'GITHUB_EVENT_NAME':event,'GITHUB_REPOSITORY':'owner/repo',
-                     'GITHUB_OUTPUT':str(root/'outputs')}
+                     'GITHUB_OUTPUT':str(root/'outputs'),'VALIDATION_MODE':'full'}
                 with patch.dict(os.environ,env,clear=True),patch.object(pipeline,'GitHub'), \
                      patch.object(pipeline,'Store') as store,patch.object(pipeline.ci_scope,'git_paths',return_value=[]), \
                      patch.object(frontend_release,'PublicationStore') as published, \
@@ -80,25 +80,27 @@ class ApplicationScopeTests(unittest.TestCase):
                (['docs/guides/MODEL_QUALITY.md'],False,False,False),
                (['backend/app/services/prediction.py'],True,True,False),
                (['docs/index.html'],True,True,False),
-               (['backend/app/services/restore_cache.py'],True,True,True)]
+               (['backend/app/services/restore_cache.py'],True,True,False)]
         for paths,backend,tests,current in cases:
             with self.subTest(paths=paths):
                 scope=pipeline.classify(paths,baseline=B,commit=A)
                 self.assertEqual((scope['backend'],scope['tests'],scope['current']),(backend,tests,current))
                 pipeline.validate_scope(scope,A)
 
-    def test_unknown_history_legacy_and_acceptance_contract_require_full(self):
+    def test_only_explicit_full_selects_clusters_even_for_controller_or_unknown_history(self):
         for paths,baseline,force in [([],None,False),(['other/input'],B,False),([],B,True),
                     (['deployment/rke2/migrations/role-runtime-v1.json'],B,False),
                     (['scripts/cicd/pipeline.py'],B,False)]:
             with self.subTest(paths=paths,baseline=baseline):
                 scope=pipeline.classify(paths,baseline=baseline,commit=A,force=force)
-                self.assertTrue(scope['full']);self.assertTrue(scope['current']);self.assertTrue(scope['backend'])
+                self.assertEqual(scope['full'],force);self.assertEqual(scope['current'],force)
+                self.assertTrue(scope['backend']);self.assertTrue(scope['tests'])
+                if baseline is None or paths==['other/input']:self.assertTrue(scope['frontend'])
 
     def test_accumulated_runtime_change_cannot_be_hidden_by_a_later_app_edit(self):
         scope=pipeline.classify(['backend/app/services/prediction.py','deployment/rke2/runtime-contract.json'],baseline=B,commit=A)
-        self.assertTrue(scope['current'])
-        for field in ('backend','tests','current'):
+        self.assertFalse(scope['current']);self.assertFalse(scope['full'])
+        for field in ('backend','tests'):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 pipeline.validate_scope({**scope,field:False},A)
 
@@ -112,7 +114,7 @@ class DailyDeliveryTests(unittest.TestCase):
                 self.assertFalse(scope['backend']);self.assertFalse(scope['current']);self.assertFalse(scope['full'])
                 pipeline.validate_scope(scope,A)
         unknown=pipeline.classify(['scripts/shap/new_rollout.py'],baseline=B,commit=A)
-        self.assertTrue(unknown['full'])
+        self.assertFalse(unknown['full']);self.assertTrue(unknown['backend']);self.assertTrue(unknown['frontend'])
         mixed=pipeline.classify(['deployment/rke2/roles/tree.json',*pipeline.UI_CHECK_FILES],baseline=B,commit=A)
         self.assertTrue(mixed['backend']);self.assertFalse(mixed['current']);self.assertFalse(mixed['full'])
         self.assertTrue(pipeline.classify_v1(mixed['paths'],baseline=B,commit=A)['full'])
@@ -138,7 +140,7 @@ class DailyDeliveryTests(unittest.TestCase):
                 self.assertEqual(pipeline.required_jobs(scope),
                     {'scope','tests','package','acceptance'} | {'image ('+role+')' for role in ('api','tree','neural','sync')})
 
-    def test_engine_storage_and_unknown_deployment_still_require_controller_checks(self):
+    def test_engine_storage_and_unknown_deployment_get_clusters_only_when_full_is_requested(self):
         for path in ('scripts/cicd/roles_deploy.py','backend/app/services/restore_cache.py',
                      'backend/app/services/lifecycle.py','src/cloud_training/airflow_control.py',
                      'deployment/rke2/runtime-contract.json','deployment/new-service.yaml',
@@ -146,15 +148,18 @@ class DailyDeliveryTests(unittest.TestCase):
                      '.github/workflows/backend-ci.yml'):
             with self.subTest(path=path):
                 proof=proof_for([path])
-                self.assertTrue(proof['scope']['current'])
-                self.assertIn('current-runtime',pipeline.required_jobs(proof['scope']))
+                self.assertFalse(proof['scope']['current']);self.assertFalse(proof['scope']['full'])
+                self.assertIn('image (api)',pipeline.required_jobs(proof['scope']))
+                proof=proof_for([path],force=True)
+                self.assertTrue(proof['scope']['current']);self.assertTrue(proof['scope']['full'])
                 damaged=copy.deepcopy(proof);damaged['suites']={}
                 with self.assertRaises(ValueError):pipeline.check_acceptance(damaged,{'id':1,'head_sha':A,'run_attempt':2})
 
-    def test_manifest_plus_pending_controller_change_does_not_take_daily_path(self):
+    def test_accumulated_controller_change_keeps_fast_release_checks_without_claiming_deep_coverage(self):
         scope=pipeline.classify(['deployment/rke2/roles/tree.json','scripts/cicd/roles_deploy.py'],baseline=B,commit=A)
-        self.assertTrue(scope['current'])
-        with self.assertRaises(ValueError):pipeline.validate_scope({**scope,'current':False},A)
+        self.assertFalse(scope['current']);self.assertFalse(scope['full'])
+        self.assertTrue(scope['backend']);self.assertTrue(scope['tests'])
+        with self.assertRaises(ValueError):pipeline.validate_scope({**scope,'current':True},A)
 
     def test_v1_manifest_proof_retains_its_original_coverage_and_gate(self):
         old_scope={'schema':'traffic-application-scope/v1','commit':A,'baseline':B,
@@ -185,6 +190,28 @@ class DailyDeliveryTests(unittest.TestCase):
             with self.subTest(job=name),self.assertRaises(ValueError):
                 pipeline.aggregate(proof['scope'],{},results,commit=A,run_id=1,attempt=2,identity=proof['identity'])
 
+    def test_v2_controller_proof_keeps_its_original_full_coverage(self):
+        old=pipeline.classify_v2(['scripts/cicd/pipeline.py'],baseline=B,commit=A)
+        self.assertEqual(old['schema'],'traffic-application-scope/v2')
+        self.assertTrue(old['current']);self.assertTrue(old['full'])
+        pipeline.validate_scope(old,A)
+        for key in ('current','full'):
+            with self.subTest(key=key),self.assertRaises(ValueError):
+                pipeline.validate_scope({**old,key:False},A)
+        proof=pipeline.aggregate(old,{m:suite(m) for m in ('current','migration')},
+            {n:{'result':'success'} for n in pipeline.required_results(old)},
+            commit=A,run_id=1,attempt=2,identity=delivery_identity())
+        pipeline.check_acceptance(proof,{'id':1,'head_sha':A,'run_attempt':2,'event':'push'})
+
+    def test_new_push_cannot_claim_full_and_schedule_cannot_silently_be_daily(self):
+        full=proof_for(['scripts/cicd/pipeline.py'],force=True)
+        with self.assertRaisesRegex(ValueError,'pushes cannot'):
+            pipeline.check_acceptance(full,{'id':1,'head_sha':A,'run_attempt':2,'event':'push'})
+        pipeline.check_acceptance(full,{'id':1,'head_sha':A,'run_attempt':2,'event':'workflow_dispatch'})
+        with self.assertRaisesRegex(ValueError,'Scheduled validation'):
+            pipeline.check_acceptance(proof_for(['backend/app/services/prediction.py']),
+                {'id':1,'head_sha':A,'run_attempt':2,'event':'schedule'})
+
     def test_manual_daily_uses_verified_diff_and_published_frontend(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
@@ -211,10 +238,12 @@ class DailyDeliveryTests(unittest.TestCase):
         self.assertTrue(pipeline.full_validation({'GITHUB_EVENT_NAME':'schedule','VALIDATION_MODE':'daily'}))
         self.assertTrue(pipeline.full_validation({'GITHUB_EVENT_NAME':'workflow_dispatch','VALIDATION_MODE':'full'}))
         self.assertFalse(pipeline.full_validation({'GITHUB_EVENT_NAME':'push','VALIDATION_MODE':'full'}))
+        self.assertFalse(pipeline.full_validation({'GITHUB_EVENT_NAME':'workflow_dispatch'}))
         with self.assertRaises(ValueError):pipeline.full_validation({'GITHUB_EVENT_NAME':'workflow_dispatch','VALIDATION_MODE':'skip'})
         for baseline in (None,'invalid'):
             scope=pipeline.classify(['deployment/rke2/roles/tree.json'],baseline=baseline,commit=A)
-            self.assertTrue(scope['full']);self.assertTrue(scope['current'])
+            self.assertFalse(scope['full']);self.assertFalse(scope['current'])
+            self.assertTrue(scope['backend']);self.assertTrue(scope['tests']);self.assertTrue(scope['frontend'])
 
 
 class PullRequestChecksTests(unittest.TestCase):
@@ -315,7 +344,7 @@ class ApplicationAcceptanceTests(unittest.TestCase):
             ci_coverage.check_run('owner/repo',{'id':1,'head_sha':A,'run_attempt':2},Mock(),artifact=Mock(return_value=proof))
 
     def test_required_skipped_or_failed_job_cannot_be_hidden(self):
-        proof=proof_for(['backend/app/services/restore_cache.py'],frontend=True)
+        proof=proof_for(['backend/app/services/restore_cache.py'],frontend=True,force=True)
         scope=proof['scope']
         for name in pipeline.required_results(scope):
             for outcome in ('skipped','failure','cancelled'):
@@ -325,7 +354,7 @@ class ApplicationAcceptanceTests(unittest.TestCase):
                     pipeline.aggregate(scope,proof['suites'],results,commit=A,run_id=1,attempt=2,identity=proof['identity'])
 
     def test_runtime_changes_require_exact_suite_images_and_attempt(self):
-        proof=proof_for(['backend/app/services/restore_cache.py'])
+        proof=proof_for(['backend/app/services/restore_cache.py'],force=True)
         for mutate in ('missing','attempt','image','identity'):
             damaged=copy.deepcopy(proof)
             if mutate=='missing':damaged['suites']={}

@@ -1,10 +1,12 @@
 # Isolated delivery acceptance
 
-`01 Backend CI / current-runtime` runs on a disposable GitHub-hosted runner,
+`01 Application Delivery / current-runtime` runs on a disposable GitHub-hosted runner,
 after the role images pass offline checks and the immutable package is built.
-When scope requires full coverage, `legacy-migration` runs independently in
-parallel. The acceptance job and production gate require every suite selected
-for this commit. See [Actions navigation](../../docs/guides/ACTIONS_DEMO.md).
+Only an explicit manual `validation=full` or the weekly schedule selects these
+clusters; `legacy-migration` then runs independently in parallel. Every push,
+including controller/workflow edits, uses fast checks without kind. Acceptance
+still requires each selected suite for that exact commit/run/attempt; historical
+v1/v2 proofs retain their original policy. See [Actions navigation](../../docs/guides/ACTIONS_DEMO.md).
 
 The script refuses a non-hosted runner, a context other than `kind-cd-e2e`, or
 a Kubernetes API outside loopback. It does not read a production kubeconfig,
@@ -48,11 +50,11 @@ a separate manifest-only rollout. Repeated initial/middle no-op cycles are omitt
 The optional migration suite has only three legacy-specific cases: regular
 release rejection on legacy, preflight failure before mutation, and actual
 migration with a long request finishing and legacy cache flush. Ordinary recovery
-cases are checked in current and are not repeated after migration. Direct legacy
-adapter/metadata/baseline edits, proof/scope/harness edits, unknown scope/history, and manual/weekly full
-validation require both suites. Shared managed-runtime edits require current;
-their effects on retired topology are checked periodically rather than on every
-release. All selected cases and immutable identities are enforced by proof v3.
+cases are checked in current and are not repeated after migration. Manual full
+and weekly validation require both suites. Source changes or unknown history do
+not automatically select clusters for release pushes; they retain fast checks
+and production preflight/Verify/rollback. This is an explicit coverage choice.
+All selected cases and immutable identities are enforced by proof v3.
 
 A synthetic queued TrainingRun/TrainingExecution is stored in real
 PostgreSQL and its unchanged queued state is checked after every case. Airflow's

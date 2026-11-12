@@ -18,13 +18,18 @@ image. Không coi việc một job được skip là bằng chứng pod đã đ�
 
 Hai script kiểm giao diện đã biết (`check_feature_importance_ui.py` và
 `check_training_monitor_ui.py`) được nhận diện là công cụ kiểm, không kéo theo
-release backend hoặc migration legacy. Script triển khai khác/chưa nhận diện
-vẫn kiểm sâu. Frontend chạy toàn bộ test Node trong frontend/tests trước build.
+release backend hoặc migration legacy. Script khác/chưa nhận diện chạy các
+kiểm nhanh phù hợp. Frontend chạy toàn bộ test Node trong frontend/tests trước build.
 
-Engine triển khai, cache/lifecycle, hợp đồng runtime, schema và integration
-harness vẫn cần kiểm controller; legacy/proof contract, thay pipeline, lịch
-sử không rõ và kiểm full cần cả hai suite. File deployment mới chưa nhận diện
-được giữ đường kiểm sâu. Các kiểm này không chạy Train thật trên Kaggle.
+**Mọi lượt push phát hành đều không dựng cụm thử**, kể cả sửa engine, workflow,
+cache/lifecycle, hợp đồng runtime hoặc schema. Thiếu lịch sử đã Verify hoặc
+đầu vào chưa nhận diện thì chạy tất cả kiểm nhanh: regression, frontend,
+package và bốn image checks. Các bộ current-runtime/legacy chỉ chạy khi chủ
+động chọn full hoặc tới lịch tuần; không tự lặp full sau merge.
+
+Đây là phạm vi kiểm do người dùng lựa chọn: các ca rollout/rollback trên kind
+không được chạy trước từng release. Preflight, guard, drain/flush, Verify và
+rollback khi triển khai thật vẫn bắt buộc. Kiểm full không gọi Kaggle thật.
 
 **Run workflow** của Application Delivery có lựa chọn `validation`:
 
@@ -32,10 +37,9 @@ sử không rõ và kiểm full cần cả hai suite. File deployment mới chư
 - `full`: chạy đủ current/legacy và frontend, phù hợp khi muốn kiểm sâu.
 
 Hai lựa chọn manual chỉ kiểm tra, không triển khai RKE2 hoặc Pages. Lịch tuần
-vẫn full; phát hành thật chạy sau push nhánh chính. Bản thay đổi engine/pipeline
-này tự yêu cầu full trong lượt phát hành đầu tiên; các cập nhật thường ngày
-sau khi bản đó được Verify mới nhận phạm vi mới. Chưa có số đo hosted để hứa
-một thời gian cố định; thời gian build, CD, chờ duyệt và Kaggle được tách riêng.
+vẫn full; phát hành thật chạy sau push nhánh chính và luôn đi đường nhanh,
+kể cả chính bản sửa policy này. Chưa có số đo hosted để hứa một thời gian
+cố định; thời gian build, CD, chờ duyệt và Kaggle được tách riêng.
 
 ## Nếu cập nhật lỗi
 

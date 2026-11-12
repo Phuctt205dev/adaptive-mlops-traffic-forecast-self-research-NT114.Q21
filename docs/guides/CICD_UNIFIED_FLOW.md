@@ -44,7 +44,9 @@ vẫn phải sẵn sàng; xem [thiết lập RKE2](CICD_RKE2.md).
 `pipeline.py scope` so **toàn bộ diff từ commit backend đã Verify**, không chỉ
 push cuối; rename/delete giữ đường dẫn cũ. Frontend có publication record
 riêng, so nội dung subtree và cấu hình API/base-path để quyết định build.
-Thiếu/diverged baseline hoặc đường dẫn chưa biết ảnh hưởng chọn full.
+Thiếu/diverged baseline hoặc đường dẫn chưa biết ảnh hưởng chọn tất cả kiểm
+nhanh. Mọi push đều không dựng kind, kể cả push sửa CI/CD; full chỉ manual/
+lịch định kỳ, không phải điều kiện chặn phát hành thường ngày.
 
 | Thay đổi tích lũy | Kiểm và phát hành |
 | --- | --- |
@@ -52,8 +54,8 @@ Thiếu/diverged baseline hoặc đường dẫn chưa biết ảnh hưởng ch�
 | Tests hoặc docs thuần | Kiểm liên quan; không yêu cầu image/deploy app. docs/index.html là input API, không thuộc docs thuần |
 | Hai script kiểm UI đã biết (Feature Importance/Training Monitor) | Regression, không tự yêu cầu backend/legacy; các rollout helper khác vẫn phân loại thận trọng |
 | App/ML, manifest API/tree/neural hiện có, DAG cloud hoặc dependency role | Regression, package, 4 image checks; bỏ cụm thử Kubernetes; CD vẫn preflight/Verify/rollback |
-| scripts/cicd, hợp đồng runtime, deployment mới/chưa nhận diện, lifecycle/cache/restore, schema, workflow hoặc bộ integration | Kiểm trên cùng ứng viên bằng 6 ca current-runtime |
-| Legacy adapter/baseline, scope/proof/harness, pipeline acceptance contract, lịch sử không rõ | current-runtime và 3 ca legacy-migration |
+| Engine/workflow/cache/schema/legacy/proof/harness hoặc deployment mới | Regression, package và image checks; không current/legacy trên push |
+| Lịch sử/đầu vào không rõ | Tất cả kiểm nhanh gồm frontend và backend; không tự dựng kind |
 | Lịch tuần hoặc Run workflow chọn validation=full | Full validation; không deploy production |
 | Run workflow chọn validation=daily (mặc định) | Theo scope tích lũy như push; không deploy production |
 
@@ -74,10 +76,10 @@ Current/migration giữ image thật, PostgreSQL/S3/flush và Kubernetes riêng;
 HTTP business/Airflow REST là fixture. Giới hạn và ca kiểm ở
 [tests/integration](../../tests/integration/README.md).
 
-Scope có điều kiện là đánh đổi coverage đã chọn để giảm chờ cập nhật app.
-Khi bổ sung một đường startup/storage/lifecycle mới phải cập nhật bản đồ ảnh
-hưởng và test; chưa rõ thì kiểm sâu. CI không gọi Kaggle thật hoặc thay model
-active để nghiệm thu deployment.
+Người dùng chọn tách kiểm sâu khỏi mọi lượt phát hành để giảm thời gian chờ.
+Khi cần kiểm startup/storage/lifecycle/rollback trên cụm tạm, chọn full rõ ràng;
+không gắn lại điều kiện này vào push. CI không gọi Kaggle thật hoặc thay model
+active; CD vẫn kiểm đúng gói, capacity, guard, preflight/Verify và phục hồi.
 
 `acceptance` chạy kể cả dependency lỗi và kiểm mọi job bắt buộc theo scope.
 Proof mới `traffic-application-acceptance/v1` gắn SHA/run/attempt, image bindings
@@ -85,10 +87,10 @@ và suite được yêu cầu. Proof legacy vẫn đọc được để phục h
 sửa/bỏ hash của proof cũ. Rerun phải dùng **Re-run all jobs**: artifact mới
 ghi đè đúng tên trong cùng run, nhưng attempt cũ không được ghép với attempt mới.
 
-Scope `traffic-application-scope/v2` chọn đường daily cho manifest/DAG/dependency
-thường ngày. Reader v1 được giữ theo chính sách cũ: không diễn giải lại proof
-đã phát hành thành coverage nhẹ hơn. Thay pipeline tự yêu cầu full; giảm phạm
-vi chỉ áp dụng ứng viên mới sau khi baseline mới đã được Verify.
+Scope `traffic-application-scope/v3` tách lựa chọn full khỏi tác động của file:
+push luôn daily; manual chọn full hoặc lịch tuần mới tạo cụm. Reader v1/v2
+giữ chính sách cũ và không diễn giải lại proof đã phát hành thành coverage nhẹ
+hơn. Scope v3 không được khai full cho push hoặc daily cho lịch kiểm định kỳ.
 
 ## 3. Build khác với deploy
 

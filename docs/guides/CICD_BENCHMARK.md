@@ -56,7 +56,7 @@ chạy nhanh hơn hoặc tương đương coverage.
 | Frontend-only | Build một lần; Pages nhận đúng dist/config/source; backend không bị cập nhật khi runtime đầu vào giữ nguyên. |
 | API-only | Image và deployment theo thay đổi thực của recipe/manifest; worker giữ nguyên nếu desired state không đổi. |
 | Worker/DAG | API giữ nguyên nếu không liên quan; DAG đúng bản, không sinh training thật để thử CI/CD. |
-| Runtime/manifest | Manifest role hiện có đi đường daily với image checks và CD Verify; engine/storage/protocol/deployment mới vẫn current, legacy/proof contract hoặc lịch sử không rõ vẫn full. Tách các profile khi so thời gian. |
+| Runtime/manifest | Mọi push đi đường nhanh với regression/image/package và CD Verify, kể cả sửa engine; current/legacy chỉ manual full hoặc lịch tuần. Tách full khỏi mẫu phát hành khi so thời gian. |
 | No-op | Không build/rollout thừa; Verify không bị gọi nhầm là deployment mới. |
 
 Phải kiểm artifact sau upload/download, gồm file ẩn `.nojekyll`. Job build
@@ -121,8 +121,8 @@ chưa phải kiểm định nhân quả hay độ ổn định dài hạn.
 
 1. Local regression, actionlint và frontend build đạt; ghi rõ phần không kiểm
    được trên Windows. Unit fixture kiểm công thức không phải mẫu benchmark thật.
-2. Chạy GitHub CI đầy đủ cho gói thay đổi controller/workflow; các case current
-   và migration phải có proof đúng SHA/attempt. Chạy nhiều push nhanh kiểm việc
+2. Khi người dùng chọn full hoặc tới lịch tuần, các case current và migration
+   phải có proof đúng SHA/attempt. Full không chặn đường push. Kiểm nhiều push việc
    hủy CI cũ và chặn source cũ trước claim; không hủy transaction production.
    Trước merge có thể Run workflow trên nhánh thử nghiệm: frontend luôn được
    build ở lượt full; image/package vẫn chạy, backend/Pages deploy bị chặn

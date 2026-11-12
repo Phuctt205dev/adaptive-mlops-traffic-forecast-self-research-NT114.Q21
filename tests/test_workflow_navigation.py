@@ -48,7 +48,7 @@ class WorkflowNavigationTests(unittest.TestCase):
                     allowed=eval(expression,{'__builtins__':{}},{'frontend':SimpleNamespace(result=result)})
                     self.assertEqual(allowed,result=='success')
 
-    def condition(self, job, event, ref, *, scope=None, accepted=True):
+    def condition(self, job, event, ref, *, scope=None, accepted=True, validation='full'):
         """Evaluate the actual simple boolean conditions for a healthy graph.
 
         These conditions use the shared Python/Actions subset (strings,
@@ -70,6 +70,7 @@ class WorkflowNavigationTests(unittest.TestCase):
         needs=SimpleNamespace(scope=SimpleNamespace(outputs=outputs),acceptance=SimpleNamespace(result='success' if accepted else 'failure'))
         variables=SimpleNamespace(RKE2_CD_ENABLED='true')
         return bool(eval(expression,{'__builtins__':{}},{'github':github,'needs':needs,'vars':variables,
+                         'inputs':SimpleNamespace(validation=validation),
                          'backend_delivery':SimpleNamespace(outputs=SimpleNamespace(outcome='success')),
                          'always':lambda:True,'cancelled':lambda:False,'format':lambda text,value:text.format(value)}))
 
@@ -83,9 +84,19 @@ class WorkflowNavigationTests(unittest.TestCase):
         for event in ('workflow_dispatch','pull_request','schedule'):
             self.assertFalse(self.condition('backend-delivery',event,'refs/heads/master',scope=daily))
         controller=pipeline.classify(['scripts/cicd/roles_deploy.py'],baseline='b'*40,commit='a'*40)
-        self.assertTrue(self.condition('current-runtime','push','refs/heads/master',scope=controller))
+        self.assertFalse(self.condition('current-runtime','push','refs/heads/master',scope=controller))
         full=pipeline.classify([],baseline='b'*40,commit='a'*40,force=True)
         self.assertTrue(self.condition('legacy-migration','workflow_dispatch','refs/heads/ci/check',scope=full))
+
+    def test_push_and_daily_manual_cannot_create_clusters_even_with_full_scope_flags(self):
+        full=pipeline.classify(['scripts/cicd/pipeline.py'],baseline='b'*40,commit='a'*40,force=True)
+        for job in ('current-runtime','legacy-migration'):
+            with self.subTest(job=job):
+                self.assertFalse(self.condition(job,'push','refs/heads/master',scope=full))
+                self.assertFalse(self.condition(job,'pull_request','refs/pull/5/merge',scope=full))
+                self.assertFalse(self.condition(job,'workflow_dispatch','refs/heads/master',scope=full,validation='daily'))
+                self.assertTrue(self.condition(job,'workflow_dispatch','refs/heads/master',scope=full,validation='full'))
+                self.assertTrue(self.condition(job,'schedule','refs/heads/master',scope=full))
 
     def test_manual_input_defaults_to_daily_and_is_wired_into_scope(self):
         source=(WORKFLOWS/'backend-ci.yml').read_text(encoding='utf-8')
@@ -133,7 +144,7 @@ class WorkflowNavigationTests(unittest.TestCase):
                 roles=re.search(r'^        role: \[(.+)\]$',body,re.M).group(1).split(',')
                 actual.update(name+' ('+role.strip()+')' for role in roles)
             else:actual.add(name)
-        scope=pipeline.classify([],baseline=None,commit='a'*40,frontend=True)
+        scope=pipeline.classify([],baseline=None,commit='a'*40,frontend=True,force=True)
         expected=pipeline.required_jobs(scope)|{'backend-delivery','frontend-publication','summary'}
         self.assertEqual(actual,expected)
 

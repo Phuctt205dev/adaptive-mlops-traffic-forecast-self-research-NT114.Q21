@@ -37,6 +37,22 @@ class MeasurementTests(unittest.TestCase):
         _,coverage,required=b.scope_profile(daily,A)
         self.assertFalse(coverage['current']);self.assertNotIn('current-runtime',required)
 
+    def test_v2_full_history_is_not_reclassified_as_a_fast_v3_release(self):
+        old=pipeline.classify_v2(['scripts/cicd/pipeline.py'],baseline='b'*40,commit=A)
+        _,coverage,required=b.scope_profile(old,A)
+        self.assertTrue(coverage['current']);self.assertTrue(coverage['full'])
+        self.assertIn('legacy-migration',required)
+        new=pipeline.classify(old['paths'],baseline=old['baseline'],commit=A)
+        _,coverage,required=b.scope_profile(new,A)
+        self.assertFalse(coverage['current']);self.assertFalse(coverage['full'])
+        self.assertNotIn('current-runtime',required);self.assertNotIn('legacy-migration',required)
+
+    def test_pre_application_scope_keeps_its_original_runtime_scenario(self):
+        legacy=ci_scope.classify(['backend/app/services/restore_cache.py'],baseline='b'*40,commit=A)
+        inferred,coverage,required=b.scope_profile(legacy,A)
+        self.assertTrue(coverage['current']);self.assertIn('current-runtime',required)
+        self.assertEqual(b.scenario(inferred),'runtime-manifest')
+
     def test_pr_merge_is_bound_to_run_head_and_base_before_measurement(self):
         merge = 'c'*40; base = 'b'*40
         run = {**RUN, 'event': 'pull_request', 'pull_requests': [{'head': {'sha': A}, 'base': {'sha': base}}]}

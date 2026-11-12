@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from backend.app.core.errors import ApplicationError
 from backend.app.db.models import Dataset, ModelVersion, Region, TrainingRun
 from backend.app.services import storage
+from src.model_variants import RECURRENT_VARIANTS, TREE_LAG_VARIANTS
 
 
 MODEL_ROOT = Path("models").resolve()
@@ -178,15 +179,40 @@ def model_feature_importance(region, model, run, dataset, expected_run_id=None):
         raise ApplicationError("shap_report_unavailable", "The report is temporarily unavailable. Please refresh.", 503) from None
 
 
+def trained_model_names(configuration, collection, serving_variant):
+    """Use this run's selection; infer only recorded models for older runs."""
+    aliases = {tree_name(name): name for name in MODEL_NAMES}
+    aliases.update({tree_name(variant): name for variant, name in
+                    {**TREE_LAG_VARIANTS, **RECURRENT_VARIANTS}.items()})
+
+    def known_names(values):
+        return {aliases[tree_name(value)] for value in values if tree_name(value) in aliases}
+
+    for key in ("selected_models", "selected_from_candidates"):
+        values = configuration.get(key)
+        names = known_names(values) if isinstance(values, list) else set()
+        if names:
+            return [name for name in MODEL_NAMES if name in names]
+    comparison = configuration.get("model_comparison")
+    if isinstance(comparison, list):
+        names = known_names(row.get("model_name") or row.get("best_model_name")
+                            for row in comparison if isinstance(row, dict))
+        if names:
+            return [name for name in MODEL_NAMES if name in names]
+    names = known_names([*collection, serving_variant])
+    return [name for name in MODEL_NAMES if name in names]
+
+
 def active_run_reports(region, model, run, dataset, active):
     """One report per algorithm in this activated run; never borrow other versions."""
     configuration = run.configuration_json if isinstance(run.configuration_json, dict) else {}
     collection = configuration.get("shap_reports") or {}
     if not isinstance(collection, dict):
         collection = {}
+    trained = trained_model_names(configuration, collection, model.variant)
     reports, groups = [], {}
     used = 0
-    for name in MODEL_NAMES:
+    for name in trained:
         metadata = collection.get(name)
         fallback = tree_name(name) == tree_name(model.variant) and metadata is None
         result = {"model_name": name, "status": "pending", "message": "No saved report for this model in the activated training run.",
@@ -224,10 +250,11 @@ def active_run_reports(region, model, run, dataset, active):
             group["share_percent"] += row["share_percent"]
             group["features"].update(row["features"])
             group["reports_present"] += 1
-    # An incomplete set must never be presented as the average of all five.
-    complete = used == len(MODEL_NAMES)
+    # Each trained algorithm has equal weight, regardless of its raw SHAP scale.
+    # Missing/invalid reports must not silently change the selected cohort.
+    complete = bool(trained) and used == len(trained)
     average = {"status": "ready" if complete else "incomplete", "used_reports": used,
-               "total_models": len(MODEL_NAMES), "features": []}
+               "total_models": len(trained), "features": []}
     if complete:
         average["features"] = sorted([{**row, "features": sorted(row["features"]),
             "share_percent": row["share_percent"] / used} for row in groups.values()],
@@ -253,7 +280,7 @@ def get_feature_importance(db, region_id, expected_model_id=None):
             # A broken serving report must not hide the other algorithms.
             active = {**empty, "status": "unavailable", "message": error.message,
                       "exclusion_reason": "unavailable" if error.status_code == 503 else "invalid"}
-    reports, average = [], {"status": "incomplete", "used_reports": 0, "total_models": 5, "features": []}
+    reports, average = [], {"status": "incomplete", "used_reports": 0, "total_models": 0, "features": []}
     model = db.get(ModelVersion, region.active_model_version_id) if region.active_model_version_id else None
     if model and model.region_id == region.id:
         run = db.get(TrainingRun, model.training_run_id)

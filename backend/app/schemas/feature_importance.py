@@ -54,7 +54,7 @@ class AlgorithmFeatureReport(BaseModel):
 class ModelAverage(BaseModel):
     status: Literal["ready", "incomplete"]
     used_reports: int = Field(ge=0, le=5)
-    total_models: Literal[5]
+    total_models: int = Field(ge=0, le=5)
     features: list[AverageFeatureInfluence]
 
 

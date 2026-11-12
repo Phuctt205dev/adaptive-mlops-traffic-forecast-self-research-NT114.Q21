@@ -130,12 +130,23 @@ def aggregate_duplicate_hours(df):
         .size()
         .rename("source_row_count")
     )
-    hourly = (
-        df.groupby(TIME_COLUMN, as_index=True)
-        .agg(aggregations)
-        .sort_index()
-        .join(source_counts)
-    )
+    if df[TIME_COLUMN].is_unique:
+        # Already-hourly datasets have one row per group. Calling mode() on
+        # each single-row category adds tens of thousands of Python calls.
+        # Keep pandas' numeric mean/dtypes and the same null-category policy.
+        numeric = df.groupby(TIME_COLUMN)[[*NUMERIC_FEATURE_COLUMNS, TARGET_COLUMN]].mean()
+        categories = df.set_index(TIME_COLUMN)[["is_holiday", *CATEGORICAL_COLUMNS]]
+        categories = categories.astype({name: object for name in categories
+            if not isinstance(categories[name].dtype, pd.api.extensions.ExtensionDtype)})
+        categories = categories.where(categories.notna(), pd.NA).infer_objects()
+        hourly = numeric.join(categories).reindex(columns=list(aggregations)).join(source_counts)
+    else:
+        hourly = (
+            df.groupby(TIME_COLUMN, as_index=True)
+            .agg(aggregations)
+            .sort_index()
+            .join(source_counts)
+        )
     hourly["is_observed_hour"] = True
     hourly["target_observed"] = hourly[TARGET_COLUMN].notna()
     return hourly
@@ -894,7 +905,7 @@ def build_quality_report(
     }
 
 
-def prepare_hourly_time_series(raw_df):
+def prepare_hourly_time_series(raw_df, *, include_quality_report=True):
     """
     Chuẩn hóa dữ liệu thành chuỗi mỗi giờ có nguồn gốc minh bạch.
 
@@ -914,12 +925,14 @@ def prepare_hourly_time_series(raw_df):
     completed_df = impute_missing_hours(completed_df)
     completed_df = round_to_source_format(completed_df)
 
+    # Serving needs the identical prepared rows/audit, not the offline
+    # imputation backtest. Training/upload callers retain the full report.
     report = build_quality_report(
         raw_df=raw_df,
         parsed_df=parsed_df,
         aggregated_df=aggregated_df,
         completed_df=completed_df,
-    )
+    ) if include_quality_report else {}
 
     completed_df = completed_df.reset_index()
 

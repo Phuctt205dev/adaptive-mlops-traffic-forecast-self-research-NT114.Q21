@@ -76,7 +76,8 @@ def _load_keras_model_from_path(model_path: str):
         )
     from tensorflow import keras
 
-    return keras.models.load_model(model_path)
+    # Inference never needs optimizer/loss/metric state restored or compiled.
+    return keras.models.load_model(model_path, compile=False)
 
 
 def _load_keras_model(model_version: ModelVersion):
@@ -122,7 +123,7 @@ def _hourly_context(dataset: Dataset) -> tuple[pd.DataFrame, pd.DataFrame]:
 @lru_cache(maxsize=8)
 def _hourly_context_cached(storage_uri: str, sha256: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     raw_frame = _download_dataset_frame_cached(storage_uri, sha256).copy()
-    hourly_df, audit_df, _report = prepare_hourly_time_series(raw_frame)
+    hourly_df, audit_df, _report = prepare_hourly_time_series(raw_frame, include_quality_report=False)
     hourly_df["date_time"] = pd.to_datetime(hourly_df["date_time"], errors="raise")
     audit_df["date_time"] = pd.to_datetime(audit_df["date_time"], errors="raise")
     return hourly_df.sort_values("date_time"), audit_df.sort_values("date_time")
@@ -351,6 +352,17 @@ def _predict_tree_lag(
     }
 
 
+def _neural_forward(model, sequences):
+    """Small serving batches avoid Model.predict's dataset/callback machinery."""
+    values = np.asarray(sequences, dtype=np.float32)
+    # Bound intermediate tensors for model-quality replay as well as dashboard
+    # forecasting. training=False keeps dropout disabled on every serving call.
+    return np.concatenate([
+        np.asarray(model(values[start:start + 256], training=False)).reshape(-1, 1)
+        for start in range(0, len(values), 256)
+    ])
+
+
 def _predict_neural_sequence(
     model_version: ModelVersion,
     training_run: TrainingRun,
@@ -386,7 +398,7 @@ def _predict_neural_sequence(
         sequence_length,
         transformed.shape[1],
     )
-    scaled_prediction = model.predict(sequence, verbose=0)
+    scaled_prediction = _neural_forward(model, sequence)
     prediction = preprocessors["target_scaler"].inverse_transform(
         np.asarray(scaled_prediction).reshape(-1, 1)
     )[0, 0]
@@ -436,7 +448,7 @@ def _predict_neural_sequence_batch(
             "Not enough history exists for the active sequence model.",
             409,
         )
-    scaled_predictions = model.predict(np.asarray(sequences), batch_size=256, verbose=0)
+    scaled_predictions = _neural_forward(model, sequences)
     predictions = preprocessors["target_scaler"].inverse_transform(
         np.asarray(scaled_predictions).reshape(-1, 1)
     ).reshape(-1)

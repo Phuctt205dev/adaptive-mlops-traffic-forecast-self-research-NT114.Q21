@@ -16,8 +16,9 @@ from scripts.cicd import ci_scope
 from scripts.cicd.cd_state import GitHub, Store, emit
 
 LEGACY_SCOPE = 'traffic-application-scope/v1'
-SCOPE = 'traffic-application-scope/v2'
-SCOPE_SCHEMAS = {LEGACY_SCOPE, SCOPE}
+V2_SCOPE = 'traffic-application-scope/v2'
+SCOPE = 'traffic-application-scope/v3'
+SCOPE_SCHEMAS = {LEGACY_SCOPE, V2_SCOPE, SCOPE}
 ACCEPTANCE = 'traffic-application-acceptance/v1'
 PR_SCOPE = 'traffic-pull-request-scope/v1'
 RUNTIME_PREFIXES = ('scripts/cicd/', 'deployment/', 'requirements/roles/', 'alembic/',
@@ -119,20 +120,32 @@ def classify_v1(paths, *, baseline, commit, force=False, frontend=False):
             'reason': 'application_contract_changed' if contract_changed else legacy['reason']}
 
 
-def classify(paths, *, baseline, commit, force=False, frontend=False):
+def classify_v2(paths, *, baseline, commit, force=False, frontend=False):
+    """Frozen v2 reader: controller changes selected disposable clusters."""
     paths = sorted(set(paths))
     release_paths = [p for p in paths if p not in UI_CHECK_FILES]
     value = classify_v1(release_paths, baseline=baseline, commit=commit, force=force, frontend=frontend)
     current = value['full'] or any(
         p.startswith(DEEP_PREFIXES) or p in RUNTIME_FILES or
         (p.startswith('deployment/') and p not in DAILY_DEPLOYMENT_FILES) for p in release_paths)
-    value.update(schema=SCOPE, current=current, paths=paths)
+    value.update(schema=V2_SCOPE, current=current, paths=paths)
     # A new or unfamiliar deployment input still builds a backend release,
     # even if it isn't under one of the application source directories.
     value['backend'] = current or any(backend_path(p) for p in release_paths)
     value['tests'] = value['backend'] or any(
         p.startswith('tests/') or p in UI_CHECK_FILES or
         p in {'requirements/ci.txt', 'requirements/backend.txt'} for p in paths)
+    return value
+
+
+def classify(paths, *, baseline, commit, force=False, frontend=False):
+    """Every release is fast; only requested/weekly full checks create kind."""
+    value = classify_v2(paths, baseline=baseline, commit=commit, force=force, frontend=frontend)
+    value.update(schema=SCOPE, current=bool(force), full=bool(force))
+    # Unknown inputs/history still run all fast checks. They never silently
+    # skip regression, images or frontend, and cannot start a cluster on push.
+    if value['reason'] in {'unknown_impact', 'missing_verified_baseline'}:
+        value.update(backend=True, tests=True, frontend=True)
     return value
 
 
@@ -146,7 +159,7 @@ def validate_scope(value, commit):
     for key in ('backend', 'tests', 'frontend', 'current', 'full', 'forced'):
         if type(value.get(key)) is not bool:
             raise ValueError('Application scope flags must be boolean')
-    classifier = classify_v1 if value['schema'] == LEGACY_SCOPE else classify
+    classifier = {LEGACY_SCOPE:classify_v1, V2_SCOPE:classify_v2, SCOPE:classify}[value['schema']]
     expected = classifier(paths, baseline=value.get('baseline'), commit=commit,
                           force=value['forced'], frontend=value['frontend'])
     if value != expected:
@@ -214,6 +227,11 @@ def check_acceptance(proof, run):
             proof.get('deployable') is not True):
         raise ValueError('Application acceptance belongs to another commit/run/attempt')
     scope = validate_scope(proof['scope'], run['head_sha'])
+    if scope['schema'] == SCOPE:
+        if run.get('event') == 'push' and scope['forced']:
+            raise ValueError('Release pushes cannot claim full validation')
+        if run.get('event') == 'schedule' and not scope['forced']:
+            raise ValueError('Scheduled validation must remain full')
     aggregate(scope, proof['suites'], {j: {'result': 'success'} for j in required_results(scope)},
               commit=run['head_sha'], run_id=run['id'], attempt=run['run_attempt'], identity=proof['identity'])
     return scope
@@ -240,7 +258,7 @@ def full_validation(env):
         return True
     if env['GITHUB_EVENT_NAME'] != 'workflow_dispatch':
         return False
-    mode = env.get('VALIDATION_MODE', 'full')
+    mode = env.get('VALIDATION_MODE', 'daily')
     if mode not in {'daily', 'full'}:
         raise ValueError('Unknown validation mode')
     return mode == 'full'
@@ -274,7 +292,7 @@ def scope_main():
         paths = ci_scope.git_paths(Path.cwd(), baseline, env['GITHUB_SHA']) if baseline else []
     except Exception:
         baseline, paths = None, []
-    # A missing/diverged baseline selects every safety check, never a fast path.
+    # A missing/diverged baseline selects all fast checks, not a kind cluster.
     frontend = True
     # Explicit/weekly full checks also validate an unchanged frontend.
     # Daily manual checks deduplicate just like ordinary pushes.
@@ -299,7 +317,8 @@ def scope_main():
             stream.write('| Stage | Required |\n| --- | --- |\n')
             for key in ('tests','backend','frontend','current','full'):
                 stream.write('| '+key+' | '+str(value[key])+' |\n')
-            stream.write('\nUnknown impact selects full validation. Scope includes all changes since the verified backend.\n')
+            stream.write('\nUnknown impact selects all fast checks. Full Kubernetes validation is manual or scheduled only. '
+                         'Scope includes all changes since the verified backend.\n')
             stream.write('\nValidation: ' + ('full' if value['full'] else 'controller' if value['current'] else 'daily') +
                          '. Daily releases retain image checks and production preflight/Verify/rollback.\n')
     emit({k: value[k] for k in ('backend', 'tests', 'frontend', 'current', 'full')})
@@ -316,6 +335,8 @@ def accept_main():
         emit({'pull_request_checked': True, 'deployable': False})
         return
     scope = validate_scope(raw_scope, env['GITHUB_SHA'])
+    if scope['schema'] == SCOPE and scope['forced'] != full_validation(env):
+        raise ValueError('Validation selection differs from this workflow event/input')
     modes = (['current'] if scope['current'] else []) + (['migration'] if scope['full'] else [])
     identity = json.loads((root / 'release/delivery.json').read_text()) if scope['backend'] else None
     proofs = {m: json.loads((root / m / 'kubernetes-delivery-proof.json').read_text()) for m in modes}

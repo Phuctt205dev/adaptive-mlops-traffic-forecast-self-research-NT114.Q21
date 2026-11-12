@@ -287,7 +287,10 @@ jobs:
 
   current-runtime:
     needs: [package, scope]
-    if: needs.scope.outputs.current == 'true'
+    if: >-
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' && inputs.validation == 'full')) &&
+      needs.scope.outputs.current == 'true'
     concurrency:
       group: checks-${{ github.ref }}-${{ github.event_name }}-current
       cancel-in-progress: true
@@ -350,7 +353,10 @@ jobs:
 
   legacy-migration:
     needs: [package, scope]
-    if: needs.scope.outputs.full == 'true'
+    if: >-
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' && inputs.validation == 'full')) &&
+      needs.scope.outputs.full == 'true'
     concurrency:
       group: checks-${{ github.ref }}-${{ github.event_name }}-migration
       cancel-in-progress: true
@@ -463,6 +469,7 @@ jobs:
         env:
           CI_JOB_RESULTS: ${{ toJSON(needs) }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          VALIDATION_MODE: ${{ inputs.validation || 'daily' }}
         run: python -B scripts/cicd/pipeline.py accept
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name != 'pull_request'

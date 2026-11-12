@@ -58,8 +58,8 @@ def scope_profile(scope, commit):
         pipeline.validate_scope(scope,commit)
         return scope, {k:scope[k] for k in ('tests','backend','frontend','current','full')}, pipeline.required_jobs(scope)
     ci_scope.validate(scope,commit)
-    inferred = pipeline.classify(scope['paths'],baseline=scope['baseline'],commit=commit,
-                                 force=scope['full'],frontend=False)
+    inferred = pipeline.classify_v1(scope['paths'],baseline=scope['baseline'],commit=commit,
+                                    force=scope['full'],frontend=False)
     coverage = {'tests':True,'backend':True,'frontend':False,'current':True,'full':scope['full']}
     return inferred, coverage, ci_coverage.COMMON_JOBS | ({'legacy-migration'} if scope['full'] else set())
 

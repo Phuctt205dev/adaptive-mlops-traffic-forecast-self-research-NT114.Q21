@@ -4,6 +4,61 @@ Mục tiêu: dev nhận phản hồi sớm, cập nhật qua cùng một workflo
 lệnh triển khai thủ công. Component registry/Add/Remove workload được hoãn;
 hướng dẫn này áp dụng cho các thành phần hiện có.
 
+## Luồng cập nhật thường ngày
+
+Sửa code → push/PR → kiểm tra liên quan → merge → build/reuse image → tự cập
+nhật đúng thành phần trên RKE2 → kiểm hoạt động và ghi kết quả. Chế độ backend
+Manual/Auto đã lưu tiếp tục quyết định có chờ bạn duyệt hay không.
+
+Source ứng dụng, các manifest API/tree/neural hiện có, DAG cloud và dependency
+role dùng regression, kiểm gói/image và kiểm thực tế khi triển khai. Các thay
+đổi này không dựng cụm Kubernetes thử lại trước mỗi lần cập nhật. Thành phần
+không đổi được Keep theo desired state; mã dùng chung có thể ảnh hưởng nhiều
+image. Không coi việc một job được skip là bằng chứng pod đã được giữ nguyên.
+
+Hai script kiểm giao diện đã biết (`check_feature_importance_ui.py` và
+`check_training_monitor_ui.py`) được nhận diện là công cụ kiểm, không kéo theo
+release backend hoặc migration legacy. Script triển khai khác/chưa nhận diện
+vẫn kiểm sâu. Frontend chạy toàn bộ test Node trong frontend/tests trước build.
+
+Engine triển khai, cache/lifecycle, hợp đồng runtime, schema và integration
+harness vẫn cần kiểm controller; legacy/proof contract, thay pipeline, lịch
+sử không rõ và kiểm full cần cả hai suite. File deployment mới chưa nhận diện
+được giữ đường kiểm sâu. Các kiểm này không chạy Train thật trên Kaggle.
+
+**Run workflow** của Application Delivery có lựa chọn `validation`:
+
+- `daily` (mặc định): kiểm theo thay đổi tích lũy từ backend đã Verify.
+- `full`: chạy đủ current/legacy và frontend, phù hợp khi muốn kiểm sâu.
+
+Hai lựa chọn manual chỉ kiểm tra, không triển khai RKE2 hoặc Pages. Lịch tuần
+vẫn full; phát hành thật chạy sau push nhánh chính. Bản thay đổi engine/pipeline
+này tự yêu cầu full trong lượt phát hành đầu tiên; các cập nhật thường ngày
+sau khi bản đó được Verify mới nhận phạm vi mới. Chưa có số đo hosted để hứa
+một thời gian cố định; thời gian build, CD, chờ duyệt và Kaggle được tách riêng.
+
+## Nếu cập nhật lỗi
+
+| Tình huống | Cách xử lý |
+| --- | --- |
+| Regression/build/image/preflight lỗi trước Apply | Dừng, giữ bản đang phục vụ; sửa rồi tạo lượt hợp lệ mới. |
+| Rollout/Verify/flush lỗi trong transaction | Engine thu chứng cứ và rollback khi ownership/spec còn phù hợp; workflow vẫn failed dù phục hồi thành công. |
+| Runner mất kết nối hoặc rollback chưa xác minh | Giữ chốt/owner để kiểm phục hồi, không Apply chồng hoặc sửa state cho qua. |
+| Triển khai đã completed nhưng thử chức năng mới thấy sai | Phát hành phục hồi từ phiên bản tốt, kiểm tương thích dữ liệu; không replay journal rollback của release completed. |
+
+Health xanh không chứng minh mọi chức năng đúng. Rollback ứng dụng không
+hoàn tác dataset, model đã Activate hoặc schema/data. Image/build/binding,
+training guard, drain/flush, Verify và cơ chế rollback hiện có được giữ.
+
+Bản CI/CD trước thay đổi được lưu tại
+`D:\You Are Here\HK_VII\KLTN\ideas\2026-11-11-cicd-integrated-0f502dd`;
+đọc RESTORE.md và kiểm VERIFY.ps1 trước khi phục hồi, không chép đè CDstate.
+
+Thiết kế theo hướng phản hồi CI trong vài phút và dùng script triển khai,
+gói đã build cùng smoke test, theo [DORA Continuous Integration](https://dora.dev/capabilities/continuous-integration/)
+và [Deployment Automation](https://dora.dev/capabilities/deployment-automation/).
+Đây là nguồn thiết kế, không phải chứng nhận hoặc benchmark đã đạt.
+
 ## Cách làm hằng ngày
 
 1. Tạo nhánh từ `master`, sửa code và push nhánh đó.
@@ -18,9 +73,9 @@ hướng dẫn này áp dụng cho các thành phần hiện có.
 `acceptance` tiếp tục tải và xác minh gói trên runner riêng; PR chỉ đạt khi
 gói tải lại đúng source, cấu hình, attempt và toàn bộ file/hash.
 
-PR không publish image hoặc triển khai production. Chính sách nhánh chỉ bật
-sau khi phiên bản PR gate này đã được kiểm chứng trên GitHub; tài liệu source
-không chứng minh settings đã được áp dụng.
+PR không publish image hoặc triển khai production. Branch protection đã được
+áp dụng tại mốc CI46/47; khi đổi repository hoặc khôi phục, kiểm settings thật
+trên GitHub, không suy từ tài liệu source rằng settings tự được áp dụng.
 
 | Thay đổi trên PR | Việc cần chạy |
 | --- | --- |

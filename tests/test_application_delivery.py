@@ -96,11 +96,125 @@ class ApplicationScopeTests(unittest.TestCase):
                 self.assertTrue(scope['full']);self.assertTrue(scope['current']);self.assertTrue(scope['backend'])
 
     def test_accumulated_runtime_change_cannot_be_hidden_by_a_later_app_edit(self):
-        scope=pipeline.classify(['backend/app/services/prediction.py','deployment/rke2/roles/api.json'],baseline=B,commit=A)
+        scope=pipeline.classify(['backend/app/services/prediction.py','deployment/rke2/runtime-contract.json'],baseline=B,commit=A)
         self.assertTrue(scope['current'])
         for field in ('backend','tests','current'):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 pipeline.validate_scope({**scope,field:False},A)
+
+
+class DailyDeliveryTests(unittest.TestCase):
+    def test_ui_check_tools_do_not_request_a_runtime_release_or_legacy_replay(self):
+        for path in pipeline.UI_CHECK_FILES:
+            with self.subTest(path=path):
+                scope=pipeline.classify([path],baseline=B,commit=A)
+                self.assertTrue(scope['tests'])
+                self.assertFalse(scope['backend']);self.assertFalse(scope['current']);self.assertFalse(scope['full'])
+                pipeline.validate_scope(scope,A)
+        unknown=pipeline.classify(['scripts/shap/new_rollout.py'],baseline=B,commit=A)
+        self.assertTrue(unknown['full'])
+        mixed=pipeline.classify(['deployment/rke2/roles/tree.json',*pipeline.UI_CHECK_FILES],baseline=B,commit=A)
+        self.assertTrue(mixed['backend']);self.assertFalse(mixed['current']);self.assertFalse(mixed['full'])
+        self.assertTrue(pipeline.classify_v1(mixed['paths'],baseline=B,commit=A)['full'])
+
+    def test_ui_check_exemptions_are_not_packaged_as_application_sources(self):
+        from scripts.cicd.roles_release import closure
+        root=Path(__file__).resolve().parents[1]
+        for role in ('api','tree','neural','sync'):
+            with self.subTest(role=role):
+                self.assertFalse(pipeline.UI_CHECK_FILES.intersection(closure(root,role)))
+
+    def test_existing_manifest_dag_and_dependencies_keep_checks_without_cluster_replay(self):
+        for path in (*sorted(pipeline.DAILY_DEPLOYMENT_FILES), 'requirements/roles/neural.txt',
+                     'requirements/roles/constraints.txt', 'backend/app/core/config.py',
+                     'src/cloud_training/kaggle_execution.py'):
+            with self.subTest(path=path):
+                proof=proof_for([path])
+                scope=pipeline.check_acceptance(proof,{'id':1,'head_sha':A,'run_attempt':2})
+                self.assertEqual(scope['schema'],pipeline.SCOPE)
+                self.assertTrue(scope['backend']);self.assertTrue(scope['tests'])
+                self.assertFalse(scope['current']);self.assertFalse(scope['full'])
+                self.assertEqual(proof['suites'],{})
+                self.assertEqual(pipeline.required_jobs(scope),
+                    {'scope','tests','package','acceptance'} | {'image ('+role+')' for role in ('api','tree','neural','sync')})
+
+    def test_engine_storage_and_unknown_deployment_still_require_controller_checks(self):
+        for path in ('scripts/cicd/roles_deploy.py','backend/app/services/restore_cache.py',
+                     'backend/app/services/lifecycle.py','src/cloud_training/airflow_control.py',
+                     'deployment/rke2/runtime-contract.json','deployment/new-service.yaml',
+                     'alembic/versions/new_schema.py','tests/integration/new_case.py',
+                     '.github/workflows/backend-ci.yml'):
+            with self.subTest(path=path):
+                proof=proof_for([path])
+                self.assertTrue(proof['scope']['current'])
+                self.assertIn('current-runtime',pipeline.required_jobs(proof['scope']))
+                damaged=copy.deepcopy(proof);damaged['suites']={}
+                with self.assertRaises(ValueError):pipeline.check_acceptance(damaged,{'id':1,'head_sha':A,'run_attempt':2})
+
+    def test_manifest_plus_pending_controller_change_does_not_take_daily_path(self):
+        scope=pipeline.classify(['deployment/rke2/roles/tree.json','scripts/cicd/roles_deploy.py'],baseline=B,commit=A)
+        self.assertTrue(scope['current'])
+        with self.assertRaises(ValueError):pipeline.validate_scope({**scope,'current':False},A)
+
+    def test_v1_manifest_proof_retains_its_original_coverage_and_gate(self):
+        old_scope={'schema':'traffic-application-scope/v1','commit':A,'baseline':B,
+                   'paths':['deployment/rke2/roles/tree.json'],'backend':True,'tests':True,
+                   'frontend':False,'current':True,'full':False,'forced':False,'reason':'ordinary_source_change'}
+        self.assertEqual(pipeline.validate_scope(old_scope,A),old_scope)
+        with self.assertRaises(ValueError):pipeline.validate_scope({**old_scope,'current':False},A)
+        proof=pipeline.aggregate(old_scope,{'current':suite('current')},
+            {n:{'result':'success'} for n in pipeline.required_results(old_scope)},
+            commit=A,run_id=1,attempt=2,identity=delivery_identity())
+        self.assertEqual(pipeline.check_acceptance(proof,{'id':1,'head_sha':A,'run_attempt':2}),old_scope)
+        jobs=[{'name':n,'status':'completed','conclusion':'success'} for n in pipeline.required_jobs(old_scope)]
+        next(j for j in jobs if j['name']=='current-runtime')['conclusion']='skipped'
+        with self.assertRaises(ValueError):
+            ci_coverage.check_run('owner/repo',{'id':1,'head_sha':A,'run_attempt':2},
+                                  Mock(return_value={'jobs':jobs}),artifact=Mock(return_value=proof))
+        with self.assertRaises(ValueError):pipeline.validate_scope({**old_scope,'schema':'traffic-application-scope/v99'},A)
+
+    def test_daily_acceptance_still_rejects_a_missing_role_or_failed_job(self):
+        proof=proof_for(['deployment/rke2/roles/tree.json'])
+        for role in ('api','tree','neural','sync'):
+            damaged=copy.deepcopy(proof);del damaged['identity']['images'][role]
+            with self.subTest(role=role),self.assertRaises(ValueError):
+                pipeline.check_acceptance(damaged,{'id':1,'head_sha':A,'run_attempt':2})
+        for name in pipeline.required_results(proof['scope']):
+            results={n:{'result':'success'} for n in pipeline.required_results(proof['scope'])}
+            results[name]['result']='failure'
+            with self.subTest(job=name),self.assertRaises(ValueError):
+                pipeline.aggregate(proof['scope'],{},results,commit=A,run_id=1,attempt=2,identity=proof['identity'])
+
+    def test_manual_daily_uses_verified_diff_and_published_frontend(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            env={**ENV,'GITHUB_EVENT_NAME':'workflow_dispatch','VALIDATION_MODE':'daily',
+                 'GITHUB_REPOSITORY':'owner/repo','GITHUB_OUTPUT':str(root/'outputs')}
+            identifier=digest(canonical({'source':'frontend-tree',**CONFIG}))
+            with patch.dict(os.environ,env,clear=True),patch.object(pipeline,'GitHub'), \
+                 patch.object(pipeline,'Store') as store, \
+                 patch.object(pipeline.ci_scope,'git_paths',return_value=['deployment/rke2/roles/tree.json']) as diff, \
+                 patch.object(frontend_release,'PublicationStore') as published, \
+                 patch.object(frontend_release,'frontend_config',return_value=CONFIG), \
+                 patch.object(pipeline.subprocess,'run',return_value=Mock(stdout='frontend-tree\n')), \
+                 patch.object(pipeline,'Path',side_effect=lambda p:root/p) as paths,redirect_stdout(io.StringIO()):
+                paths.cwd.return_value=root
+                store.return_value.load.return_value=({'last_success':{'commit':B}},None)
+                published.return_value.load.return_value=({'deployment_id':identifier},None)
+                pipeline.scope_main()
+                diff.assert_called_once_with(root,B,A)
+            scope=json.loads((root/'ci-scope.json').read_text())
+            self.assertTrue(scope['backend']);self.assertTrue(scope['tests'])
+            for flag in ('frontend','current','full','forced'):self.assertFalse(scope[flag])
+
+    def test_full_mode_unknown_mode_and_unavailable_history(self):
+        self.assertTrue(pipeline.full_validation({'GITHUB_EVENT_NAME':'schedule','VALIDATION_MODE':'daily'}))
+        self.assertTrue(pipeline.full_validation({'GITHUB_EVENT_NAME':'workflow_dispatch','VALIDATION_MODE':'full'}))
+        self.assertFalse(pipeline.full_validation({'GITHUB_EVENT_NAME':'push','VALIDATION_MODE':'full'}))
+        with self.assertRaises(ValueError):pipeline.full_validation({'GITHUB_EVENT_NAME':'workflow_dispatch','VALIDATION_MODE':'skip'})
+        for baseline in (None,'invalid'):
+            scope=pipeline.classify(['deployment/rke2/roles/tree.json'],baseline=baseline,commit=A)
+            self.assertTrue(scope['full']);self.assertTrue(scope['current'])
 
 
 class PullRequestChecksTests(unittest.TestCase):

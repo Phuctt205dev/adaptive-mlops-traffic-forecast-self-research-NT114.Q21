@@ -28,6 +28,15 @@ def measured():
 
 
 class MeasurementTests(unittest.TestCase):
+    def test_historical_manifest_scope_keeps_its_controller_requirement(self):
+        scope=pipeline.classify_v1(['deployment/rke2/roles/tree.json'],baseline='b'*40,commit=A)
+        _,coverage,required=b.scope_profile(scope,A)
+        self.assertTrue(coverage['current'])
+        self.assertIn('current-runtime',required)
+        daily=pipeline.classify(scope['paths'],baseline=scope['baseline'],commit=A)
+        _,coverage,required=b.scope_profile(daily,A)
+        self.assertFalse(coverage['current']);self.assertNotIn('current-runtime',required)
+
     def test_pr_merge_is_bound_to_run_head_and_base_before_measurement(self):
         merge = 'c'*40; base = 'b'*40
         run = {**RUN, 'event': 'pull_request', 'pull_requests': [{'head': {'sha': A}, 'base': {'sha': base}}]}

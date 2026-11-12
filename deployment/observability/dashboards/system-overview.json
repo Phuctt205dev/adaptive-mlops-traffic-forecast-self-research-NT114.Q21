@@ -1,0 +1,1843 @@
+{
+  "id": null,
+  "uid": "traffic-system-overview",
+  "title": "System Overview",
+  "schemaVersion": 42,
+  "version": 0,
+  "description": "Kubernetes readiness and resource usage. Unknown means missing or stale metrics. Open panel info for definitions.",
+  "editable": true,
+  "tags": [
+    "traffic-mlops",
+    "rke2",
+    "minimal"
+  ],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "30s",
+      "1m",
+      "5m"
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": []
+  },
+  "links": [
+    {
+      "title": "Nodes",
+      "type": "link",
+      "url": "/d/traffic-rke2-nodes",
+      "targetBlank": false,
+      "keepTime": true
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Platform readiness",
+      "type": "stat",
+      "description": "All three nodes and eight application components meet Kubernetes readiness. This does not test HTTP requests, forecast accuracy, or training success.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 8,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unknown",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Unknown",
+                  "color": "gray"
+                },
+                "1": {
+                  "text": "Ready",
+                  "color": "green"
+                },
+                "2": {
+                  "text": "Needs attention",
+                  "color": "orange"
+                },
+                "3": {
+                  "text": "Not ready",
+                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "((2 - (((sum((((2 - (((sum((((2 - max(max by(nodename)(label_replace(max by(node)(((kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-01\"} and (time() - timestamp(kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-01\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))),\"nodename\",\"$1\",\"node\",\"(.*)\")))) or vector(0))) == bool 1)) + (sum((((2 - max(max by(nodename)(label_replace(max by(node)(((kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-02\"} and (time() - timestamp(kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-02\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))),\"nodename\",\"$1\",\"node\",\"(.*)\")))) or vector(0))) == bool 1)) + (sum((((2 - max(max by(nodename)(label_replace(max by(node)(((kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-03\"} and (time() - timestamp(kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-03\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))),\"nodename\",\"$1\",\"node\",\"(.*)\")))) or vector(0))) == bool 1))) == bool 3)) and on() (((sum((((2 - max(max by(nodename)(label_replace(max by(node)(((kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-01\"} and (time() - timestamp(kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-01\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))),\"nodename\",\"$1\",\"node\",\"(.*)\")))) or vector(0))) > bool 0)) + (sum((((2 - max(max by(nodename)(label_replace(max by(node)(((kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-02\"} and (time() - timestamp(kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-02\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))),\"nodename\",\"$1\",\"node\",\"(.*)\")))) or vector(0))) > bool 0)) + (sum((((2 - max(max by(nodename)(label_replace(max by(node)(((kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-03\"} and (time() - timestamp(kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-03\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))),\"nodename\",\"$1\",\"node\",\"(.*)\")))) or vector(0))) > bool 0))) == 3)) or vector(0)) == bool 1)) + (sum((((2 - (((sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 2))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1))) == bool 8)) and on() (((sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 2))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0))) == 8)) or vector(0)) == bool 1))) == bool 2)) and on() (((sum((((2 - (((sum((((2 - max(max by(nodename)(label_replace(max by(node)(((kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-01\"} and (time() - timestamp(kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-01\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))),\"nodename\",\"$1\",\"node\",\"(.*)\")))) or vector(0))) == bool 1)) + (sum((((2 - max(max by(nodename)(label_replace(max by(node)(((kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-02\"} and (time() - timestamp(kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-02\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))),\"nodename\",\"$1\",\"node\",\"(.*)\")))) or vector(0))) == bool 1)) + (sum((((2 - max(max by(nodename)(label_replace(max by(node)(((kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-03\"} and (time() - timestamp(kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-03\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))),\"nodename\",\"$1\",\"node\",\"(.*)\")))) or vector(0))) == bool 1))) == bool 3)) and on() (((sum((((2 - max(max by(nodename)(label_replace(max by(node)(((kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-01\"} and (time() - timestamp(kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-01\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))),\"nodename\",\"$1\",\"node\",\"(.*)\")))) or vector(0))) > bool 0)) + (sum((((2 - max(max by(nodename)(label_replace(max by(node)(((kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-02\"} and (time() - timestamp(kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-02\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))),\"nodename\",\"$1\",\"node\",\"(.*)\")))) or vector(0))) > bool 0)) + (sum((((2 - max(max by(nodename)(label_replace(max by(node)(((kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-03\"} and (time() - timestamp(kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\",node=\"mlops-node-03\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))),\"nodename\",\"$1\",\"node\",\"(.*)\")))) or vector(0))) > bool 0))) == 3)) or vector(0)) > bool 0)) + (sum((((2 - (((sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 2))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1))) == bool 8)) and on() (((sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 2))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0))) == 8)) or vector(0)) > bool 0))) == 2)) or vector(0)",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 28
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Nodes",
+      "type": "stat",
+      "description": "Ready nodes out of three. Unknown means missing collection data.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 4,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unknown",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 3
+              }
+            ]
+          },
+          "unit": "suffix: / 3"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(max by(nodename)(label_replace(max by(node)(((kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\"} and (time() - timestamp(kube_node_status_condition{job=\"kube-state-metrics\",condition=\"Ready\",status=\"true\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))),\"nodename\",\"$1\",\"node\",\"(.*)\")))",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 28
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Services",
+      "type": "stat",
+      "description": "Ready application components out of eight; active and next slots count as the same service.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 4,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unknown",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 8
+              }
+            ]
+          },
+          "unit": "suffix: / 8"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "((((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 2))) or vector(0))) == bool 1) + ((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1) + ((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1) + ((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1) + ((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1) + ((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1) + ((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1) + ((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) and on() ((((2 - (((sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 2))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) == bool 1))) == bool 8)) and on() (((sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 2))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0)) + (sum((((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))) > bool 0))) == 8)) or vector(0)) > 0))",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 28
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Resources",
+      "type": "stat",
+      "description": "Review a node when processing, memory or root storage usage reaches 80%. Missing data on any expected node is Unknown.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 4,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unknown",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Unknown",
+                  "color": "gray"
+                },
+                "1": {
+                  "text": "Within range",
+                  "color": "green"
+                },
+                "2": {
+                  "text": "High use",
+                  "color": "orange"
+                },
+                "3": {
+                  "text": "Not ready",
+                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "((1 + (((max(max by (nodename) ((100 * (1 - avg by(instance, job)(rate(node_cpu_seconds_total{job=\"node-exporter\",mode=\"idle\"}[5m]) and (node_cpu_seconds_total{job=\"node-exporter\",mode=\"idle\"} and (time() - timestamp(node_cpu_seconds_total{job=\"node-exporter\",mode=\"idle\"}) <= 180))))) * on (instance, job) group_left(nodename) (max by (instance, job, nodename) (((node_uname_info{job=\"node-exporter\"} and (time() - timestamp(node_uname_info{job=\"node-exporter\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)))))) >= bool 80) + (max(max by (nodename) ((100 * (1 - ((node_memory_MemAvailable_bytes{job=\"node-exporter\"} and (time() - timestamp(node_memory_MemAvailable_bytes{job=\"node-exporter\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)) / ((node_memory_MemTotal_bytes{job=\"node-exporter\"} and (time() - timestamp(node_memory_MemTotal_bytes{job=\"node-exporter\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)))) * on (instance, job) group_left(nodename) (max by (instance, job, nodename) (((node_uname_info{job=\"node-exporter\"} and (time() - timestamp(node_uname_info{job=\"node-exporter\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)))))) >= bool 80) + (max(max by (nodename) ((100 * (1 - ((node_filesystem_avail_bytes{job=\"node-exporter\",mountpoint=\"/\",fstype!~\"tmpfs|overlay|squashfs\"} and (time() - timestamp(node_filesystem_avail_bytes{job=\"node-exporter\",mountpoint=\"/\",fstype!~\"tmpfs|overlay|squashfs\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)) / ((node_filesystem_size_bytes{job=\"node-exporter\",mountpoint=\"/\",fstype!~\"tmpfs|overlay|squashfs\"} and (time() - timestamp(node_filesystem_size_bytes{job=\"node-exporter\",mountpoint=\"/\",fstype!~\"tmpfs|overlay|squashfs\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)))) * on (instance, job) group_left(nodename) (max by (instance, job, nodename) (((node_uname_info{job=\"node-exporter\"} and (time() - timestamp(node_uname_info{job=\"node-exporter\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)))))) >= bool 80)) > bool 0)) and on() (count(max by (nodename) ((100 * (1 - avg by(instance, job)(rate(node_cpu_seconds_total{job=\"node-exporter\",mode=\"idle\"}[5m]) and (node_cpu_seconds_total{job=\"node-exporter\",mode=\"idle\"} and (time() - timestamp(node_cpu_seconds_total{job=\"node-exporter\",mode=\"idle\"}) <= 180))))) * on (instance, job) group_left(nodename) (max by (instance, job, nodename) (((node_uname_info{job=\"node-exporter\"} and (time() - timestamp(node_uname_info{job=\"node-exporter\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)))))) == 3) and on() (count(max by (nodename) ((100 * (1 - ((node_memory_MemAvailable_bytes{job=\"node-exporter\"} and (time() - timestamp(node_memory_MemAvailable_bytes{job=\"node-exporter\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)) / ((node_memory_MemTotal_bytes{job=\"node-exporter\"} and (time() - timestamp(node_memory_MemTotal_bytes{job=\"node-exporter\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)))) * on (instance, job) group_left(nodename) (max by (instance, job, nodename) (((node_uname_info{job=\"node-exporter\"} and (time() - timestamp(node_uname_info{job=\"node-exporter\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)))))) == 3) and on() (count(max by (nodename) ((100 * (1 - ((node_filesystem_avail_bytes{job=\"node-exporter\",mountpoint=\"/\",fstype!~\"tmpfs|overlay|squashfs\"} and (time() - timestamp(node_filesystem_avail_bytes{job=\"node-exporter\",mountpoint=\"/\",fstype!~\"tmpfs|overlay|squashfs\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)) / ((node_filesystem_size_bytes{job=\"node-exporter\",mountpoint=\"/\",fstype!~\"tmpfs|overlay|squashfs\"} and (time() - timestamp(node_filesystem_size_bytes{job=\"node-exporter\",mountpoint=\"/\",fstype!~\"tmpfs|overlay|squashfs\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)))) * on (instance, job) group_left(nodename) (max by (instance, job, nodename) (((node_uname_info{job=\"node-exporter\"} and (time() - timestamp(node_uname_info{job=\"node-exporter\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)))))) == 3)) or vector(0)",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 22
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Monitoring",
+      "type": "stat",
+      "description": "Prometheus warning/critical alerts. Informational and heartbeat alerts are excluded. This is monitoring state, separate from application readiness.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 0,
+        "w": 4,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unknown",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Unknown",
+                  "color": "gray"
+                },
+                "1": {
+                  "text": "No warnings",
+                  "color": "green"
+                },
+                "2": {
+                  "text": "Review alerts",
+                  "color": "orange"
+                },
+                "3": {
+                  "text": "Critical alert",
+                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "((1 + ((count(ALERTS{alertstate=\"firing\",severity=~\"warning|critical\"}) or vector(0)) > bool 0) + ((count(ALERTS{alertstate=\"firing\",severity=\"critical\"}) or vector(0)) > bool 0)) and on() (max((up{job=\"traffic-monitoring-prometheus\",container=\"prometheus\"} and (time() - timestamp(up{job=\"traffic-monitoring-prometheus\",container=\"prometheus\"}) <= 180))) == 1)) or vector(0)",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 22
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "Prediction API",
+      "type": "stat",
+      "description": "Kubernetes replicas are ready for this component. This is not a training result or business health check.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 6,
+        "h": 3
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unknown",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Unknown",
+                  "color": "gray"
+                },
+                "1": {
+                  "text": "Ready",
+                  "color": "green"
+                },
+                "2": {
+                  "text": "Not ready",
+                  "color": "red"
+                },
+                "3": {
+                  "text": "Not ready",
+                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next|traffic-api\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 2))) or vector(0))",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 22
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "Tree training",
+      "type": "stat",
+      "description": "Kubernetes replicas are ready for this component. This is not a training result or business health check.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 5,
+        "w": 6,
+        "h": 3
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unknown",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Unknown",
+                  "color": "gray"
+                },
+                "1": {
+                  "text": "Ready",
+                  "color": "green"
+                },
+                "2": {
+                  "text": "Not ready",
+                  "color": "red"
+                },
+                "3": {
+                  "text": "Not ready",
+                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-tree|tree-next|traffic-training-tree\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 22
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "Deep training",
+      "type": "stat",
+      "description": "Kubernetes replicas are ready for this component. This is not a training result or business health check.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 5,
+        "w": 6,
+        "h": 3
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unknown",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Unknown",
+                  "color": "gray"
+                },
+                "1": {
+                  "text": "Ready",
+                  "color": "green"
+                },
+                "2": {
+                  "text": "Not ready",
+                  "color": "red"
+                },
+                "3": {
+                  "text": "Not ready",
+                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"train-neural|neural-next|traffic-training-worker\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 22
+        }
+      }
+    },
+    {
+      "id": 13,
+      "title": "Database",
+      "type": "stat",
+      "description": "Kubernetes replicas are ready for this component. This is not a training result or business health check.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 5,
+        "w": 6,
+        "h": 3
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unknown",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Unknown",
+                  "color": "gray"
+                },
+                "1": {
+                  "text": "Ready",
+                  "color": "green"
+                },
+                "2": {
+                  "text": "Not ready",
+                  "color": "red"
+                },
+                "3": {
+                  "text": "Not ready",
+                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"postgres\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 22
+        }
+      }
+    },
+    {
+      "id": 14,
+      "title": "Dataset storage",
+      "type": "stat",
+      "description": "Kubernetes replicas are ready for this component. This is not a training result or business health check.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 6,
+        "h": 3
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unknown",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Unknown",
+                  "color": "gray"
+                },
+                "1": {
+                  "text": "Ready",
+                  "color": "green"
+                },
+                "2": {
+                  "text": "Not ready",
+                  "color": "red"
+                },
+                "3": {
+                  "text": "Not ready",
+                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"minio\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 22
+        }
+      }
+    },
+    {
+      "id": 15,
+      "title": "Model registry",
+      "type": "stat",
+      "description": "Kubernetes replicas are ready for this component. This is not a training result or business health check.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 8,
+        "w": 6,
+        "h": 3
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unknown",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Unknown",
+                  "color": "gray"
+                },
+                "1": {
+                  "text": "Ready",
+                  "color": "green"
+                },
+                "2": {
+                  "text": "Not ready",
+                  "color": "red"
+                },
+                "3": {
+                  "text": "Not ready",
+                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"mlflow\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 22
+        }
+      }
+    },
+    {
+      "id": 16,
+      "title": "Airflow UI",
+      "type": "stat",
+      "description": "Kubernetes replicas are ready for this component. This is not a training result or business health check.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 6,
+        "h": 3
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unknown",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Unknown",
+                  "color": "gray"
+                },
+                "1": {
+                  "text": "Ready",
+                  "color": "green"
+                },
+                "2": {
+                  "text": "Not ready",
+                  "color": "red"
+                },
+                "3": {
+                  "text": "Not ready",
+                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-webserver\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 22
+        }
+      }
+    },
+    {
+      "id": 17,
+      "title": "Airflow scheduler",
+      "type": "stat",
+      "description": "Kubernetes replicas are ready for this component. This is not a training result or business health check.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 8,
+        "w": 6,
+        "h": 3
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unknown",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Unknown",
+                  "color": "gray"
+                },
+                "1": {
+                  "text": "Ready",
+                  "color": "green"
+                },
+                "2": {
+                  "text": "Not ready",
+                  "color": "red"
+                },
+                "3": {
+                  "text": "Not ready",
+                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "((2 - max((max by(deployment)(((kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_status_replicas_ready{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1)))) * (max by(deployment)(((kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"} and (time() - timestamp(kube_deployment_spec_replicas{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"airflow-scheduler\"}) <= 180)) and on (instance, job) ((up{job=\"kube-state-metrics\"} and (time() - timestamp(up{job=\"kube-state-metrics\"}) <= 180)) == 1))) >= bool 1))) or vector(0))",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 22
+        }
+      }
+    },
+    {
+      "id": 20,
+      "title": "Processing • busiest node",
+      "type": "stat",
+      "description": "Highest measured node usage; the node name is shown. Missing nodes are excluded here; Resources above requires all nodes. CPU is a five-minute mean; storage is the root filesystem.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 11,
+        "w": 8,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unknown",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "links": [
+            {
+              "title": "View nodes",
+              "url": "/d/traffic-rke2-nodes"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "topk(1,max by (nodename) ((100 * (1 - avg by(instance, job)(rate(node_cpu_seconds_total{job=\"node-exporter\",mode=\"idle\"}[5m]) and (node_cpu_seconds_total{job=\"node-exporter\",mode=\"idle\"} and (time() - timestamp(node_cpu_seconds_total{job=\"node-exporter\",mode=\"idle\"}) <= 180))))) * on (instance, job) group_left(nodename) (max by (instance, job, nodename) (((node_uname_info{job=\"node-exporter\"} and (time() - timestamp(node_uname_info{job=\"node-exporter\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1))))))",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "{{nodename}}",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value_and_name",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 36,
+          "titleSize": 16
+        }
+      }
+    },
+    {
+      "id": 21,
+      "title": "Memory • busiest node",
+      "type": "stat",
+      "description": "Highest measured node usage; the node name is shown. Missing nodes are excluded here; Resources above requires all nodes. CPU is a five-minute mean; storage is the root filesystem.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 11,
+        "w": 8,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unknown",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "links": [
+            {
+              "title": "View nodes",
+              "url": "/d/traffic-rke2-nodes"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "topk(1,max by (nodename) ((100 * (1 - ((node_memory_MemAvailable_bytes{job=\"node-exporter\"} and (time() - timestamp(node_memory_MemAvailable_bytes{job=\"node-exporter\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)) / ((node_memory_MemTotal_bytes{job=\"node-exporter\"} and (time() - timestamp(node_memory_MemTotal_bytes{job=\"node-exporter\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)))) * on (instance, job) group_left(nodename) (max by (instance, job, nodename) (((node_uname_info{job=\"node-exporter\"} and (time() - timestamp(node_uname_info{job=\"node-exporter\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1))))))",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "{{nodename}}",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value_and_name",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 36,
+          "titleSize": 16
+        }
+      }
+    },
+    {
+      "id": 22,
+      "title": "Storage • busiest node",
+      "type": "stat",
+      "description": "Highest measured node usage; the node name is shown. Missing nodes are excluded here; Resources above requires all nodes. CPU is a five-minute mean; storage is the root filesystem.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 11,
+        "w": 8,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unknown",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "links": [
+            {
+              "title": "View nodes",
+              "url": "/d/traffic-rke2-nodes"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "topk(1,max by (nodename) ((100 * (1 - ((node_filesystem_avail_bytes{job=\"node-exporter\",mountpoint=\"/\",fstype!~\"tmpfs|overlay|squashfs\"} and (time() - timestamp(node_filesystem_avail_bytes{job=\"node-exporter\",mountpoint=\"/\",fstype!~\"tmpfs|overlay|squashfs\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)) / ((node_filesystem_size_bytes{job=\"node-exporter\",mountpoint=\"/\",fstype!~\"tmpfs|overlay|squashfs\"} and (time() - timestamp(node_filesystem_size_bytes{job=\"node-exporter\",mountpoint=\"/\",fstype!~\"tmpfs|overlay|squashfs\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1)))) * on (instance, job) group_left(nodename) (max by (instance, job, nodename) (((node_uname_info{job=\"node-exporter\"} and (time() - timestamp(node_uname_info{job=\"node-exporter\"}) <= 180)) and on (instance, job) ((up{job=\"node-exporter\"} and (time() - timestamp(up{job=\"node-exporter\"}) <= 180)) == 1))))))",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "{{nodename}}",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value_and_name",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 36,
+          "titleSize": 16
+        }
+      }
+    },
+    {
+      "id": 30,
+      "title": "Alert details",
+      "type": "row",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 31,
+          "title": "Alerts to review",
+          "type": "table",
+          "description": "Warning/critical alerts reported by Prometheus. No rows may mean no matching alerts; check Monitoring above for collection state.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 17,
+            "w": 24,
+            "h": 7
+          },
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "Unknown",
+              "decimals": 0,
+              "mappings": [
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null",
+                    "result": {
+                      "text": "Unknown",
+                      "color": "gray"
+                    }
+                  }
+                }
+              ]
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "What to review"
+                },
+                "properties": [
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "PrometheusNotConnectedToAlertmanagers": {
+                            "text": "Alert delivery is not connected"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "ALERTS{alertstate=\"firing\",severity=~\"warning|critical\"}",
+              "format": "table",
+              "instant": true,
+              "range": false,
+              "editorMode": "code",
+              "legendFormat": "",
+              "exemplar": false
+            }
+          ],
+          "options": {
+            "showHeader": true,
+            "cellHeight": "lg",
+            "footer": {
+              "show": false
+            }
+          },
+          "transformations": [
+            {
+              "id": "filterFieldsByName",
+              "options": {
+                "include": {
+                  "names": [
+                    "alertname",
+                    "severity",
+                    "namespace",
+                    "pod"
+                  ]
+                }
+              }
+            },
+            {
+              "id": "organize",
+              "options": {
+                "renameByName": {
+                  "alertname": "What to review",
+                  "severity": "Priority",
+                  "namespace": "Area",
+                  "pod": "Component"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

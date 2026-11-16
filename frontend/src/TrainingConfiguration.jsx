@@ -1,41 +1,35 @@
-import React, { useState } from "react";
+import React, { useId, useState } from "react";
+import AppDialog from "./AppDialog.jsx";
 
 export default function TrainingConfiguration({ value, onChange }) {
   const [advanced, setAdvanced] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const prefix = useId();
   const update = (key, next) => onChange({ ...value, [key]: next });
 
   function numberField(key, label, options = {}) {
-    return <label htmlFor={`training-${key}`}>
+    return <label htmlFor={`${prefix}-${key}`}>
       {label}
-      <input id={`training-${key}`} type="number" required value={value[key]}
+      <input id={`${prefix}-${key}`} type="number" required value={value[key]}
         min={options.min ?? 1} max={options.max} step={options.step ?? 1}
         onChange={(event) => update(key, event.target.value)} />
     </label>;
   }
 
-  return <section className="card training-config-card" aria-labelledby="training-config-title">
-    <div className="card-header">
-      <h2 id="training-config-title">Training Configuration</h2>
-      <div className="training-config-modes" role="group" aria-label="Training configuration mode">
-        <button type="button" aria-pressed={!advanced} aria-controls="training-config-fields"
-          onClick={() => setAdvanced(false)}>Basic</button>
-        <button type="button" aria-pressed={advanced} aria-controls="training-config-fields"
-          onClick={() => setAdvanced(true)}>Advanced</button>
-      </div>
-    </div>
-    <div id="training-config-fields" key={advanced ? "advanced" : "basic"}
+  function fields() {
+    return <div id={`${prefix}-fields`} key={advanced ? "advanced" : "basic"}
       className={`training-config-face${advanced ? " is-advanced" : ""}`}
       tabIndex={advanced ? 0 : undefined} role={advanced ? "region" : undefined}
       aria-label={advanced ? "Advanced training settings" : undefined}>
       <p className="training-config-intro">Choose the time window for your next training run.</p>
       <div className="training-config-dates">
-        <label htmlFor="training-start-date">Start date
-          <input id="training-start-date" type="date" required value={value.train_start_date}
+        <label htmlFor={`${prefix}-start`}>Start date
+          <input id={`${prefix}-start`} type="date" required value={value.train_start_date}
             max={value.train_end_date || undefined}
             onChange={(event) => update("train_start_date", event.target.value)} />
         </label>
-        <label htmlFor="training-end-date">End date
-          <input id="training-end-date" type="date" required value={value.train_end_date}
+        <label htmlFor={`${prefix}-end`}>End date
+          <input id={`${prefix}-end`} type="date" required value={value.train_end_date}
             min={value.train_start_date || undefined}
             onChange={(event) => update("train_end_date", event.target.value)} />
         </label>
@@ -64,20 +58,50 @@ export default function TrainingConfiguration({ value, onChange }) {
           <legend>System managed · no training control</legend>
           <div className="form-grid">
             <div className="training-config-managed-field">
-              <label htmlFor="training-artifact-root">artifact_root
-                <input id="training-artifact-root" value={value.artifact_root} readOnly aria-describedby="training-artifact-note" />
+              <label htmlFor={`${prefix}-artifact-root`}>artifact_root
+                <input id={`${prefix}-artifact-root`} value={value.artifact_root} readOnly aria-describedby={`${prefix}-artifact-note`} />
               </label>
-              <small id="training-artifact-note">The system manages where training results are saved.</small>
+              <small id={`${prefix}-artifact-note`}>The system manages where training results are saved.</small>
             </div>
             <div className="training-config-managed-field">
-              <label htmlFor="training-model-role">model_role
-                <input id="training-model-role" value={value.model_role} readOnly aria-describedby="training-role-note" />
+              <label htmlFor={`${prefix}-model-role`}>model_role
+                <input id={`${prefix}-model-role`} value={value.model_role} readOnly aria-describedby={`${prefix}-role-note`} />
               </label>
-              <small id="training-role-note">New models remain candidates until you Activate them.</small>
+              <small id={`${prefix}-role-note`}>New models remain candidates until you Activate them.</small>
             </div>
           </div>
         </fieldset>
       </div>}
-    </div>
-  </section>;
+    </div>;
+  }
+
+  return <>
+    <section className="card training-config-card" aria-labelledby={`${prefix}-title`}>
+      <div className="card-header">
+        <h2 id={`${prefix}-title`}>Training Configuration</h2>
+        <div className="training-config-actions">
+          <div className="training-config-modes" role="group" aria-label="Training configuration mode">
+            <button type="button" aria-pressed={!advanced} aria-controls={`${prefix}-fields`}
+              onClick={() => setAdvanced(false)}>Basic</button>
+            <button type="button" aria-pressed={advanced} aria-controls={`${prefix}-fields`}
+              onClick={() => setAdvanced(true)}>Advanced</button>
+          </div>
+          {advanced && <button type="button" className="secondary training-config-expand" aria-haspopup="dialog"
+            aria-label="Expand training configuration" title="Expand training configuration" onClick={() => setExpanded(true)}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+              <path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7" />
+            </svg>
+            Expand
+          </button>}
+        </div>
+      </div>
+      {!expanded ? fields() : <p className="muted">Advanced settings are open in the expanded view.</p>}
+    </section>
+    {expanded && <AppDialog title="Advanced training configuration" size="wide"
+      description="Changes are kept in your current training setup when you close this window."
+      onClose={() => setExpanded(false)}
+      footer={<button type="button" onClick={() => setExpanded(false)}>Done</button>}>
+      <div className="training-config-expanded">{fields()}</div>
+    </AppDialog>}
+  </>;
 }

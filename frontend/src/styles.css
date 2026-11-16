@@ -1391,13 +1391,18 @@ main {
 .training-config-face::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 8px; }
 .training-config-intro { margin: 0 0 20px; color: #52647a; font-size: 16px; line-height: 1.6; }
 .training-config-dates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-.training-config-card label { min-width: 0; font-size: 14px; gap: 8px; }
-.training-config-card input { min-width: 0; width: 100%; min-height: 44px; font-size: 16px; }
+.training-config-face label { min-width: 0; font-size: 14px; gap: 8px; }
+.training-config-face input { min-width: 0; width: 100%; min-height: 44px; font-size: 16px; }
 .training-config-hint { margin: 12px 0 0; color: #52647a; font-size: 14px; line-height: 1.6; }
 .training-config-advanced { display: grid; gap: 20px; margin-top: 24px; }
 .training-config-advanced fieldset { min-width: 0; margin: 0; padding: 18px 0 0; border: 0; border-top: 1px solid #e2e8f0; }
 .training-config-advanced legend { padding: 0 10px 0 0; font-size: 15px; font-weight: 600; color: #334155; }
-.training-config-card .form-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
+.training-config-face .form-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
+.training-config-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.training-config-expand { display: inline-flex; align-items: center; gap: 7px; min-height: 44px; }
+.training-config-expand svg { width: 17px; height: 17px; }
+.training-config-expanded .training-config-face { overflow: visible; padding: 0; animation: none; }
+.training-config-expanded .training-config-face label { font-size: 15px; }
 .training-config-managed input[readonly] { border-color: #f87171; color: #991b1b; background: #fff1f2; cursor: default; }
 .training-config-managed legend, .training-config-managed small { color: #b91c1c; }
 .training-config-managed small { font-size: 13px; line-height: 1.5; font-weight: 400; }
@@ -1774,6 +1779,52 @@ td {
   padding: 10px 12px;
   font-size: 13px;
   font-weight: 700;
+}
+
+.app-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100dvh - 40px);
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #dce4ef;
+  border-radius: 18px;
+  background: #fff;
+  color: #111827;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.24);
+}
+.app-dialog[open] { display: flex; flex-direction: column; }
+.app-dialog::backdrop { background: rgba(15, 23, 42, 0.48); backdrop-filter: blur(3px); }
+.app-dialog-wide { width: min(960px, calc(100vw - 32px)); }
+.app-dialog-header { display: flex; flex-shrink: 0; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 26px 28px 20px; border-bottom: 1px solid #e7edf4; }
+.app-dialog-header h2 { margin: 0; color: #0f172a; font-size: 23px; line-height: 1.3; letter-spacing: -0.025em; }
+.app-dialog-header h2:focus { outline: none; }
+.app-dialog-header p { margin: 12px 0 0; color: #52647a; font-size: 15px; line-height: 1.65; }
+.app-dialog-eyebrow { display: block; margin-bottom: 8px; color: #b91c1c; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.app-dialog-close { display: grid; flex-shrink: 0; place-items: center; width: 36px; min-height: 36px; padding: 8px; background: #f1f5f9; color: #52647a; border: 1px solid #e2e8f0; border-radius: 9px; box-shadow: none; }
+.app-dialog-close:hover { background: #e2e8f0; }
+.app-dialog-close svg { width: 18px; height: 18px; }
+.app-dialog-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 24px 28px; }
+.app-dialog-footer { display: flex; flex-shrink: 0; justify-content: flex-end; gap: 10px; padding: 18px 28px; border-top: 1px solid #e7edf4; background: #f8fafc; }
+.app-dialog-footer button { min-height: 44px; padding: 11px 18px; font-size: 15px; }
+.app-dialog-footer .app-dialog-cancel { background: #fff; color: #334155; border: 1px solid #cbd5e1; }
+.app-dialog-footer .app-dialog-danger-button { background: #dc2626; color: #fff; border: 1px solid #dc2626; }
+.app-dialog-footer .app-dialog-danger-button:hover { background: #b91c1c; border-color: #b91c1c; }
+.app-dialog-subject { display: flex; align-items: center; gap: 14px; padding: 16px; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; }
+.app-dialog-subject strong { overflow-wrap: anywhere; font-size: 16px; }
+.app-dialog-subject-icon { display: grid; flex-shrink: 0; place-items: center; width: 42px; height: 42px; border-radius: 10px; background: #fee2e2; color: #b91c1c; }
+.app-dialog-subject-icon svg { width: 23px; height: 23px; }
+.app-dialog-warning { margin: 16px 0 0; color: #64748b; font-size: 14px; }
+@media (max-width: 640px) {
+  .app-dialog { max-height: calc(100dvh - 24px); }
+  .app-dialog-header { gap: 12px; padding: 20px; }
+  .app-dialog-header h2 { font-size: 21px; }
+  .app-dialog-body { padding: 20px; }
+  .app-dialog-footer { padding: 16px 20px; flex-wrap: wrap; }
+  .app-dialog-footer button { flex: 1; }
+  .training-config-expanded .training-config-dates,
+  .training-config-expanded .form-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 .modal-backdrop {

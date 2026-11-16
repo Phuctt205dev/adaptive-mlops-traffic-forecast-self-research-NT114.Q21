@@ -5,21 +5,10 @@ import ModelQualityPanel from "./ModelQualityPanel";
 import FeatureImportancePanel from "./FeatureImportancePanel";
 import TrainingMonitor from "./TrainingMonitor";
 import TrainingConfiguration from "./TrainingConfiguration.jsx";
+import ConfirmDialog from "./ConfirmDialog.jsx";
+import { pages, rememberedPage, rememberPage } from "./pageNavigation.js";
 import { normalizeTrainingConfiguration } from "./trainingConfiguration.js";
 import "./styles.css";
-
-const pages = [
-  ["dashboard", "Dashboard"],
-  ["predict", "Prediction"],
-  ["regions", "Regions"],
-  ["datasets", "Datasets"],
-  ["models", "Models"],
-  ["training", "Training Monitor"],
-  ["quality", "Model Quality"],
-  ["importance", "Feature Importance"],
-  ["drift", "Drift"],
-  ["users", "Users"],
-];
 
 const trainingModelOptions = [
   {
@@ -638,6 +627,7 @@ function RegionManager({ regions, selectedRegion, refresh }) {
   const [lookupReady, setLookupReady] = useState(false);
   const [creating, setCreating] = useState(false);
   const [deletingRegionId, setDeletingRegionId] = useState(null);
+  const [regionToDelete, setRegionToDelete] = useState(null);
   const [lookupQuery, setLookupQuery] = useState("");
   const [lookingUp, setLookingUp] = useState(false);
   const [form, setForm] = useState({
@@ -717,9 +707,7 @@ function RegionManager({ regions, selectedRegion, refresh }) {
   }
 
   async function deleteRegion(region) {
-    if (deletingRegionId || !window.confirm(`Permanently delete "${region.name}" and its datasets, models, training history, predictions, drift history and SHAP reports? This also removes its stored files.`)) {
-      return;
-    }
+    if (deletingRegionId) return;
     setDeletingRegionId(region.id);
     setMessage(`Deleting "${region.name}" and its data. Please wait…`);
     try {
@@ -728,6 +716,7 @@ function RegionManager({ regions, selectedRegion, refresh }) {
       await refresh();
     } catch (err) {
       setMessage(err.message);
+      throw err;
     } finally {
       setDeletingRegionId(null);
     }
@@ -806,13 +795,17 @@ function RegionManager({ regions, selectedRegion, refresh }) {
                 />
                 <span />
               </label>
-              <button className="icon-button danger-icon" title="Delete region" disabled={Boolean(deletingRegionId)} aria-busy={deletingRegionId === region.id} onClick={() => deleteRegion(region)}>
+              <button className="icon-button danger-icon" title="Delete region" disabled={Boolean(deletingRegionId)} aria-busy={deletingRegionId === region.id} onClick={() => setRegionToDelete(region)}>
                 <Icon name="trash" />
               </button>
             </div>,
           ])}
         />
       </Card>
+      {regionToDelete && <ConfirmDialog
+        title="Delete region?" subject={regionToDelete.name} confirmLabel="Delete region"
+        description="The region and its datasets, models, training history, predictions, drift history, SHAP reports and stored files will be permanently deleted."
+        onConfirm={() => deleteRegion(regionToDelete)} onClose={() => setRegionToDelete(null)} />}
     </div>
   );
 }
@@ -1289,6 +1282,7 @@ function isDriftRetrainedModel(model) {
 function ModelManager({ selectedRegion, models, refreshModels, refreshRegions }) {
   const [expandedModelId, setExpandedModelId] = useState("");
   const [deletingModelId, setDeletingModelId] = useState("");
+  const [modelToDelete, setModelToDelete] = useState(null);
   const [deleteError, setDeleteError] = useState("");
   const regionIdRef = useRef(selectedRegion?.id);
   regionIdRef.current = selectedRegion?.id;
@@ -1305,9 +1299,6 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions })
 
   async function deleteModel(model) {
     if (deletingModelId) return;
-    if (!window.confirm(`Permanently delete ${model.version} (${model.variant}) and related predictions?`)) {
-      return;
-    }
     const regionId = selectedRegion?.id;
     setDeletingModelId(model.id);
     setDeleteError("");
@@ -1320,6 +1311,7 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions })
       if (regionIdRef.current === regionId) {
         setDeleteError(`Could not delete ${model.version}. ${error.message || "Please try again."}`);
       }
+      throw error;
     } finally {
       setDeletingModelId("");
     }
@@ -1379,7 +1371,7 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions })
                           <button disabled={Boolean(deletingModelId) || model.id === selectedRegion?.active_model_version_id} onClick={() => activate(model.id)}>
                             Activate
                           </button>
-                          <button className="danger" disabled={Boolean(deletingModelId)} onClick={() => deleteModel(model)}>
+                          <button className="danger" disabled={Boolean(deletingModelId)} onClick={() => setModelToDelete(model)}>
                             {deletingModelId === model.id ? "Deleting…" : "Delete"}
                           </button>
                         </div>
@@ -1427,6 +1419,10 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions })
         <p className="muted">No data yet.</p>
       )}
     </Card>
+    {modelToDelete && <ConfirmDialog
+      title="Delete model?" subject={`${modelToDelete.version} · ${modelToDelete.variant}`} confirmLabel="Delete model"
+      description="This model version and its related predictions will be permanently deleted. Other model versions will be kept."
+      onConfirm={() => deleteModel(modelToDelete)} onClose={() => setModelToDelete(null)} />}
     </div>
   );
 }
@@ -2384,6 +2380,7 @@ function App() {
 
   async function loadMe() {
     const current = await api.me();
+    setPage(rememberedPage(current));
     setUser(current);
     return current;
   }
@@ -2410,6 +2407,10 @@ function App() {
     setSelectedRegionId(regionId);
     try { localStorage.setItem(`traffic_region_${user.id}`, regionId); }
     catch { /* Region selection still works when browser storage is unavailable. */ }
+  }
+
+  function navigate(nextPage) {
+    setPage(rememberPage(user, nextPage));
   }
 
   async function refreshDatasets() {
@@ -2465,9 +2466,9 @@ function App() {
         pages={visiblePages}
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed((value) => !value)}
-        onNavigate={setPage}
-        onProfile={() => setPage("profile")}
-        onLogout={() => { setStoredToken(""); setUser(null); }}
+        onNavigate={navigate}
+        onProfile={() => navigate("profile")}
+        onLogout={() => { setStoredToken(""); setUser(null); setPage("dashboard"); }}
       />
       <main>
         <header className="topbar">

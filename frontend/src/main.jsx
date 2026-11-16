@@ -1589,6 +1589,11 @@ function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshR
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
   const [autoRetrain, setAutoRetrain] = useState(false);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsConfirmed, setSettingsConfirmed] = useState(false);
+  const [settingsReload, setSettingsReload] = useState(0);
+  const [settingsError, setSettingsError] = useState("");
   const [currentEnd, setCurrentEnd] = useState(() => toDatetimeLocalFromDate(new Date()));
   const [productionWindow, setProductionWindow] = useState(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
@@ -1596,6 +1601,62 @@ function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshR
   const [retrainPlan, setRetrainPlan] = useState(null);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("info");
+
+  function confirmedAutoRetrain(data, regionId) {
+    if (data?.region_id !== regionId || typeof data?.auto_retrain !== "boolean") {
+      throw new Error("The server returned an invalid region setting.");
+    }
+    return data.auto_retrain;
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedRegion?.id) return () => { cancelled = true; };
+    setSettingsLoading(true);
+    setSettingsConfirmed(false);
+    setSettingsError("");
+    api.driftSettings(selectedRegion.id)
+      .then((data) => {
+        const enabled = confirmedAutoRetrain(data, selectedRegion.id);
+        if (!cancelled) {
+          setAutoRetrain(enabled);
+          setSettingsConfirmed(true);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setSettingsError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setSettingsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [selectedRegion?.id, settingsReload]);
+
+  async function saveAutoRetrain(enabled) {
+    if (!selectedRegion?.id || settingsLoading || savingSettings || !settingsConfirmed) return;
+    const previous = autoRetrain;
+    setAutoRetrain(enabled);
+    setSavingSettings(true);
+    setSettingsError("");
+    try {
+      const data = await api.updateDriftSettings(selectedRegion.id, enabled);
+      setAutoRetrain(confirmedAutoRetrain(data, selectedRegion.id));
+    } catch (err) {
+      // A lost PATCH response does not prove that the server rejected the save.
+      try {
+        const data = await api.driftSettings(selectedRegion.id);
+        const actual = confirmedAutoRetrain(data, selectedRegion.id);
+        setAutoRetrain(actual);
+        if (actual !== enabled) setSettingsError(err.message);
+      } catch {
+        setAutoRetrain(previous);
+        setSettingsConfirmed(false);
+        setSettingsError(err.message);
+      }
+    } finally {
+      setSavingSettings(false);
+    }
+  }
 
   async function refresh(options = {}) {
     const requestedRegionId = selectedRegion?.id;
@@ -1758,13 +1819,17 @@ function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshR
               <input
                 type="checkbox"
                 checked={autoRetrain}
-                onChange={(event) => setAutoRetrain(event.target.checked)}
+                disabled={!selectedRegion?.id || settingsLoading || savingSettings || !settingsConfirmed}
+                onChange={(event) => saveAutoRetrain(event.target.checked)}
               />
               Auto retrain
             </label>
+            {(settingsLoading || savingSettings) && (
+              <span role="status">{savingSettings ? "Saving setting..." : "Loading setting..."}</span>
+            )}
             <button
               className={checking ? "button-loading" : ""}
-              disabled={!selectedRegion?.id || checking}
+              disabled={!selectedRegion?.id || checking || settingsLoading || savingSettings || !settingsConfirmed}
               onClick={() => runCheck(false)}
             >
               {checking && <span className="button-spinner" />}
@@ -1773,6 +1838,13 @@ function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshR
           </div>
         )}
       >
+        {settingsError && (
+          <div className="alert alert-error">
+            Could not save or confirm the auto-retrain setting: {settingsError}
+            {!settingsConfirmed && <button onClick={() => setSettingsReload((value) => value + 1)}>Retry setting</button>}
+          </div>
+        )}
+        <p className="muted">Auto retrain is saved for this region only.</p>
         {message && <div className={`alert alert-${messageType}`}>{message}</div>}
         {loading && <div className="alert alert-info">Loading drift checks...</div>}
         {pendingWindowChange && !checking && (
@@ -2448,6 +2520,7 @@ function App() {
             </section>
             <section className="page-panel" hidden={page !== "drift"}>
               <DriftMonitor
+                key={selectedRegion?.id || "no-region"}
                 selectedRegion={selectedRegion}
                 refreshModels={refreshModels}
                 refreshRegions={() => refreshRegions(user)}

@@ -20,7 +20,7 @@ from backend.app.db.models import (
     TrainingRun,
     TrainingRunStatus,
 )
-from backend.app.services import airflow_client, model_registry
+from backend.app.services import airflow_client, model_registry, drift_settings
 from backend.app.services.predictions import _production_frame
 from backend.app.services.storage import get_s3_client
 from src.feature_drift import calculate_feature_drift
@@ -417,7 +417,15 @@ def _check_region(
             else DriftCheckStatus.STABLE
         )
         triggered_run = None
+        # Scheduler/request flags can suppress automatic work, never opt a region
+        # into it. Only an explicit admin force request bypasses the preference.
+        allow_retrain = False
         if drift_detected and auto_retrain and settings.drift_auto_retrain:
+            allow_retrain = (
+                (force_retrain and check_method == "manual")
+                or drift_settings.auto_retrain_enabled(db, region.id)
+            )
+        if allow_retrain:
             if _has_running_training(db, region.id):
                 drift_report["retrain_skip_reason"] = "training_already_running"
             elif (

@@ -2,15 +2,37 @@ from datetime import datetime
 import uuid
 
 from fastapi import APIRouter, Depends, Query, Request
+from pydantic import BaseModel, ConfigDict, StrictBool
 from sqlalchemy.orm import Session
 
 from backend.app.api.dependencies import require_admin
 from backend.app.core.errors import ApplicationError
 from backend.app.db.session import get_db
 from backend.app.services import drift_monitoring
+from backend.app.services import drift_settings
 
 
 router = APIRouter(dependencies=[Depends(require_admin)])
+
+
+class DriftSettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    auto_retrain: StrictBool
+
+
+@router.get("/regions/{region_id}/drift-settings")
+def get_region_drift_settings(region_id: uuid.UUID, db: Session = Depends(get_db)):
+    return drift_settings.get_settings(db, region_id)
+
+
+@router.patch("/regions/{region_id}/drift-settings")
+def update_region_drift_settings(
+    region_id: uuid.UUID,
+    payload: DriftSettingsUpdate,
+    db: Session = Depends(get_db),
+    admin=Depends(require_admin),
+):
+    return drift_settings.update_settings(db, region_id, payload.auto_retrain, admin.id)
 
 
 @router.get("/regions/{region_id}/drift-checks")

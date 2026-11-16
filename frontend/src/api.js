@@ -154,6 +154,13 @@ export const api = {
   },
   driftChecks: (regionId) =>
     apiRequest(`/admin/regions/${regionId}/drift-checks?limit=10`),
+  driftSettings: (regionId) =>
+    apiRequest(`/admin/regions/${regionId}/drift-settings`),
+  updateDriftSettings: (regionId, autoRetrain) =>
+    apiRequest(`/admin/regions/${regionId}/drift-settings`, {
+      method: "PATCH",
+      body: JSON.stringify({ auto_retrain: autoRetrain }),
+    }),
   deleteDriftCheck: (regionId, checkId) =>
     apiRequest(`/admin/regions/${regionId}/drift-checks/${checkId}`, {
       method: "DELETE",

@@ -603,6 +603,7 @@ def run_pipeline(
             if production_end_at is not None
             else None
         ),
+        "selection_cv_mae": float(best["validation_mae"]),
         "validation_MAE": round(float(best["validation_mae"]), 4),
         "validation_MAE_std": round(float(best["validation_mae_std"]), 4),
         "validation_RMSE": round(float(best["validation_rmse"]), 4),

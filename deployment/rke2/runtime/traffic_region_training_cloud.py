@@ -1,4 +1,4 @@
-"""Controlled Kaggle graph shared by Dataset and manual/automatic Drift runs.
+"""Controlled dual-backend graph shared by Dataset and Drift runs.
 
 Tree, LSTM and GRU use separate attempts and notebooks. The two neural fits
 may overlap on Kaggle; their receipts still join at one publication gate.
@@ -25,8 +25,10 @@ def complete_or_skip(response, conf, branch, context):
 
 def cloud_configuration(context):
     conf = control.configuration(context)
-    if conf.get("training_backend") != "kaggle" or conf.get("_execution_protocol") != 2:
-        raise ValueError("This DAG accepts controlled Kaggle training only.")
+    if conf.get("training_backend") not in {"kaggle", "local"} or conf.get("_execution_protocol") != 2:
+        raise ValueError("This DAG requires controlled Kaggle or Local training.")
+    if conf.get("training_backend") == "local" and (conf.get("trigger_source") == "feature_drift" or conf.get("retrain_source_model_id")):
+        raise ValueError("Retraining always runs on Kaggle.")
     return conf
 
 
@@ -56,7 +58,7 @@ def finalize(**context):
 
 def failed(context):
     conf = control.configuration(context)
-    if conf.get("_execution_protocol") == 2 and conf.get('training_backend') == 'kaggle':
+    if conf.get("_execution_protocol") == 2 and conf.get('training_backend') in {'kaggle', 'local'}:
         control.request_stop(conf)
 
 

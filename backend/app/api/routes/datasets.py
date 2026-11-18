@@ -77,11 +77,20 @@ def trigger_dataset_training(
     request: Request = None,
 ):
     settings = get_settings()
-    if payload.training_backend == "kaggle" and not (settings.training_control_enabled and settings.cloud_training_enabled):
-        raise ApplicationError("cloud_training_not_ready", "Cloud training is not enabled on this system yet.", 503)
+    from backend.app.services.training_policy import require_backend
+    require_backend(settings, payload.model_dump(mode="json"))
+    if payload.training_backend == "local":
+        from backend.app.api.routes.training_monitor import capabilities
+        if not capabilities()["local_training"]:
+            raise ApplicationError("local_training_not_ready", "Local training workers are not ready. Please try again later.", 503)
     dataset = dataset_service.get_dataset_or_404(db, dataset_id)
     dag_run_id = f"training-{dataset_id}-{uuid.uuid4()}"
     configuration = payload.model_dump(mode="json")
+    from backend.app.services.training_submission import existing_submission
+    existing = existing_submission(db, dataset_id, admin.id, configuration)
+    if existing is not None:
+        return TrainingRunTriggerResponse(training_run=existing, dag_id=settings.training_dag_id,
+            dag_run_id=existing.airflow_dag_run_id, airflow_response={"reused_submission": True})
     # Build selectors on the server, not from a browser-supplied SHAP ranking.
     if payload.trigger_source == "feature_drift":
         from backend.app.services import drift_monitoring

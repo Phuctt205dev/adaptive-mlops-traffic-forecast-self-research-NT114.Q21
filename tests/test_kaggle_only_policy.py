@@ -15,18 +15,17 @@ from backend.app.services import drift_monitoring, model_registry, training_exec
 
 
 class KaggleOnlyPolicyTests(unittest.TestCase):
-    def test_new_request_defaults_to_kaggle_and_rejects_local(self):
+    def test_new_request_defaults_to_kaggle_and_accepts_explicit_local(self):
         self.assertEqual(TrainingRunCreate(train_start_date='2026-01-01', train_end_date='2026-02-01').training_backend, 'kaggle')
-        with self.assertRaises(ValidationError):
-            TrainingRunCreate(train_start_date='2026-01-01', train_end_date='2026-02-01', training_backend='local')
+        self.assertEqual(TrainingRunCreate(train_start_date='2026-01-01', train_end_date='2026-02-01', training_backend='local').training_backend, 'local')
 
-    def test_service_bypass_cannot_queue_or_create_local_execution(self):
+    def test_service_bypass_cannot_queue_or_create_local_retraining(self):
         database = Mock()
         with self.assertRaises(ApplicationError):
-            model_registry.create_queued_training_run(database, uuid.uuid4(), uuid.uuid4(), {'training_backend': 'local'}, 'synthetic')
+            model_registry.create_queued_training_run(database, uuid.uuid4(), uuid.uuid4(), {'training_backend': 'local', 'trigger_source': 'feature_drift'}, 'synthetic')
         database.get.assert_not_called()
         with self.assertRaises(ApplicationError):
-            training_execution.create_execution(database, SimpleNamespace(configuration_json={'training_backend': 'local'}))
+            training_execution.create_execution(database, SimpleNamespace(configuration_json={'training_backend': 'local', 'trigger_source': 'feature_drift'}))
         database.add.assert_not_called()
 
     def test_retrain_from_local_or_missing_backend_uses_new_kaggle_configuration(self):

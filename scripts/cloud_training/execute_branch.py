@@ -37,8 +37,8 @@ PREFIX = "TRAFFIC_EXECUTION_EVENT "
 def prepare_runtime(job):
     """Resolve only the reviewed dependency location/profile, before ML imports."""
     config = job["configuration"]
-    if config.get('training_backend') != 'kaggle':
-        raise ValueError('This execution entrypoint accepts Kaggle training only.')
+    if config.get('training_backend') not in {'kaggle', 'local'}:
+        raise ValueError('Unknown training backend.')
     if config.get("training_backend") == "kaggle" and job.get("runtime_profile"):
         import importlib.metadata
         import re
@@ -70,8 +70,8 @@ def run(job, dataset, output):
     from datetime import UTC, datetime
     started = time.perf_counter()
     context, config = job["context"], job["configuration"]
-    if config.get('training_backend') != 'kaggle':
-        raise ValueError('This execution entrypoint accepts Kaggle training only.')
+    if config.get('training_backend') not in {'kaggle', 'local'}:
+        raise ValueError('Unknown training backend.')
     if (sha256_file(dataset) != job["dataset_sha256"]
             or configuration_digest(config) != context["configuration_sha256"]):
         raise ValueError("Dataset/configuration hash differs from the execution contract.")
@@ -87,6 +87,11 @@ def run(job, dataset, output):
     os.environ["MLFLOW_TRACKING_URI"] = (output / "offline-mlflow").as_uri()
     os.environ["MLFLOW_ALLOW_FILE_STORE"] = "true"
     branch, selected = context["branch"], config["selected_models"]
+    if config.get("training_backend") == "local":
+        model = job.get("local_model")
+        if model not in selected or (branch == "tree" if str(model).endswith("_lag") else branch == model) is not True:
+            raise ValueError("A Local Job must identify one selected model in this branch.")
+        selected = [model]
     if config.get("training_backend") == "kaggle" and branch in {"lstm", "gru"} and branch in selected:
         import tensorflow as tf
         if not tf.config.list_physical_devices("GPU"):

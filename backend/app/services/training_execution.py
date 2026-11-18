@@ -25,6 +25,7 @@ MODEL_BRANCH = {key: "tree" if key.endswith("_lag") else key for key in MODEL_NA
 BRANCHES = ("tree", "lstm", "gru")
 MAX_EVENTS = 500
 ERROR_MESSAGES = {
+    "admin_cancelled": "Cancelled by the administrator. Waiting for stop confirmation and cleanup.",
     "training_failed": "Training failed. The remaining work in this run is being stopped.",
     "cloud_unavailable": "Kaggle could not execute the selected job. No local fallback was started.",
     "monitoring_timeout": "Training status could not be confirmed within the monitoring time limit.",
@@ -145,10 +146,41 @@ def heartbeat(db, run_id, branch, attempt):
 
 def request_stop(db, run_id, code="monitoring_timeout"):
     record = execution(db, run_id, lock=True)
+    if code == "monitoring_timeout" and not record.cancel_requested and any(
+            value.get("provider", {}).get("phase") == "needs_attention" for value in record.branches_json.values()):
+        db.commit()
+        return False
     for branch, current in record.branches_json.items():
         if current.get("attempt_id"):
             return fail_run(db, run_id, branch, current["attempt_id"], code)
     return fail_dispatch(db, run_id)
+
+
+def request_cancel(db, run_id):
+    """Admin intent is durable; terminal cancellation requires every stop acknowledgement."""
+    record = execution(db, run_id, lock=True)
+    if record.state in {"completed", "failed", "cancelled"} or record.cancel_requested:
+        db.commit()
+        return record
+    record.cancel_requested, record.state = True, "cancelling"
+    record.error_code, record.error_message = "admin_cancelled", ERROR_MESSAGES["admin_cancelled"]
+    branches, models = copy.deepcopy(record.branches_json), copy.deepcopy(record.models_json)
+    for item in branches.values():
+        if not item.get("attempt_id"):
+            item.update(state="cancelled", stop_confirmed=True, cleanup_confirmed=True)
+    for item in models.values():
+        if item["state"] == "waiting":
+            item.update(state="cancelled", stage="not_started")
+        elif item["state"] == "running":
+            item.update(state="cancelling", stage="stop_requested")
+    record.branches_json, record.models_json = branches, models
+    add_event(record, "admin_cancel_requested", level="warning")
+    if all(v.get("cleanup_confirmed") for v in branches.values()):
+        record.state = "cancelled"
+        run = db.get(TrainingRun, run_id)
+        run.status, run.completed_at, run.error_message = TrainingRunStatus.CANCELLED, now(), "Cancelled by the administrator."
+    db.commit()
+    return record
 
 
 def progress_phase(stage, event):
@@ -442,9 +474,9 @@ def acknowledge_stop(db, run_id, branch, attempt, *, stopped, cleaned):
     record.branches_json = branches
     if all(value.get("cleanup_confirmed") and (value.get("stop_confirmed") or value["attempt_id"] is None)
            for value in branches.values()):
-        record.state = "failed"
+        record.state = "cancelled" if record.error_code == "admin_cancelled" else "failed"
         run = db.get(TrainingRun, run_id)
-        run.status, run.completed_at = TrainingRunStatus.FAILED, now()
+        run.status, run.completed_at = (TrainingRunStatus.CANCELLED if record.state == "cancelled" else TrainingRunStatus.FAILED), now()
         run.error_message = record.error_message
         add_event(record, "run_stopped_and_cleaned", level="error")
     else:
@@ -508,6 +540,10 @@ def snapshot(record, run, dataset):
     return {"training_run_id": str(run.id), "region_id": str(run.region_id), "dataset_id": str(run.dataset_id),
             "dataset": dataset.original_filename,
             "backend": record.backend, "state": record.state, "cancel_requested": record.cancel_requested,
+            "purpose": "retrain" if (run.configuration_json or {}).get("trigger_source") == "feature_drift" or (run.configuration_json or {}).get("retrain_source_model_id") else "training",
+            "retry_of": (run.configuration_json or {}).get("retry_of"),
+            "can_retry": record.state in {"failed", "cancelled"} and all(not b.get("attempt_id") or
+                (b.get("stop_confirmed") and b.get("cleanup_confirmed")) for b in record.branches_json.values()),
             "error_code": record.error_code, "error_message": record.error_message,
             "models": [{"id": key, **value} for key, value in models.items()],
             "branches": {branch: {**{key: value for key, value in item.items() if key != "provider"},
@@ -535,7 +571,7 @@ def visible_runs(db, region_id):
 
 def dismiss_error(db, run_id):
     record = execution(db, run_id, lock=True)
-    if record.state != "failed":
+    if record.state not in {"failed", "cancelled"}:
         raise ApplicationError("training_error_not_dismissible", "An active or unconfirmed stop cannot be dismissed.", 409)
     record.dismissed = True
     db.commit()

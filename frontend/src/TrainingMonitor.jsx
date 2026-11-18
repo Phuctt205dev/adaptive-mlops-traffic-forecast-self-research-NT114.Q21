@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { stages as labels, modelStatus, progressLabel, freshness } from "./trainingMonitorState";
+import AppDialog from "./AppDialog.jsx";
 
 
 const errorMessages = {
@@ -41,17 +42,26 @@ function logMessage(event) {
   return messages[event.code] || progressLabel({ stage: event.code, ...details });
 }
 
-function RunCard({ run, timezone, onDismiss, snapshotAgeSeconds }) {
+function RunCard({ run, timezone, onDismiss, snapshotAgeSeconds, capabilities }) {
   const [errorsOnly, setErrorsOnly] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const [dismissing, setDismissing] = useState(false);
   const [dismissError, setDismissError] = useState("");
+  const [action, setAction] = useState(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [stopRequested, setStopRequested] = useState(false);
+  const actionLock = useRef(false);
+  const actionRequest = useRef(null);
   const logContainer = useRef(null);
   const models = Array.isArray(run.models) ? run.models : [];
   const events = (Array.isArray(run.events) ? run.events : []).filter((event) => !errorsOnly || event.level === "error");
   const total = Math.max(1, Number(run.total_models) || models.length);
   const evaluated = Math.max(0, Math.min(total, Number(run.evaluated_models) || 0));
-  const failed = Boolean(run.error_code) || ["failed", "cancelling"].includes(run.state);
+  const failed = (Boolean(run.error_code) && run.error_code !== "admin_cancelled") || run.state === "failed";
+  const terminal = ["failed", "cancelled", "completed"].includes(run.state);
+  const phases = Object.values(run.branches || {}).map((b) => b.observation?.phase);
+  const connection = phases.includes("needs_attention") ? "needs_attention" : phases.includes("reconnecting") ? "reconnecting" : null;
   const cvCompleted = Number(run.cv_completed_models) || 0;
   const outputVerified = Number(run.output_verified_models) || 0;
 
@@ -66,11 +76,31 @@ function RunCard({ run, timezone, onDismiss, snapshotAgeSeconds }) {
     finally { setDismissing(false); }
   }
 
+  async function confirmAction() {
+    if (actionLock.current) return;
+    actionLock.current = true; setActionBusy(true); setActionError("");
+    try {
+      if (action === "stop") {
+        await api.cancelTrainingRun(run.training_run_id);
+        setStopRequested(true);
+      } else {
+        if (!actionRequest.current) actionRequest.current = crypto.randomUUID();
+        await api.retryTrainingRun(run.training_run_id, action, actionRequest.current);
+        // A new run already exists even if hiding the old card fails.
+        try { await api.dismissTrainingError(run.training_run_id); onDismiss(run.training_run_id); } catch {}
+      }
+      setAction(null);
+      actionRequest.current = null;
+    } catch (err) { setActionError(err.message || "The action could not be confirmed. Check the current run before trying again."); }
+    finally { actionLock.current = false; setActionBusy(false); }
+  }
+
   return (
     <article className={`training-monitor-card ${failed ? "training-monitor-has-error" : ""}`}>
       <div className="training-monitor-heading">
-        <div><h2>{run.dataset}</h2><p>Training on Kaggle · Snapshot {timeLabel(run.observed_at || run.updated_at, timezone)}</p></div>
-        <span className={`training-monitor-state ${failed ? "is-error" : ""}`}>{labels[run.state] || run.state}</span>
+        <div><h2>{run.dataset}</h2><p>Training on {run.backend === "local" ? "Local · RKE2 CPU" : "Kaggle"} · Snapshot {timeLabel(run.observed_at || run.updated_at, timezone)}</p>
+          {run.retry_of && <small>Retry of an earlier run · The original history is preserved</small>}</div>
+        <span className={`training-monitor-state ${failed ? "is-error" : ""}`}>{labels[!run.cancel_requested && connection ? connection : run.state] || run.state}</span>
       </div>
       {failed && <div className="training-monitor-error" role="alert">
         <strong>{errorMessages[run.error_code] || run.error_message || "Training failed. The remaining models are being stopped."}</strong>
@@ -78,6 +108,31 @@ function RunCard({ run, timezone, onDismiss, snapshotAgeSeconds }) {
         {run.state === "failed" && <button type="button" className="secondary" disabled={dismissing} onClick={dismiss}>Dismiss</button>}
       </div>}
       {dismissError && <p className="training-monitor-error" role="alert">{dismissError}</p>}
+      {connection && !run.cancel_requested && <div className="training-location-note" role="status">
+        {connection === "reconnecting" ? "Contact with Kaggle was interrupted. The last confirmed progress is shown; no duplicate training was submitted."
+          : "Kaggle's outcome could not be confirmed. Stop this run and wait for stop confirmation before starting a replacement. No Local fallback has started."}
+      </div>}
+      {run.error_code === "admin_cancelled" && <p role="status">{run.state === "cancelled"
+        ? "Cancelled by the administrator. Training has stopped and cleanup is complete."
+        : "Stop requested. Waiting for the training processes to stop and cleanup to finish."}</p>}
+      <div className="training-monitor-actions">
+        {!terminal && <button type="button" className="secondary" disabled={run.cancel_requested || stopRequested}
+          onClick={() => { setActionError(""); setAction("stop"); }}>{run.cancel_requested || stopRequested ? "Stopping…" : "Stop training"}</button>}
+        {run.can_retry && <>
+          {capabilities?.cloud_training && <button type="button" className="secondary" onClick={() => { setActionError(""); setAction("kaggle"); }}>Retry on Kaggle</button>}
+          {run.purpose !== "retrain" && capabilities?.local_training && <button type="button" className="secondary" onClick={() => { setActionError(""); setAction("local"); }}>{run.backend === "local" ? "Retry on Local" : "Train again on Local"}</button>}
+        </>}
+        {run.state === "cancelled" && <button type="button" className="secondary" disabled={dismissing} onClick={dismiss}>Dismiss</button>}
+      </div>
+      {action && <AppDialog title={action === "stop" ? "Stop this training run?" : `Start a new run on ${action === "local" ? "Local" : "Kaggle"}?`}
+        description={action === "stop" ? "All remaining models in this run will be stopped. The model currently serving predictions will continue to work."
+          : "A new run will use the original dataset, time window, model selection and configuration. The original run remains in history."}
+        onClose={() => { if (!actionBusy) setAction(null); }} busy={actionBusy}
+        footer={<><button type="button" className="secondary" disabled={actionBusy} onClick={() => setAction(null)}>Keep current state</button>
+          <button type="button" disabled={actionBusy} onClick={confirmAction}>{actionBusy ? "Sending request…" : action === "stop" ? "Stop training" : "Start new run"}</button></>}>
+        <strong>{run.dataset}</strong>
+        {actionError && <p className="alert alert-error" role="alert">{actionError}</p>}
+      </AppDialog>}
       <div className="training-monitor-summary">
         <div><span>CV finished</span><strong>{cvCompleted} <small>of {total}</small></strong><p>Past-data checks completed</p></div>
         <div><span>ML finished</span><strong>{evaluated} <small>of {total}</small></strong><p>Final training and evaluation finished</p></div>
@@ -101,7 +156,7 @@ function RunCard({ run, timezone, onDismiss, snapshotAgeSeconds }) {
           <h4>{branchNames[branch]}</h4>
           <p>Airflow heartbeat: {timeLabel(value.heartbeat_at, timezone)} · Last successful provider check: {timeLabel(value.observation?.provider_checked_at, timezone)} · Observed provider state: {value.observation?.provider_state || "Unknown"}</p>
           {value.observation?.last_failure && <p>Last provider issue: {value.observation.last_failure.diagnostic?.reason || value.observation.last_failure.category}</p>}
-          <p>Stop: {!run.cancel_requested ? "not requested" : value.stop_confirmed ? "confirmed" : value.attempt_id ? "not confirmed" : "not started"} · Kaggle cleanup: {value.observation?.telemetry?.milestones?.cleanup_confirmed ? "confirmed" : "not confirmed"} · Run staging cleanup: {value.cleanup_confirmed ? "confirmed" : "not confirmed"}</p>
+          <p>Stop: {!run.cancel_requested ? "not requested" : value.stop_confirmed ? "confirmed" : value.attempt_id ? "not confirmed" : "not started"} · Run staging cleanup: {value.cleanup_confirmed ? "confirmed" : "not confirmed"}</p>
           <table><thead><tr><th>Operation</th><th>Calls</th><th>Total seconds</th><th>Bytes attempted</th></tr></thead><tbody>
             {Object.entries(value.observation?.telemetry?.operations || {}).map(([name, measure]) => <tr key={name}><td>{name.replaceAll("_", " ")}</td><td>{measure.count}</td><td>{Number(measure.seconds).toFixed(2)}</td><td>{measure.bytes || "—"}</td></tr>)}
           </tbody></table>
@@ -133,7 +188,17 @@ export default function TrainingMonitor({ region, enabled }) {
   const [items, setItems] = useState([]);
   const [error, setError] = useState("");
   const [receivedAt, setReceivedAt] = useState(null);
+  const [capabilities, setCapabilities] = useState(null);
   const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const controller = new AbortController();
+    api.trainingCapabilities({ signal: controller.signal }).then((value) => {
+      if (!controller.signal.aborted) setCapabilities(value);
+    }).catch(() => {});
+    return () => controller.abort();
+  }, [enabled]);
 
   useEffect(() => {
     if (!enabled || !items.length) return undefined;
@@ -177,6 +242,7 @@ export default function TrainingMonitor({ region, enabled }) {
   return <div className="training-monitor">
     {error && <div className="training-monitor-error" role="alert">{error}{receivedAt && ` Last received: ${timeLabel(receivedAt.time, region?.timezone)}.`}</div>}
     {items.map((run) => <RunCard key={run.training_run_id} run={run} timezone={region?.timezone}
+      capabilities={capabilities}
       snapshotAgeSeconds={receivedAt ? Math.max(0, performance.now() - receivedAt.clock) / 1000 : 0}
       onDismiss={(id) => setItems((current) => current.filter((item) => item.training_run_id !== id))} />)}
   </div>;

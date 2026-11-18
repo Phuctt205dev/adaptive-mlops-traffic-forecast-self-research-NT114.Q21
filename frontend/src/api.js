@@ -133,6 +133,10 @@ export const api = {
   trainingCapabilities: (options = {}) => apiRequest('/admin/training-monitor/capabilities', options),
   trainingMonitor: (regionId, options = {}) => apiRequest(`/admin/regions/${regionId}/training-monitor`, options),
   dismissTrainingError: (runId) => apiRequest(`/admin/training-monitor/${runId}/dismiss`, { method: 'POST' }),
+  cancelTrainingRun: (runId) => apiRequest(`/admin/training-monitor/${runId}/cancel`, { method: 'POST' }),
+  retryTrainingRun: (runId, backend, requestId) => apiRequest(`/admin/training-monitor/${runId}/retry`, {
+    method: 'POST', body: JSON.stringify({ training_backend: backend, request_id: requestId }),
+  }),
   modelVersion: (modelVersionId) =>
     apiRequest(`/admin/model-versions/${modelVersionId}`),
   modelVersions: (regionId) =>

@@ -32,7 +32,9 @@ def source_timing(event):
         raise ValueError("Incomplete source timing.")
     if present:
         elapsed = event["source_elapsed_seconds"]
-        if (not isinstance(event["source_clock"], str) or event["source_clock"] not in SOURCE_CLOCKS
+        if (not isinstance(event["source_clock"], str) or not (event["source_clock"] in SOURCE_CLOCKS
+                or (event["source_clock"].startswith("local_") and len(event["source_clock"]) == 30
+                    and all(c in "0123456789abcdef" for c in event["source_clock"][6:])))
                 or type(elapsed) not in (int, float) or not math.isfinite(elapsed) or not 0 <= elapsed <= 7 * 86400):
             raise ValueError("Invalid source timing.")
     for key in ({"source_time"} | RELAY_FIELDS).intersection(event):

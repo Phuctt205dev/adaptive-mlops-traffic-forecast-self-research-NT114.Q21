@@ -3,6 +3,7 @@ export const stages = {
   waiting: "Waiting", running: "In progress", evaluated: "ML finished", failed: "Failed",
   cancelling: "Stopping", cancelled: "Stopped", queued: "Waiting to be scheduled",
   finalizing: "Saving results", completed: "Completed", preparing: "Preparing data",
+  reconnecting: "Reconnecting to Kaggle", needs_attention: "Needs attention",
   waiting_cloud: "Waiting for Kaggle", model_started: "Starting model checks",
   fold_started: "Checking on past data", fold_completed: "Data check finished",
   epoch_started: "Learning", epoch_completed: "Learning round finished",
@@ -14,6 +15,8 @@ export const stages = {
 };
 
 export const providerPhases = {
+  waiting_resources: "Waiting for RKE2 resources", local_running: "Training on RKE2",
+  reconnecting: "Reconnecting to Kaggle", needs_attention: "Connection needs attention",
   prepare_input: "Preparing input", input_upload: "Uploading input", input_processing: "Kaggle is preparing input",
   notebook_submit: "Submitting to Kaggle", provider_wait: "Submitted · Waiting for Kaggle progress",
   supervisor_started: "Starting the Kaggle environment", child_running: "Starting the training process",
@@ -43,6 +46,8 @@ export function modelStatus(run, model) {
   if (["failed", "cancelling", "cancelled"].includes(model.state)) return stages[model.state];
   const phase = branch.observation?.phase;
   if (model.stage === "output_verified") return stages.output_verified;
+  if (run.backend === "local" && model.ml_completed && ["waiting_resources", "local_running"].includes(phase)) return stages.model_evaluated;
+  if (["reconnecting", "needs_attention", "waiting_resources"].includes(phase) && !model.ml_completed && !["failed", "cancelled", "cancelling"].includes(run.state)) return providerPhases[phase];
   if (model.ml_completed && providerPhases[phase]) return providerPhases[phase];
   if (!model.last_ml_received_at && ["queued", "waiting_cloud", "preparing"].includes(model.stage)) {
     if (branch.observation?.provider_state === "QUEUED") return "Queued on Kaggle";

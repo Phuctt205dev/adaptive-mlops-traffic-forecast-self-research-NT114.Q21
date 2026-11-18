@@ -178,7 +178,21 @@ def operation(api, name, request, stdout):
         version = response.version_number
         if type(version) is not int or version < 1:
             raise ValueError("Notebook version was not confirmed.")
-        return {"version": version}
+        from src.cloud_training.kaggle_probe_client import KaggleProbeClient
+        metadata = json.loads((Path(request["directory"]) / "kernel-metadata.json").read_text())
+        session_id = KaggleProbeClient.response_session_id(response, metadata["id"])
+        return {"version": version, **({"session_id": session_id} if session_id is not None else {})}
+    if name == "cancel_session":
+        from kagglesdk.kernels.types.kernels_api_service import ApiCancelKernelSessionRequest
+        info = kernel(api, request["reference"])
+        owner_slug = "/".join(request["reference"].split("/")[:2])
+        if info["ref"] != owner_slug or info["is_private"] is not True or type(request.get("session_id")) is not int or request["session_id"] < 1:
+            raise ValueError("Kaggle cancellation identity differs.")
+        query = ApiCancelKernelSessionRequest()
+        query.kernel_session_id = request["session_id"]
+        with api.build_kaggle_client() as client:
+            client.kernels.kernels_api_client.cancel_kernel_session(query)
+        return {"requested": True}
     if name == "status":
         from src.cloud_training.probe import safe_status
         return {"state": safe_status(api.kernels_status(request["reference"]).status)}

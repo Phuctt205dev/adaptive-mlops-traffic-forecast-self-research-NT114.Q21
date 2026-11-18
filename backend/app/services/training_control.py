@@ -13,6 +13,7 @@ import threading
 import time
 import traceback
 import uuid
+from contextlib import contextmanager
 
 from sqlalchemy import select
 
@@ -21,11 +22,12 @@ from backend.app.db.models import TrainingRun
 from backend.app.db.training_execution import TrainingExecution
 from backend.app.services import training_execution as state
 from src.cloud_training.artifacts import read_bundle
-from src.cloud_training.kaggle_execution import KaggleExecution, TrainingCancelled, initial_ledger
+from src.cloud_training.kaggle_execution import KaggleExecution, ProviderUncertain, TrainingCancelled, initial_ledger
 from src.cloud_training.kaggle_transport import ProviderError, SDKTransport
 from src.cloud_training.package import configuration_digest, prepare_package
 from src.cloud_training.process import ExecutionProcess, cleanup_execution, execution_directory
 from src.cloud_training.telemetry import operation_timing
+from src.local_training.execution import LocalExecution, initial_ledger as local_ledger
 
 
 def failure_facts(error, phase, branch):
@@ -92,6 +94,18 @@ class WorkerController:
         with self.sessions() as db:
             state.update_provider(db, run_id, branch, attempt, value)
 
+    @contextmanager
+    def local_admission(self):
+        from sqlalchemy import text
+        with self.sessions() as db:
+            if db.get_bind().dialect.name != "postgresql":
+                raise RuntimeError("Local resource admission requires PostgreSQL advisory locking.")
+            admitted = db.scalar(text("SELECT pg_try_advisory_xact_lock(73918046701)"))
+            try:
+                yield bool(admitted)
+            finally:
+                db.rollback()  # Releases the lock even when a Kubernetes reply is lost.
+
     def start(self, run_id, branch):
         if not self.owns(branch):
             raise ApplicationError("worker_role_mismatch", "Wrong worker role for this branch.", 409)
@@ -104,16 +118,17 @@ class WorkerController:
             state.assert_open(record)
             from backend.app.services.training_policy import cloud_configuration
             cloud_configuration(run.configuration_json or {})
-            if record.backend != "kaggle":
-                raise ApplicationError("local_training_removed", "This worker accepts Kaggle training only.", 422)
+            if record.backend == "local":
+                from backend.app.services.training_policy import require_backend
+                require_backend(self.training.get_settings(), run.configuration_json)
             current = record.branches_json[branch]
             if current.get("attempt_id"):
                 if current["state"] not in {"ready", "skipped"} and key not in self.handles:
                     raise ApplicationError("training_recovery_pending", "This attempt needs recovery before more work.", 409)
                 return self.response(db, run_id, branch)
-            pending = db.scalars(select(TrainingExecution).where(TrainingExecution.cancel_requested.is_(True),
-                                 TrainingExecution.state != "completed")).all()
+            pending = db.scalars(select(TrainingExecution).where(TrainingExecution.state != "completed")).all()
             if any(self.owns(name) and item.get("attempt_id") and not item.get("cleanup_confirmed")
+                   and (pending_run.cancel_requested or item.get("provider", {}).get("phase") == "needs_attention")
                    for pending_run in pending for name, item in pending_run.branches_json.items()):
                 raise ApplicationError("training_recovery_pending", "An earlier attempt is still being stopped or cleaned.", 503)
             joining = (self.role == "recurrent" and self._lease_run_id == str(run_id)
@@ -132,7 +147,8 @@ class WorkerController:
                     self.status_state["active_cloud_branches"] = self._lease_count
                     self.status_state["operation_count"] += 1
                 handle = {"attempt_id": current["attempt_id"], "process": None, "provider": None,
-                          "lease_owned": True, "stopped": False, "thread": None, "failed": False, "barrier": None}
+                          "lease_owned": True, "stopped": False, "thread": None, "failed": False, "barrier": None,
+                          "backend": record.backend}
                 self.handles[key] = handle
                 thread = threading.Thread(target=self.execute, args=(run_id, branch, handle), daemon=True)
                 handle["thread"] = thread
@@ -192,8 +208,9 @@ class WorkerController:
         progress = lambda event: self.progress(run_id, branch, attempt, event)
         directory = execution_directory(self.root, str(run_id), branch, attempt)
         phase = 'prepare_input'
+        backend = handle.get("backend", "kaggle")
         preparation_start = time.monotonic()
-        preparation = {"backend": "kaggle", "phase": "prepare_input", "telemetry": {}}
+        preparation = {"backend": handle.get("backend", "kaggle"), "phase": "prepare_input", "telemetry": {}}
         attempt_transport = None
         try:
             self.save_provider(run_id, branch, attempt, preparation)
@@ -209,8 +226,6 @@ class WorkerController:
                            "branch": branch, "attempt_id": attempt,
                            "configuration_sha256": configuration_digest(configuration)}
                 backend = state.execution(db, run_id).backend
-                if backend != "kaggle":
-                    raise ApplicationError("local_training_removed", "This worker accepts Kaggle training only.", 422)
                 skip = not any(state.MODEL_BRANCH.get(name) == branch for name in configuration["selected_models"])
                 profile = None
                 if backend == "kaggle" and not skip:
@@ -242,6 +257,18 @@ class WorkerController:
                 result = {"branch": branch, "status": "skipped", "candidates": []}
                 handle["stopped"] = True
                 self.save_provider(run_id, branch, attempt, {"backend": backend, "skipped": True, "started": False})
+            elif backend == "local":
+                phase = 'local_execution'
+                ledger = local_ledger(snapshot)
+                ledger["telemetry"] = preparation["telemetry"]
+                self.save_provider(run_id, branch, attempt, ledger)
+                provider = LocalExecution(self.bridge.store, directory, ledger,
+                    lambda value: self.save_provider(run_id, branch, attempt, value), self.training.get_settings(), admission=self.local_admission)
+                handle["provider"] = provider
+                result = provider.run(progress, cancelled)
+                handle["stopped"] = True
+                if not provider.cleanup():
+                    raise RuntimeError("Local staging cleanup is not confirmed.")
             elif backend == "kaggle":
                 if not self.username or not self.training.get_settings().cloud_training_enabled:
                     raise ApplicationError("cloud_training_not_ready", "Cloud execution is not configured on this worker.", 503)
@@ -292,6 +319,12 @@ class WorkerController:
                 provider.phase("branch_ready")
             cleanup_execution(self.root, str(run_id), branch, attempt)
         except Exception as error:
+            if isinstance(error, ProviderUncertain):
+                # Keep both the durable attempt and the worker slot. A network
+                # failure is not a stop acknowledgement or permission to refit.
+                if handle["provider"] is not None:
+                    handle["provider"].phase("needs_attention")
+                return
             handle["failed"] = True
             # A pre-provider packaging error otherwise leaves only the generic
             # browser message. Preserve its location without logging payloads.
@@ -315,7 +348,7 @@ class WorkerController:
             with self.sessions() as db:
                 db.rollback()
                 state.fail_run(db, run_id, branch, attempt,
-                               "cloud_unavailable" if handle["provider"] is not None and not (
+                               "cloud_unavailable" if backend == "kaggle" and handle["provider"] is not None and not (
                                    isinstance(error, ProviderError) and error.category == "ml_execution_failed") else "training_failed")
             # Watcher retries network/cleanup failures without making a new fit.
         finally:
@@ -424,6 +457,9 @@ class WorkerController:
                     with self.handles_lock:
                         handle = self.handles.get(key)
                     running_thread = handle and handle["thread"] and handle["thread"].is_alive()
+                    if (current.get("provider", {}).get("phase") == "needs_attention"
+                            and not record.cancel_requested):
+                        continue
                     if (recovery and record.state not in {"completed", "failed"}
                             and current.get("worker") != self.worker):
                         state.fail_run(db, run_id, branch, attempt, "worker_restarted")
@@ -448,7 +484,12 @@ class WorkerController:
                 try:
                     directory = execution_directory(self.root, str(run_id), branch, attempt)
                     stopped = bool(handle and handle["stopped"])
-                    if provider_journal["backend"] == "kaggle" and provider_journal.get("snapshot"):
+                    if provider_journal["backend"] == "local" and provider_journal.get("snapshot"):
+                        provider = LocalExecution(self.bridge.store, directory, provider_journal,
+                            lambda value, r=run_id, b=branch, a=attempt: self.save_provider(r, b, a, value), self.training.get_settings())
+                        stopped = provider.stop()
+                        cleaned_cloud = stopped and provider.cleanup()
+                    elif provider_journal["backend"] == "kaggle" and provider_journal.get("snapshot"):
                         directory.mkdir(parents=True, exist_ok=True)
                         attempt_transport = self.transport.fork() if hasattr(self.transport, "fork") else self.transport
                         provider = KaggleExecution(attempt_transport, directory, provider_journal,
@@ -511,6 +552,8 @@ class WorkerController:
             with self.sessions() as db:
                 record = state.execution(db, run_id)
                 for branch, current in record.branches_json.items():
+                    if current.get("provider", {}).get("phase") == "needs_attention" and not record.cancel_requested:
+                        continue
                     if self.owns(branch) and current.get("attempt_id") and current.get("worker") != self.worker:
                         state.fail_run(db, run_id, branch, current["attempt_id"], "worker_restarted")
                         break

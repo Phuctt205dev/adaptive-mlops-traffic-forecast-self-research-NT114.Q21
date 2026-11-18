@@ -1,4 +1,5 @@
 from xgboost import XGBRegressor
+from src.models.cpu_budget import training_threads
 
 
 def build_original_xgboost(random_state):
@@ -25,6 +26,6 @@ def build_autoregressive_xgboost(random_state):
         reg_lambda=1.0,
         objective="reg:squarederror",
         random_state=random_state,
-        n_jobs=-1,
+        n_jobs=training_threads(),
         tree_method="hist",
     )

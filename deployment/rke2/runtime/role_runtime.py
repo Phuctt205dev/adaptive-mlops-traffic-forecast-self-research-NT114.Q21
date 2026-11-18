@@ -44,7 +44,7 @@ def build_app(root=ROOT):
             c = capabilities()
             return {'status': 'ok', 'revision': 'cloud-training-v1', 'bundle_id': document['bundle_id'],
                     'execution_control': c['execution_control'], 'cloud_enabled': c['cloud_training'],
-                    'local_training': False, 'neural_shap_supported': True}
+                    'local_training': c['local_training'], 'neural_shap_supported': True}
         @app.get(prefix + '/shap', include_in_schema=False)
         def shap_health():
             return {'status': 'ok', 'feature_importance_ready': True, 'neural_shap_supported': True,

@@ -1,4 +1,5 @@
 from sklearn.ensemble import RandomForestRegressor
+from src.models.cpu_budget import training_threads
 
 
 def build_original_random_forest(random_state):
@@ -14,5 +15,5 @@ def build_autoregressive_random_forest(random_state):
     return RandomForestRegressor(
         n_estimators=100,
         random_state=random_state,
-        n_jobs=-1,
+        n_jobs=training_threads(),
     )

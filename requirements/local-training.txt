@@ -1,0 +1,9 @@
+# CPU-only execution image. Versions match the current serving role contracts.
+-c roles/constraints.txt
+-r roles/tree.txt
+-r roles/neural.txt
+shap==0.50.0
+boto3==1.43.36
+requests==2.34.2
+matplotlib==3.11.0
+mlflow==3.14.0

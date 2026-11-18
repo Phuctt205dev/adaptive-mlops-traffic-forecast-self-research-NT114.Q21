@@ -19,10 +19,13 @@ class ExecutionProcess:
         self.events = queue.Queue(maxsize=1000)
         self.reader_failed = False
         environment = dict(os.environ)
+        budget = environment.get("TRAFFIC_LOCAL_CPU_THREADS", "1")
+        if budget not in {"1", "2"}:
+            raise ValueError("Invalid execution CPU budget.")
         environment["TRAFFIC_EXECUTION_PARENT_PID"] = str(os.getpid())
         for key in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS",
                     "TF_NUM_INTEROP_THREADS", "TF_NUM_INTRAOP_THREADS"):
-            environment[key] = "1"
+            environment[key] = budget
         self.process = subprocess.Popen(command, cwd=cwd, env=environment, stdin=stdin, stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
                                         start_new_session=os.name != "nt",

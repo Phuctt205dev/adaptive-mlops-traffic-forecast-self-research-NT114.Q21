@@ -90,7 +90,7 @@ def request_stop(conf, *, send=post):
 
 
 def train(conf, branch, *, send=post, sleep=time.sleep, clock=time.monotonic, log=print):
-    if branch not in {"tree", "lstm", "gru"} or conf.get("training_backend") != "kaggle" or conf.get("_execution_protocol") != 2:
+    if branch not in {"tree", "lstm", "gru"} or conf.get("training_backend") not in {"kaggle", "local"} or conf.get("_execution_protocol") != 2:
         raise ValueError("Invalid controlled training branch/backend.")
     role = "tree" if branch == "tree" else "recurrent"
     path = f"/training-runs/{conf['training_run_id']}/control/{branch}"
@@ -167,8 +167,8 @@ def train(conf, branch, *, send=post, sleep=time.sleep, clock=time.monotonic, lo
 
 
 def finalize(conf, receipts, *, send=post, sleep=time.sleep):
-    if conf.get('training_backend') != 'kaggle' or conf.get('_execution_protocol') != 2:
-        raise ValueError('This finalizer accepts controlled Kaggle training only.')
+    if conf.get('training_backend') not in {'kaggle', 'local'} or conf.get('_execution_protocol') != 2:
+        raise ValueError('This finalizer requires controlled Kaggle or Local training.')
     if set(receipts) != {"tree", "lstm", "gru"}:
         raise ValueError("All three branch receipts are required.")
     for branch, receipt in receipts.items():

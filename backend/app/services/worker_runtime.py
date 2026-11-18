@@ -1,4 +1,4 @@
-"""Kaggle-only worker HTTP contract, without legacy fit or serving imports."""
+"""Controlled worker HTTP contract; fits run in Kaggle sessions or isolated Jobs."""
 import hmac,importlib,json,os,re,threading,uuid
 import time
 from pathlib import Path
@@ -104,8 +104,8 @@ def add_control(app, base, operation_lock, project, finalizer):
                     return {"training_run_id": str(run.id), "training_run_status": "completed",
                             "model_version_id": str(version.id), "model_version": version.version,
                             "execution_worker": {**identity, "control_revision": "cloud-training-v1"}}
-                if record.backend != 'kaggle':
-                    raise training.ApplicationError('local_training_removed', 'This worker finalizes Kaggle training only.', 422)
+                if record.backend not in {'kaggle', 'local'}:
+                    raise training.ApplicationError('training_backend_invalid', 'Unknown training backend.', 422)
                 state.publication_gate(db, run_id)
                 expected = {branch: item.get("receipt") for branch, item in record.branches_json.items()}
                 if payload["artifact_receipts"] != expected:
@@ -134,6 +134,18 @@ def add_control(app, base, operation_lock, project, finalizer):
             operation_lock.release()
 
     app.include_router(router, prefix="/api/v1/internal")
+
+    @app.get("/health/local-training")
+    def local_health():
+        from backend.app.services.training_policy import local_ready
+        from src.local_training.kubernetes import Kubernetes
+        ready = local_ready(settings)
+        if ready:
+            try:
+                ready = Kubernetes(settings.local_training_namespace).probe()
+            except Exception:
+                ready = False
+        return {"local_training": ready, "image": settings.local_training_image if ready else None}
 
     @app.get("/health/cloud-training")
     def health():

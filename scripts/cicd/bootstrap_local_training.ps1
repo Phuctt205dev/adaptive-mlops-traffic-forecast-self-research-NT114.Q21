@@ -14,7 +14,7 @@ if ($Action -eq 'Apply' -and (!$ReviewedSha256 -or $ReviewedSha256.ToLowerInvari
     throw 'Review the fixed bootstrap manifest and supply its exact SHA256 from Plan before Apply.'
 }
 $configPath = (Resolve-Path -LiteralPath $Kubeconfig).Path
-$kubectl = (Get-Command kubectl -CommandType Application -ErrorAction SilentlyContinue).Source
+$kubectl = (Get-Command kubectl -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
 if (!$kubectl) {
     $kubectl = Join-Path $env:LOCALAPPDATA 'Programs\kubectl\kubectl.exe'
     if (!(Test-Path -LiteralPath $kubectl -PathType Leaf)) { throw 'kubectl is unavailable.' }

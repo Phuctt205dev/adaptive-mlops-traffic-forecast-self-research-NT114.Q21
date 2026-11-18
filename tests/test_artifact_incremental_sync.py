@@ -1,6 +1,8 @@
 from contextlib import nullcontext
 import hashlib
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -87,6 +89,70 @@ class ManagedDiskSyncTests(unittest.TestCase):
         self.client.head_object.side_effect=lambda **kw:self.remote[kw['Key']]
 
     def cycle(self):return uploader.upload_cycle(self.root,state=self.state)
+
+    def reader_state(self):
+        # A second process models the API container sharing the uploader's
+        # volume. A thread in this process would reuse the reentrant lock.
+        code = '''
+from pathlib import Path
+import sys
+from backend.app.services.serving_runtime import PredictionRuntime
+root=Path(sys.argv[1])
+runtime=PredictionRuntime(RuntimeError,lambda path:Path(path).read_bytes(),root=root,client=object())
+hold=runtime.disk_cache.hold
+runtime.disk_cache.hold=lambda:hold(timeout=.1)
+try:
+    assert runtime.load_model(root/'model.pkl') == b'first'
+    print('readable')
+except TimeoutError:
+    print('blocked')
+'''
+        response = subprocess.run([sys.executable, '-B', '-c', code, str(self.file.parent)],
+                                  capture_output=True, text=True, timeout=15)
+        self.assertEqual(response.returncode, 0, response.stderr)
+        return response.stdout.strip().splitlines()[-1]
+
+    def add_dataset(self):
+        path = self.root / 'data/source.csv'
+        path.parent.mkdir()
+        path.write_bytes(b'synthetic dataset')
+
+    def test_api_can_load_model_while_background_cycle_uploads_dataset(self):
+        self.add_dataset()
+        observations = {}
+
+        def upload(filename, bucket, key, **kwargs):
+            observations[key] = self.reader_state()
+            self.upload(filename, bucket, key, **kwargs)
+
+        self.client.upload_file.side_effect = upload
+        self.assertEqual(self.cycle(), 2)
+        self.assertEqual(observations, {'models/model.pkl': 'blocked', 'data/source.csv': 'readable'})
+
+    def test_retirement_flush_keeps_snapshot_locked_during_dataset_upload(self):
+        self.add_dataset()
+        observations = []
+
+        def upload(filename, bucket, key, **kwargs):
+            observations.append(self.reader_state())
+            self.upload(filename, bucket, key, **kwargs)
+
+        self.client.upload_file.side_effect = upload
+        proof = sync.flush(self.root, module=uploader, state=self.state)
+        self.assertTrue(proof['complete'])
+        self.assertEqual(proof['acknowledged_files'], 2)
+        self.assertEqual(observations, ['blocked', 'blocked'])
+
+    def test_model_upload_failure_releases_lock_without_acknowledging(self):
+        def fail(*args, **kwargs):
+            self.assertEqual(self.reader_state(), 'blocked')
+            raise RuntimeError('synthetic provider outage')
+
+        self.client.upload_file.side_effect = fail
+        with self.assertRaisesRegex(RuntimeError, 'synthetic provider outage'):
+            self.cycle()
+        self.assertFalse(self.state.acknowledged)
+        self.assertEqual(self.reader_state(), 'readable')
 
     def test_uploaded_files_become_evictable_only_after_stable_ack(self):
         self.assertEqual(self.cycle(),1)

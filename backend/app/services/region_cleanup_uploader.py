@@ -1,4 +1,5 @@
 """Cache upload cycle coordinated with region deletion (also used by RKE2)."""
+from contextlib import nullcontext
 from pathlib import Path
 from functools import lru_cache
 import json
@@ -68,17 +69,18 @@ def file_fingerprint(path):
 
 def upload_cycle(root='/cache', *, state=None,prune=False):
     cache=configured(Path(root)/'models')
-    if cache:
+    # Background sync must not hold the model lock while scanning/uploading
+    # unrelated datasets and reports. Explicit retirement flush still holds
+    # its own lock around the complete before/upload/after inventory.
+    uploaded=_upload_cycle(root,state=state,cache=cache)
+    if cache and prune:
         with cache.hold():
-            uploaded=_upload_cycle(root,state=state,cache=cache)
-            if prune:
-                with database_barrier(engine):
-                    with SessionLocal() as db:
-                        if pending_cleanup(db) is not None:return uploaded
-                    pins={key.removeprefix('models/') for key in bootstrap_keys()}
-                    cache.make_room(0,pinned=pins,client=get_upload_client(),bucket=os.environ['TRAFFIC_API_RUNTIME_BUCKET'])
-            return uploaded
-    return _upload_cycle(root,state=state)
+            with database_barrier(engine):
+                with SessionLocal() as db:
+                    if pending_cleanup(db) is not None:return uploaded
+                pins={key.removeprefix('models/') for key in bootstrap_keys()}
+                cache.make_room(0,pinned=pins,client=get_upload_client(),bucket=os.environ['TRAFFIC_API_RUNTIME_BUCKET'])
+    return uploaded
 
 
 def _upload_cycle(root,*,state=None,cache=None):
@@ -110,7 +112,9 @@ def _upload_cycle(root,*,state=None,cache=None):
             model=bool(cache and path.is_relative_to(cache.root) and path.suffix.lower() in MODEL_BINARIES)
             # Each object is protected until success or multipart abort, but a
             # whole 1+ GiB cache cycle can no longer starve an admin deletion.
-            with database_barrier(engine) as connection:
+            # Keep cache-before-DB lock ordering for model transfer, checksum
+            # and acknowledgement. Eviction/readers cannot race this file.
+            with (cache.hold() if model else nullcontext()), database_barrier(engine) as connection:
                 with SessionLocal() as db:
                     if pending_cleanup(db) is not None:
                         return count

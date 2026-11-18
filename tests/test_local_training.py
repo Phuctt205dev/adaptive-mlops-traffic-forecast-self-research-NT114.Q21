@@ -201,6 +201,8 @@ class LocalExecutionTests(unittest.TestCase):
             pod = spec["template"]["spec"]
             self.assertEqual(spec["backoffLimit"], 0)
             self.assertFalse(pod["automountServiceAccountToken"])
+            environment = {e["name"]: e.get("value") for e in pod["containers"][0]["env"]}
+            self.assertEqual(environment["S3_ENDPOINT_URL"], self.settings.s3_endpoint_url)
             self.assertEqual(pod["containers"][0]["resources"]["requests"]["memory"], "3072Mi")
             self.assertEqual(pod["affinity"]["podAntiAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][0]["topologyKey"], "kubernetes.io/hostname")
             self.assertEqual(pod["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchExpressions"][0]["values"], ["mlops-node-02", "mlops-node-03"])

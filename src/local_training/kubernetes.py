@@ -1,7 +1,6 @@
 """Small in-cluster batch client with namespace/ownership checks and bounded IO."""
 import hashlib
 import json
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -41,12 +40,11 @@ def manifest(settings, context, model, prefix, bucket):
     labels = {LABEL: "true", "traffic.mlops/execution": fingerprint[:40]}
     environment = {"LOCAL_INPUT_PREFIX": prefix, "LOCAL_MODEL": model,
                    "LOCAL_BUCKET": bucket, "LOCAL_CONTEXT": json.dumps(context),
+                   "S3_ENDPOINT_URL": settings.s3_endpoint_url,
+                   "AWS_DEFAULT_REGION": settings.aws_default_region,
                    "TRAFFIC_LOCAL_CPU_THREADS": str(settings.local_training_cpu),
                    "PYTHONUNBUFFERED": "1", "PYTHONDONTWRITEBYTECODE": "1",
                    "CUDA_VISIBLE_DEVICES": "-1"}
-    for key in ("S3_ENDPOINT_URL", "AWS_DEFAULT_REGION"):
-        if os.environ.get(key):
-            environment[key] = os.environ[key]
     env = [{"name": k, "value": v} for k, v in environment.items()]
     for key, secret in (("AWS_ACCESS_KEY_ID", "MINIO_ROOT_USER"), ("AWS_SECRET_ACCESS_KEY", "MINIO_ROOT_PASSWORD")):
         env.append({"name": key, "valueFrom": {"secretKeyRef": {"name": "traffic-secrets", "key": secret}}})

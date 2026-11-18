@@ -41,7 +41,7 @@ def main():
     inputs, sources, output = work / "input", work / "source", work / "output"
     inputs.mkdir(exist_ok=False)
     sources.mkdir(exist_ok=False)
-    client = boto3.client("s3", endpoint_url=os.environ.get("S3_ENDPOINT_URL"), config=Config(
+    client = boto3.client("s3", endpoint_url=os.environ["S3_ENDPOINT_URL"], config=Config(
         connect_timeout=5, read_timeout=20, retries={"max_attempts": 2, "mode": "standard"}))
     snapshot_path = work / "snapshot.json"
     get_file(client, bucket, prefix + "snapshot.json", snapshot_path, 1024 * 1024)

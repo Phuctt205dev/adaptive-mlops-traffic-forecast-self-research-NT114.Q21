@@ -87,10 +87,15 @@ và suite được yêu cầu. Proof legacy vẫn đọc được để phục h
 sửa/bỏ hash của proof cũ. Rerun phải dùng **Re-run all jobs**: artifact mới
 ghi đè đúng tên trong cùng run, nhưng attempt cũ không được ghép với attempt mới.
 
-Scope `traffic-application-scope/v3` tách lựa chọn full khỏi tác động của file:
-push luôn daily; manual chọn full hoặc lịch tuần mới tạo cụm. Reader v1/v2
+Scope `traffic-application-scope/v4` kế thừa lựa chọn full của v3 và gắn thêm
+inventory image đúng thời điểm kiểm: push luôn daily; manual chọn full hoặc
+lịch tuần mới tạo cụm. Reader v1/v2/v3
 giữ chính sách cũ và không diễn giải lại proof đã phát hành thành coverage nhẹ
-hơn. Scope v3 không được khai full cho push hoặc daily cho lịch kiểm định kỳ.
+hơn. Scope v3/v4 không được khai full cho push hoặc daily cho lịch kiểm định kỳ.
+Matrix image được sinh từ `deployment/cicd/components.json`; execution image
+có digest riêng, được dùng lại nếu đầu vào/check profile không đổi. Xem
+[thành phần và Local Job](COMPONENT_DELIVERY.md). Bootstrap Local và enable
+là các bước có review; mỗi push không chạy một lượt training thử.
 
 ## 3. Build khác với deploy
 

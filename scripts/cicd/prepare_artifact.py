@@ -235,7 +235,8 @@ def extract_and_verify(zip_path, stage, commit, deadline):
     release = verify(package, expected_commit=commit)
     bound = json.loads(binding_path.read_bytes())
     images = validate_delivery(release, bound)
-    wanted = {role: deployment_id(render(role, slots[0], images, directory=package)) for role, slots in SLOTS.items()}
+    wanted = {role: deployment_id(render(role, slots[0], images, directory=package,
+              executors=bound.get('executors') if release['schema']=='traffic-release/v3' else None)) for role, slots in SLOTS.items()}
     if bound.get('runtime_contract') != CONTRACT or bound.get('deployments') != wanted:
         raise PreparationError('deployment_binding_mismatch')
     deadline.timeout()

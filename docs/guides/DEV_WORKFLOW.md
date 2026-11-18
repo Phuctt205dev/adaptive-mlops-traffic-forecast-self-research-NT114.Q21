@@ -1,8 +1,10 @@
 # Cập nhật code qua PR
 
 Mục tiêu: dev nhận phản hồi sớm, cập nhật qua cùng một workflow và giảm các
-lệnh triển khai thủ công. Component registry/Add/Remove workload được hoãn;
-hướng dẫn này áp dụng cho các thành phần hiện có.
+lệnh triển khai thủ công. Danh sách image ở `deployment/cicd/components.json`
+giữ bốn role và mẫu execution image theo nhu cầu. Cách thêm thành phần theo
+mẫu, bootstrap Local một lần và giới hạn loại workload được mô tả trong
+[COMPONENT_DELIVERY](COMPONENT_DELIVERY.md). Registry không tự prune hạ tầng/dữ liệu.
 
 ## Luồng cập nhật thường ngày
 

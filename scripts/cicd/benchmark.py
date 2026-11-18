@@ -125,7 +125,7 @@ def measure(run, jobs, *, scope=None, receipt=None, commit_at=None, context=None
         raise ValueError('Only PR measurements have a separate tested merge commit')
     inferred, coverage, required = scope_profile(scope,tested_commit or run['head_sha'])
     # Exclude orchestration summary and reusable deployment jobs from CI time.
-    ci = [j for j in jobs if j['name'] in CI_JOBS]
+    ci = [j for j in jobs if j['name'] in CI_JOBS or j['name'] in required]
     acceptance = [j for j in ci if j['name'] == 'acceptance']
     ci_ok = bool(required) and all(len(matches := [j for j in ci if j['name'] == n]) == 1
                                  and matches[0].get('conclusion') == 'success'
@@ -142,6 +142,11 @@ def measure(run, jobs, *, scope=None, receipt=None, commit_at=None, context=None
             reused = 'Pull previously checked immutable image' in successful
             built = 'Publish only after image checks pass' in successful
             images[job['name'][7:-1]] = 'reuse' if reused and not built else 'build' if built and not reused else 'unknown'
+        elif job['name'].startswith('executor-image ('):
+            successful = {s['name'] for s in job.get('steps',[]) if s.get('conclusion') == 'success'}
+            built = 'Publish only after executor checks pass' in successful
+            reused = 'Confirm the immutable executor digest' in successful and not built
+            images[job['name'][len('executor-image ('):-1]] = 'reuse' if reused else 'build' if built else 'unknown'
     image_mode = ('none' if not images else next(iter(set(images.values())))
                   if len(set(images.values())) == 1 else 'mixed')
     outcome, deployed_at, recovery = 'not_observed', None, None

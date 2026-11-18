@@ -8,7 +8,8 @@ from urllib.request import Request, urlopen
 
 
 def lookup(image, role, source_id):
-    if not re.fullmatch(r'ghcr\.io/[a-z0-9._/-]+', image) or role not in {'api','tree','neural','sync'} or not re.fullmatch('[0-9a-f]{64}', source_id):
+    from scripts.cicd.components import load
+    if not re.fullmatch(r'ghcr\.io/[a-z0-9._/-]+', image) or role not in load()['components'] or not re.fullmatch('[0-9a-f]{64}', source_id):
         raise ValueError('Invalid role registry reference')
     repository = image.removeprefix('ghcr.io/')
     with urlopen('https://ghcr.io/token?service=ghcr.io&scope=repository:' + repository + ':pull', timeout=20) as response:

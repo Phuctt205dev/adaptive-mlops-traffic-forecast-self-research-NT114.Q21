@@ -1,0 +1,55 @@
+{
+  "schema": "traffic-components/v1",
+  "components": {
+    "api": {
+      "kind": "api",
+      "entrypoints": ["backend.app.services.serving_runtime", "backend.app.services.lifecycle", "backend.app.services.region_cleanup_runtime", "backend.app.api.routes.training_monitor"],
+      "resources": [],
+      "requirements": ["constraints.txt", "db.txt", "web.txt", "api.txt"],
+      "parent": "web",
+      "ml_bundle": false,
+      "slots": ["api", "api-next"],
+      "replicas": 2,
+      "service": "traffic-api"
+    },
+    "tree": {
+      "kind": "worker",
+      "entrypoints": ["backend.app.services.worker_runtime", "backend.app.services.region_cleanup_runtime", "src.cloud_training.kaggle_rpc"],
+      "resources": ["src/cloud_training/notebook.py"],
+      "requirements": ["constraints.txt", "db.txt", "web.txt", "tree.txt", "sdk.txt"],
+      "parent": "cloud",
+      "ml_bundle": true,
+      "slots": ["train-tree", "tree-next"],
+      "replicas": 1,
+      "service": "traffic-training-tree"
+    },
+    "neural": {
+      "kind": "worker",
+      "entrypoints": ["backend.app.services.worker_runtime", "backend.app.services.region_cleanup_runtime", "src.cloud_training.kaggle_rpc"],
+      "resources": ["src/cloud_training/notebook.py"],
+      "requirements": ["constraints.txt", "db.txt", "web.txt", "neural.txt", "sdk.txt"],
+      "parent": "cloud",
+      "ml_bundle": true,
+      "slots": ["train-neural", "neural-next"],
+      "replicas": 1,
+      "service": "traffic-training-worker"
+    },
+    "sync": {
+      "kind": "sidecar",
+      "entrypoints": ["backend.app.services.region_cleanup_uploader", "backend.app.services.restore_cache", "backend.app.services.artifact_sync_control"],
+      "resources": [],
+      "requirements": ["constraints.txt", "db.txt"],
+      "parent": "db",
+      "ml_bundle": false
+    },
+    "local-training": {
+      "kind": "runtime-job-image",
+      "entrypoints": ["src.local_training.job"],
+      "resources": [],
+      "dockerfile": "infra/local-training/Dockerfile",
+      "requirements": ["requirements/local-training.txt"],
+      "check": "scripts/cicd/executor_checks.py",
+      "consumers": ["api", "tree", "neural"]
+    }
+  }
+}

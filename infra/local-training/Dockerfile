@@ -3,8 +3,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/tmp
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -rf /var/lib/apt/lists/*
 COPY requirements /app/requirements
-RUN pip install --no-cache-dir -r requirements/local-training.txt
+RUN --mount=type=cache,target=/root/.cache/pip python -m pip install -r requirements/local-training.txt
 COPY src /app/src
+COPY backend /app/backend
 # Real ML sources come from the hash-checked per-run source snapshot.
 RUN useradd --uid 10001 --no-create-home training && mkdir /work && chown training:training /work
 USER 10001:10001

@@ -14,20 +14,21 @@ from scripts.cicd.deploy import Cluster
 from scripts.cicd.roles_release import verify
 from scripts.cicd.roles_deploy import validate_delivery, SERVICES
 from scripts.cicd.role_blueprints import headless, preview
-from scripts.cicd.role_manifests import render
+from scripts.cicd.role_manifests import render, SLOTS
 
-COHORTS={'api':('api','api-next'),'tree':('train-tree','tree-next'),'neural':('train-neural','neural-next')}
+COHORTS=SLOTS
 
 
 def bootstrap(cluster, directory, binding, *, apply=False):
     release=verify(directory)
-    images=validate_delivery(release,json.loads(Path(binding).read_text(encoding='utf-8-sig')))
+    bound=json.loads(Path(binding).read_text(encoding='utf-8-sig'))
+    images=validate_delivery(release,bound)
     if cluster.call('get','namespace','traffic-mlops','-o','json')['metadata']['uid']!=cluster.namespace_uid:
         raise RuntimeError('Wrong namespace')
     resources=[]
     for role,names in COHORTS.items():
         for name in names:
-            resources.append(render(role,name,images,directory=directory,inactive=True))
+            resources.append(render(role,name,images,directory=directory,inactive=True,executors=bound.get('executors')))
     active=cluster.call('get','service','traffic-api','-o','json')['spec']['selector']['app']
     resources += [headless('api-peers',active),preview(),
                   {'apiVersion':'policy/v1','kind':'PodDisruptionBudget','metadata':{'name':'api-availability','namespace':'traffic-mlops'},

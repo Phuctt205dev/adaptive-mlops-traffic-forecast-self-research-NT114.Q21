@@ -127,7 +127,7 @@ def build(root, output, commit, *, tracked=None):
 def verify(directory, *, expected_commit=None):
     root = Path(directory).resolve(strict=True)
     document = read_json(root / "release.json")
-    if document.get('schema') == 'traffic-release/v2':
+    if document.get('schema') in {'traffic-release/v2', 'traffic-release/v3'}:
         from scripts.cicd.roles_release import verify as verify_roles
         return verify_roles(directory, expected_commit=expected_commit)
     if document.get("schema") != SCHEMA or not SHA.fullmatch(document.get("commit", "")):

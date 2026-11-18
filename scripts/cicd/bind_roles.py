@@ -9,15 +9,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.cicd.roles_release import verify, ROLES
 from scripts.cicd.role_manifests import render,deployment_id,SLOTS,CONTRACT
+from scripts.cicd import components
 
 
 def bind(directory, bindings, commit):
     root = Path(directory)
     release = verify(root, expected_commit=commit)
     found = {}
+    executors = {}
     for path in Path(bindings).rglob('image-*.json'):
         value = json.loads(path.read_text(encoding='utf-8'))
         role = value.get('role')
+        if role in release.get('executors', {}):
+            if role in executors:
+                raise ValueError('Duplicate execution image binding')
+            executors[role] = value
+            continue
         if (role not in ROLES or role in found or value.get('source_id') != release['roles'][role]['source_id']
                 or not re.fullmatch(r'ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}', value.get('image',''))
                 or not re.fullmatch('[0-9a-f]{40}', value.get('commit',''))):
@@ -25,9 +32,13 @@ def bind(directory, bindings, commit):
         found[role] = value
     if set(found) != set(ROLES):
         raise ValueError('A checked role image is missing')
-    result = {'schema': 'traffic-delivery/v2', 'commit': commit, 'release_id': release['release_id'],
+    current = release['schema'] == 'traffic-release/v3'
+    extras = {'executors':executors, 'component_registry_sha256':release['component_registry_sha256']} if current else {}
+    components.validate_executors(release, extras)
+    result = {'schema': 'traffic-delivery/v3' if current else 'traffic-delivery/v2', 'commit': commit, 'release_id': release['release_id'],
               'image': found['api']['image'], 'images': found,'runtime_contract':CONTRACT,
-              'deployments':{role:deployment_id(render(role,slots[0],found,directory=root)) for role,slots in SLOTS.items()}}
+              **extras,
+              'deployments':{role:deployment_id(render(role,slots[0],found,directory=root,executors=executors if current else None)) for role,slots in SLOTS.items()}}
     (root / 'delivery.json').write_text(json.dumps(result), encoding='utf-8')
     return result
 

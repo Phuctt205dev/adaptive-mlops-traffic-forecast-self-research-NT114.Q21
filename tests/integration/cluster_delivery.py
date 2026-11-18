@@ -90,7 +90,7 @@ class Suite:
         identity=json.loads(command('kubectl','--kubeconfig',str(kubeconfig),'get','namespace',NAMESPACE,'-o','json'))['metadata']['uid']
         self.cluster=Cluster('kubectl',CONTEXT,identity,str(kubeconfig))
         self.source=self.temp/'source'
-        for name in ('backend','src','scripts','deployment','requirements'):
+        for name in ('backend','src','scripts','deployment','requirements','infra'):
             shutil.copytree(ROOT/name,self.source/name,ignore=shutil.ignore_patterns('__pycache__'))
         (self.source/'docs').mkdir();shutil.copy2(ROOT/'docs/index.html',self.source/'docs/index.html')
         self.profile()
@@ -99,6 +99,11 @@ class Suite:
     def create(self,value):return self.cluster.call('create','-f','-','-o','json',value=value)
 
     def profile(self):
+        # These suites exercise delivery with synthetic business handlers;
+        # Local fitting/readiness is accepted separately, never enabled here.
+        config=self.source/'deployment/cicd/local-training.json'
+        if config.is_file():
+            local=json.loads(config.read_text());local['enabled']=False;config.write_text(json.dumps(local))
         for role in ('api','tree','neural'):
             p=self.source/'deployment/rke2/roles'/(role+'.json');v=json.loads(p.read_text());pod=v['spec']['template']['spec']
             raw=json.dumps(pod).replace('mlops-node-02','cd-e2e-worker').replace('mlops-node-03','cd-e2e-worker2')
@@ -146,7 +151,7 @@ class Suite:
             path.write_text(original);migration.write_text(migration_original);dag.write_text(dag_original)
             for p,original in worker_originals.items():p.write_text(original)
         binding_dir=self.temp/(label+'-bindings');binding_dir.mkdir()
-        for role,v in self.bindings['images'].items():
+        for role,v in {**self.bindings['images'],**self.bindings.get('executors',{})}.items():
             (binding_dir/('image-'+role+'.json')).write_text(json.dumps(v))
         bind(out,binding_dir,COMMIT)
         checked=self.temp/(label+'-checked');shutil.copytree(out,checked,ignore=shutil.ignore_patterns('delivery.json'))
@@ -230,7 +235,7 @@ class Suite:
         if self.mode=='current':
             for role,slots in SLOTS.items():
                 for index,slot in enumerate(slots):
-                    self.create(render(role,slot,images,directory=release[0],inactive=index!=0))
+                    self.create(render(role,slot,images,directory=release[0],inactive=index!=0,executors=self.bindings.get('executors')))
             # Submit independent cohorts together, then require every cohort
             # Ready before any test. Keep the actual readiness/grace settings.
             for slots in SLOTS.values():
@@ -241,10 +246,10 @@ class Suite:
             return
         baseline=json.loads((release[0]/'release.json').read_text())['baseline']['legacy_application_image']
         for role,legacy in [('api','traffic-api'),('tree','traffic-training-tree'),('neural','traffic-training-worker')]:
-            first=SLOTS[role][0];value=render(role,first,images,directory=release[0])
+            first=SLOTS[role][0];value=render(role,first,images,directory=release[0],executors=self.bindings.get('executors'))
             value=legacy_workload(value,role,legacy,baseline)
             self.create(value)
-            for slot in SLOTS[role]:self.create(render(role,slot,images,directory=release[0],inactive=True))
+            for slot in SLOTS[role]:self.create(render(role,slot,images,directory=release[0],inactive=True,executors=self.bindings.get('executors')))
             self.cluster.wait(legacy)
             print(json.dumps({'isolated_legacy_ready':role}),flush=True)
         self.routes([('traffic-api','traffic-api'),('traffic-api-training','traffic-api'),('api-peers','traffic-api'),

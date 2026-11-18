@@ -197,13 +197,15 @@ class MergedRolloutTests(unittest.TestCase):
         from tests.integration.cluster_delivery import Suite,ROOT
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);source=root/'source';source.mkdir()
-            for name in ('backend','src','scripts','deployment','requirements'):
+            for name in ('backend','src','scripts','deployment','requirements','infra'):
                 shutil.copytree(ROOT/name,source/name,ignore=shutil.ignore_patterns('__pycache__'))
             (source/'docs').mkdir();shutil.copy2(ROOT/'docs/index.html',source/'docs/index.html')
             release=build(source,root/'checked','e'*40)
             fixture=object.__new__(Suite);fixture.source=source;fixture.temp=root
             fixture.bindings={'images':{role:{'role':role,'source_id':v['source_id'],'commit':'e'*40,
                 'image':'ghcr.io/owner/repo/backend@sha256:'+'f'*64} for role,v in release['roles'].items()}}
+            fixture.bindings['executors']={name:{'role':name,'source_id':v['source_id'],'commit':'e'*40,
+                'image':'ghcr.io/owner/repo/backend@sha256:'+'e'*64} for name,v in release['executors'].items()}
             fixture.profile()
             before=json.loads(fixture.release('before')[1].read_text())
             after=json.loads(fixture.release('after',revision='warm')[1].read_text())

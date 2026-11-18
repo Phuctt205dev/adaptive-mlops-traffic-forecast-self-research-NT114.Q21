@@ -95,7 +95,12 @@ jobs:
     outputs:
       began: ${{ steps.claim.outputs.began }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Checkout approved source with bounded network wait
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        timeout-minutes: 5
+        env:
+          GIT_HTTP_LOW_SPEED_LIMIT: '1024'
+          GIT_HTTP_LOW_SPEED_TIME: '60'
         with:
           ref: ${{ needs.inspect.outputs.sha }}
           persist-credentials: false

@@ -1,0 +1,65 @@
+# Reviewed one-time runtime bootstrap, separate from traffic-delivery credentials.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: traffic-training-dispatcher
+  namespace: traffic-mlops
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: traffic-local-training
+  namespace: traffic-mlops
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: traffic-training-dispatcher
+  namespace: traffic-mlops
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, get, list, watch, delete]
+  - apiGroups: ['']
+    resources: [pods, pods/log]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: traffic-training-dispatcher
+  namespace: traffic-mlops
+subjects:
+  - kind: ServiceAccount
+    name: traffic-training-dispatcher
+    namespace: traffic-mlops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: traffic-training-dispatcher
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: traffic-training-capacity-reader
+rules:
+  - apiGroups: ['']
+    resources: [nodes]
+    verbs: [get, list]
+  - apiGroups: [metrics.k8s.io]
+    resources: [nodes]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: traffic-training-capacity-reader
+subjects:
+  - kind: ServiceAccount
+    name: traffic-training-dispatcher
+    namespace: traffic-mlops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: traffic-training-capacity-reader

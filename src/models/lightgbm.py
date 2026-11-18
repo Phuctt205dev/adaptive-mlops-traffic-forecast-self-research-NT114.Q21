@@ -1,4 +1,5 @@
 from lightgbm import LGBMRegressor
+from src.models.cpu_budget import training_threads
 
 
 def build_original_lightgbm(random_state):
@@ -24,6 +25,6 @@ def build_autoregressive_lightgbm(random_state):
         colsample_bytree=0.9,
         reg_lambda=0.1,
         random_state=random_state,
-        n_jobs=-1,
+        n_jobs=training_threads(),
         verbosity=-1,
     )

@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     training_dag_id: str = "traffic_region_training"
     training_control_enabled: bool = False
     cloud_training_enabled: bool = False
+    local_training_enabled: bool = False
+    local_training_image: str = ""
+    local_training_namespace: str = "traffic-mlops"
+    local_training_memory_mib: int = 3072
+    local_training_cpu: int = 1
+    local_training_reserve_mib: int = 1536
+    local_training_deadline_seconds: int = 28800
+    local_training_service_account: str = "traffic-local-training"
     kaggle_username: str = ""
     drift_dag_id: str = "traffic_region_drift_monitoring"
     internal_training_token: str = "local-internal-training-token"

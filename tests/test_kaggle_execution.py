@@ -73,6 +73,70 @@ class FakeTransport:
 
 
 class KaggleExecutionTests(unittest.TestCase):
+    def test_download_retry_removes_only_partial_output_and_never_refits(self):
+        now, calls = [1000.0], [0]
+        self.provider.clock = lambda: now[0]
+        self.provider.sleep = lambda seconds: now.__setitem__(0, now[0] + seconds)
+        self.provider.directory.mkdir(parents=True, exist_ok=True)
+        keep = self.provider.directory / "keep-input"
+        keep.write_text("preserve")
+        def fetch(**kwargs):
+            calls[0] += 1
+            output = self.provider.directory / "output"
+            if calls[0] == 1:
+                output.mkdir()
+                (output / "partial.bin").write_bytes(b"partial")
+                raise ProviderError("temporary read failure", category="response_timeout", operation="output_download")
+            self.assertFalse(output.exists())
+            return {"verified": True}
+        self.provider.fetch = fetch
+        self.assertEqual(self.provider.receive_output(lambda: False), {"verified": True})
+        self.assertTrue(keep.exists())
+        self.assertFalse(any(op == "kernel_push" for op, _ in self.transport.calls))
+
+    def test_ambiguous_native_cancel_is_not_repeated_and_is_not_stop_confirmation(self):
+        self.provider.submit()
+        self.provider.save(session_id=12345)
+        original, cancels = self.transport.call, []
+        def call(operation, **values):
+            if operation == 'cancel_session':
+                cancels.append(values)
+                raise ProviderError('response lost', category='response_timeout', operation=operation)
+            return original(operation, **values)
+        self.transport.call = call
+        with self.assertRaises(ProviderError):
+            self.provider.stop()
+        self.assertFalse(self.provider.stop())
+        self.assertEqual(len(cancels), 1)
+        self.assertFalse(self.provider.ledger['remote_stopped'])
+        self.transport.state = 'CANCEL_ACKNOWLEDGED'
+        self.assertTrue(self.provider.stop())
+
+    def test_reconnect_reads_recover_without_submitting_a_new_notebook(self):
+        now, calls = [1000.0], [0]
+        self.provider.clock = lambda: now[0]
+        self.provider.sleep = lambda seconds: now.__setitem__(0, now[0] + seconds)
+        def read():
+            calls[0] += 1
+            if calls[0] < 3:
+                raise ProviderError("unavailable", operation="status", category="response_timeout")
+            return "RUNNING"
+        self.assertEqual(self.provider.reconnect(read, lambda: False, budget=20), "RUNNING")
+        self.assertEqual(calls[0], 3)
+        self.assertFalse(any(op == "kernel_push" for op, _ in self.transport.calls))
+
+    def test_reconnect_budget_exhaustion_preserves_unknown_outcome(self):
+        from src.cloud_training.kaggle_execution import ProviderUncertain
+        now = [1000.0]
+        self.provider.clock = lambda: now[0]
+        self.provider.sleep = lambda seconds: now.__setitem__(0, now[0] + seconds)
+        def read():
+            raise ProviderError("unavailable", operation="status", category="response_timeout")
+        with self.assertRaises(ProviderUncertain):
+            self.provider.reconnect(read, lambda: False, budget=3)
+        self.assertFalse(self.provider.ledger["remote_stopped"])
+        self.assertFalse(any(op == "kernel_push" for op, _ in self.transport.calls))
+
     def test_remote_cancel_is_latched_and_never_cleared_by_a_lease_renewal(self):
         from src.cloud_training.control import with_control, source_control
         self.provider.submit()

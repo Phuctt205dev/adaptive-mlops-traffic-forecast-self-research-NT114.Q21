@@ -25,13 +25,20 @@ class AirflowControlTests(unittest.TestCase):
         self.assertTrue(all("provider=QUEUED" in line for line in observations))
         self.assertFalse(any("epoch" in line or "PRIVATE" in line for line in self.logs))
 
-    def test_local_or_legacy_conf_is_rejected_before_dispatch(self):
-        for configuration in ({**self.conf, 'training_backend': 'local'}, {**self.conf, '_execution_protocol': 1}):
+    def test_unknown_backend_or_legacy_conf_is_rejected_before_dispatch(self):
+        for configuration in ({**self.conf, 'training_backend': 'unsupported'}, {**self.conf, '_execution_protocol': 1}):
             with self.subTest(configuration=configuration):
                 send = Mock()
                 with self.assertRaises(ValueError): train(configuration, 'tree', send=send)
                 with self.assertRaises(ValueError): finalize(configuration, {}, send=send)
                 send.assert_not_called()
+
+    def test_local_dispatch_uses_the_same_receipt_and_identity_protocol(self):
+        conf = {**self.conf, 'training_backend': 'local'}
+        response = {**self.response(), 'backend': 'local', 'branch_state': 'ready', 'artifact_receipt': self.receipt('tree')}
+        result = train(conf, 'tree', send=Mock(return_value=response), log=self.logs.append)
+        self.assertEqual(result['backend'], 'local')
+        self.assertEqual(result['artifact_receipt'], response['artifact_receipt'])
     def test_transient_status_reply_failure_keeps_same_attempt_and_does_not_stop_siblings(self):
         polls = [0]
         def send(role, path, payload=None):

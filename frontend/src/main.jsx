@@ -845,7 +845,7 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
   }, [selectedRegion?.id, datasets]);
 
   useEffect(() => {
-    if (!activeTraining?.id || ["completed", "failed"].includes(activeTraining.status)) {
+    if (!activeTraining?.id || ["completed", "failed", "cancelled"].includes(activeTraining.status)) {
       return undefined;
     }
 
@@ -1023,14 +1023,14 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
           {message && <div className={`alert alert-${messageType}`}>{message}</div>}
           {activeTraining && (
             <div className={`training-status training-status-${activeTraining.status}`}>
-              {!["completed", "failed"].includes(activeTraining.status) && <span className="spinner" />}
+              {!["completed", "failed", "cancelled"].includes(activeTraining.status) && <span className="spinner" />}
               <div>
                 <strong>
                   {activeTraining.status === "completed"
                     ? "Training completed"
                     : activeTraining.status === "failed"
                       ? "Training failed"
-                      : "Training in progress"}
+                      : activeTraining.status === "cancelled" ? "Training cancelled" : "Training in progress"}
                 </strong>
                 <p>
                   {activeTraining.datasetName || "Dataset"} · status: {activeTraining.status}
@@ -1079,19 +1079,26 @@ function TrainModelModal({
   title = "Select models",
   eyebrow = "Training",
   submitVerb = "Train",
+  allowLocal = true,
   onClose,
   onSubmit,
 }) {
   const [selectedModels, setSelectedModels] = useState(initialSelectedModels);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const [cloudAvailable, setCloudAvailable] = useState(null);
+  const [capabilities, setCapabilities] = useState(null);
+  const [backend, setBackend] = useState("kaggle");
+  const submitLock = useRef(false);
+  const [requestId] = useState(() => crypto.randomUUID());
+  const cloudAvailable = capabilities?.cloud_training;
+  const backendAvailable = capabilities?.[backend === "local" ? "local_training" : "cloud_training"] === true;
 
   useEffect(() => {
     const controller = new AbortController();
     api.trainingCapabilities({ signal: controller.signal })
-      .then((result) => { if (!controller.signal.aborted) setCloudAvailable(result.cloud_training === true); })
-      .catch(() => { if (!controller.signal.aborted) setCloudAvailable(false); });
+      .then((result) => { if (!controller.signal.aborted) setCapabilities(result); })
+      .catch(() => { if (!controller.signal.aborted) setCapabilities({ cloud_training: false, local_training: false,
+        local_unavailable_reason: "Training availability could not be checked. Close and reopen this window to try again." }); });
     return () => controller.abort();
   }, []);
 
@@ -1105,30 +1112,31 @@ function TrainModelModal({
 
   async function submit(event) {
     event.preventDefault();
+    if (submitLock.current) return;
     setError("");
     if (!selectedModels.length) {
       setError("Select at least one model.");
       return;
     }
-    if (cloudAvailable !== true) {
-      setError("Kaggle training is not available. Please try again later or contact an administrator.");
+    if (!backendAvailable) {
+      setError(`${backend === "local" ? "Local" : "Kaggle"} training is not available. Please try again later or contact an administrator.`);
       return;
     }
     setSubmitting(true);
+    submitLock.current = true;
     try {
       await onSubmit(dataset, selectedModels, {
         ...trainForm,
-        training_backend: "kaggle",
+        training_backend: allowLocal ? backend : "kaggle",
+        request_id: requestId,
       });
     } catch (err) {
       setError(err.message);
     } finally {
       setSubmitting(false);
+      submitLock.current = false;
     }
   }
-
-  const treeCount = selectedModels.filter((model) => model.endsWith("_lag")).length;
-  const neuralCount = selectedModels.filter((model) => ["lstm", "gru"].includes(model)).length;
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={submitting ? undefined : onClose}>
@@ -1139,14 +1147,27 @@ function TrainModelModal({
             <h2>{title}</h2>
           </div>
           <div className="training-header-actions">
+            {allowLocal ? <fieldset className="training-backend-picker" aria-label="Training location" disabled={submitting}>
+              <label className={backend === "kaggle" ? "is-selected" : ""}>
+                <input type="radio" name="training-backend" value="kaggle" checked={backend === "kaggle"}
+                  disabled={capabilities !== null && cloudAvailable !== true} onChange={() => setBackend("kaggle")} />
+                Cloud · Kaggle
+              </label>
+              <label className={backend === "local" ? "is-selected" : ""} title={capabilities?.local_unavailable_reason || "Training on your RKE2 cluster"}>
+                <input type="radio" name="training-backend" value="local" checked={backend === "local"}
+                  disabled={capabilities?.local_training !== true} onChange={() => setBackend("local")} />
+                Local · RKE2
+              </label>
+            </fieldset> : <span className="training-backend-fixed">Kaggle · Retraining</span>}
             <button className="secondary" type="button" disabled={submitting} onClick={onClose}>Close</button>
           </div>
         </div>
 
-        <p className={`training-location-note ${cloudAvailable === false ? "is-unavailable" : ""}`} role="status">
-          {cloudAvailable === null ? "Checking cloud training configuration…"
-              : cloudAvailable ? "Models will train on Kaggle. Your system receives the results."
-                : "Kaggle training is unavailable. Please try again later or contact an administrator."}
+        <p className={`training-location-note ${capabilities && !backendAvailable ? "is-unavailable" : ""}`} role="status">
+          {capabilities === null ? "Checking training availability…"
+              : !backendAvailable ? `${backend === "local" ? "Local" : "Kaggle"} training is unavailable. Please try again later or contact an administrator.`
+              : backend === "local" ? "Models will train on your RKE2 cluster, one job per model. Jobs wait when resources are busy."
+                : "Models will train on Kaggle. Your system receives the results."}
         </p>
 
         <div className="train-modal-dataset">
@@ -1160,6 +1181,7 @@ function TrainModelModal({
               <input
                 type="checkbox"
                 checked={selectedModels.includes(option.id)}
+                disabled={submitting}
                 onChange={() => toggleModel(option.id)}
               />
               <span>
@@ -1180,8 +1202,8 @@ function TrainModelModal({
             <strong>{Number(trainForm.final_test_ratio || 0.15) * 100}%</strong>
           </div>
           <div>
-            <span>Parallel branches</span>
-            <strong>{treeCount ? "tree" : "-"} | {neuralCount ? "neural" : "-"}</strong>
+            <span>Training location</span>
+            <strong>{backend === "local" ? "Local · RKE2 CPU" : "Cloud · Kaggle"}</strong>
           </div>
         </div>
 
@@ -1190,8 +1212,8 @@ function TrainModelModal({
         </p>
 
         {error && <div className="alert alert-error">{error}</div>}
-        <button disabled={submitting || !selectedModels.length || cloudAvailable !== true}>
-          {submitting ? "Triggering..." : `${submitVerb} ${selectedModels.length} model${selectedModels.length > 1 ? "s" : ""}`}
+        <button disabled={submitting || !selectedModels.length || !backendAvailable}>
+          {submitting ? "Triggering..." : `${submitVerb} ${selectedModels.length} model${selectedModels.length > 1 ? "s" : ""} on ${backend === "local" ? "Local" : "Kaggle"}`}
         </button>
       </form>
     </div>
@@ -1200,10 +1222,10 @@ function TrainModelModal({
 
 function TrainingAction({ dataset, activeTraining, onTrain }) {
   const isThisDataset = activeTraining?.dataset_id === dataset.id;
-  const isRunning = isThisDataset && !["completed", "failed"].includes(activeTraining.status);
+  const isRunning = isThisDataset && !["completed", "failed", "cancelled"].includes(activeTraining.status);
   const isCompleted = isThisDataset && activeTraining.status === "completed";
   const isFailed = isThisDataset && activeTraining.status === "failed";
-  const hasRunningTraining = activeTraining && !["completed", "failed"].includes(activeTraining.status);
+  const hasRunningTraining = activeTraining && !["completed", "failed", "cancelled"].includes(activeTraining.status);
 
   if (isCompleted) {
     return <span className="inline-status inline-status-success">Model ready</span>;
@@ -1384,6 +1406,8 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions })
                             <div className="model-comparison-meta">
                               <span>Training window: <strong>{model.training_configuration?.train_start_date || "-"} - {model.training_configuration?.train_end_date || "-"}</strong></span>
                               <span>Selected: <strong>{selectedModelSummary(model.training_configuration)}</strong></span>
+                              <span>Training location: <strong>{model.training_configuration?.training_backend === "local" ? "Local · RKE2" : model.training_configuration?.training_backend === "kaggle" ? "Kaggle" : "Not recorded"}</strong></span>
+                              {model.training_configuration?.retry_of && <span>Created by retrying an earlier run</span>}
                             </div>
                             <table className="nested-table">
                               <thead>
@@ -1993,6 +2017,7 @@ function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshR
           trainForm={retrainPlan.configuration}
           initialSelectedModels={retrainPlan.selected_models || defaultTrainingModels}
           eyebrow="Retraining"
+          allowLocal={false}
           title="Select models"
           submitVerb="Retrain"
           onClose={() => setRetrainPlan(null)}

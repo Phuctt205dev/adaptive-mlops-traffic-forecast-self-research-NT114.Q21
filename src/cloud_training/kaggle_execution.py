@@ -13,6 +13,9 @@ from pathlib import Path
 import re
 import time
 import threading
+import random
+import shutil
+import sys
 from urllib.parse import urlparse
 
 from src.cloud_training.artifacts import MAX_BYTES, MAX_FILES, read_bundle, relative_path
@@ -28,6 +31,16 @@ TERMINAL_EVENT_WAIT_SECONDS = 90
 
 class TrainingCancelled(ProviderError):
     pass
+
+
+class ProviderUncertain(ProviderError):
+    """The remote outcome is unknown; keep ownership and require reconciliation."""
+
+
+def transient(error):
+    return isinstance(error, ProviderError) and (error.category in {
+        "connect_timeout", "connection_error", "response_timeout", "rpc_timeout", "rpc_unavailable", "transfer_error", "file_not_ready"}
+        or error.http_status in {408, 429, 500, 502, 503, 504})
 
 
 def initial_ledger(snapshot, username):
@@ -274,6 +287,8 @@ class KaggleExecution:
                 raise ProviderError("The provider rejected this notebook execution.", operation="kernel_push",
                                     category="submit_rejected", diagnostic=response.get("diagnostic"))
             self.save(expected_version=response["version"])
+            if type(response.get("session_id")) is int and response["session_id"] > 0:
+                self.save(session_id=response["session_id"])
         # An uncertain response is recovered by read-back, never by a new push.
         remote = self.call("kernel_get", reference=self.ledger["reference"])
         self.verify_remote(remote)
@@ -437,6 +452,34 @@ class KaggleExecution:
             self.stream = None
             self._next_stream_at = self.monotonic() + 3
 
+    def reconnect(self, action, cancelled, *, budget=300):
+        """Retry reads or a fenced control intent, never an unconfirmed new submit."""
+        deadline, attempt = self.clock() + budget, 0
+        previous = self.ledger.get("phase", "provider_wait")
+        while True:
+            if cancelled():
+                raise TrainingCancelled("Training stop requested while reconnecting.")
+            try:
+                result = action()
+                if self.ledger.get("phase") == "reconnecting":
+                    self.phase(previous)
+                return result
+            except ProviderError as error:
+                if not transient(error):
+                    raise
+                self.save(phase="reconnecting", last_failure={"category": error.category,
+                    "operation": error.operation, "http_status": error.http_status})
+                if self.clock() >= deadline:
+                    raise ProviderUncertain("Kaggle could not be reached. The original attempt remains fenced.",
+                                            category="provider_unknown") from None
+                delay = min(30, 2 ** min(attempt + 1, 5)) + random.random()
+                attempt += 1
+                # Remain responsive to stop even during a longer backoff.
+                for _ in range(max(1, int(min(delay, deadline - self.clock())))):
+                    if cancelled():
+                        raise TrainingCancelled("Training stop requested while reconnecting.")
+                    self.sleep(1)
+
     def run(self, progress, cancelled):
         deadline, renewal = self.clock() + 8 * 3600, 0
         queued_polls = 0
@@ -447,7 +490,7 @@ class KaggleExecution:
                 if cancelled():
                     raise TrainingCancelled("The training run requested cancellation.")
                 self.drain(progress)
-                state = self.status()
+                state = self.reconnect(self.status, cancelled)
                 self.drain(progress)
                 if state in TERMINAL:
                     # Provider status and persisted logs arrive independently.
@@ -472,11 +515,11 @@ class KaggleExecution:
                         raise ProviderError("The notebook ended without successful ML output.",
                                             operation='terminal_events', category=category)
                     self._stop_progress()
-                    return self.fetch(cancelled=cancelled)
+                    return self.receive_output(cancelled)
                 if self.clock() >= renewal:
                     # Do not Quick Save an execution already observed terminal.
                     # Schedule from the actual lease written, not from reply time.
-                    self.control()
+                    self.reconnect(self.control, cancelled)
                     renewal = min(self.clock() + 45, self.ledger.get("lease_until", self.clock() + 180) - 90)
                     self.drain(progress)
                     if renewal <= self.clock():
@@ -495,14 +538,43 @@ class KaggleExecution:
                     after = (self.last_sequence, bool(self.ledger.get("child_running_observed")), bool(self.ledger.get("child_completed_observed")))
                     if after != before or self.clock() >= renewal:
                         break
-            raise ProviderError("Kaggle execution exceeded its monitoring deadline.")
+            raise ProviderUncertain("Kaggle execution exceeded its monitoring deadline.", category="provider_unknown")
+        except ProviderError as error:
+            if not isinstance(error, TrainingCancelled) and (isinstance(error, ProviderUncertain) or transient(error)
+                    or error.category == "control_unconfirmed" or self.ledger.get("control_pending")
+                    or (self.ledger.get("submit_pending") and not self.ledger.get("submit_rejected"))):
+                self.save(phase="needs_attention", last_failure={"operation": error.operation,
+                    "category": error.category, "http_status": error.http_status})
+                raise ProviderUncertain("Kaggle outcome needs confirmation. No replacement job was submitted.",
+                                        category="provider_unknown") from None
+            raise
         finally:
+            error_in_flight = sys.exc_info()[0] is not None
             try:
-                self._stop_progress()
+                try:
+                    self._stop_progress()
+                except Exception:
+                    if not error_in_flight:
+                        raise
             finally:
                 if self.stream is not None:
                     self.stream.stop()  # Stops the log reader, never claims remote cancellation.
                     self.stream = None
+
+    def receive_output(self, cancelled):
+        attempted = [False]
+        def receive():
+            if attempted[0]:
+                output = self.directory / "output"
+                if output.exists():
+                    root, resolved = self.directory.resolve(strict=True), output.resolve(strict=True)
+                    if (output.is_symlink() or any(p.is_symlink() for p in output.parents)
+                            or resolved == root or not resolved.is_relative_to(root)):
+                        raise ProviderError("Unsafe partial-output directory.", category="unsafe_destination")
+                    shutil.rmtree(resolved)
+            attempted[0] = True
+            return self.fetch(cancelled=cancelled)
+        return self.reconnect(receive, cancelled)
 
     def stop(self):
         if self.ledger.get("remote_stopped"):
@@ -519,6 +591,9 @@ class KaggleExecution:
             self.verify_remote(remote)
             self.save(version=remote["current_version_number"])
         if self.status() not in TERMINAL:
+            if self.ledger.get("session_id") and not self.ledger.get("cancel_session_pending"):
+                self.save(cancel_session_pending=True)
+                self.call("cancel_session", reference=self.reference, session_id=self.ledger["session_id"])
             self.control(cancel=True)
             # The owning watcher retries until the exact original version is
             # terminal. Expiry is additional protection, never a fake stop ack.

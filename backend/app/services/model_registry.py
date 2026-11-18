@@ -354,6 +354,27 @@ def create_queued_training_run(
 ) -> TrainingRun:
     from backend.app.services.training_policy import cloud_configuration
     configuration = cloud_configuration(configuration)
+    if configuration.get("retry_of"):
+        from backend.app.services.training_execution import execution
+        parent_id = uuid.UUID(str(configuration["retry_of"]))
+        parent_execution = execution(db, parent_id, lock=True)
+        parent = db.get(TrainingRun, parent_id)
+        if (parent is None or parent.dataset_id != dataset_id or parent_execution.state not in {"failed", "cancelled"}
+                or any(b.get("attempt_id") and not (b.get("stop_confirmed") and b.get("cleanup_confirmed"))
+                       for b in parent_execution.branches_json.values())):
+            raise ApplicationError("training_retry_unsafe", "Confirm that the original run has stopped and cleanup is complete before retrying.", 409)
+        from backend.app.schemas.model_version import TrainingRunCreate
+        expected = TrainingRunCreate.model_validate({**parent.configuration_json,
+            "training_backend": configuration["training_backend"], "retry_of": str(parent_id),
+            "request_id": configuration.get("request_id")}).model_dump(mode="json")
+        actual = TrainingRunCreate.model_validate(configuration).model_dump(mode="json")
+        if actual != expected:
+            raise ApplicationError("training_retry_changed", "A retry must keep the original dataset, model selection and training configuration.", 409)
+        active_retry = db.scalar(select(TrainingRun.id).where(
+            TrainingRun.configuration_json["retry_of"].as_string() == str(parent_id),
+            TrainingRun.status.notin_([TrainingRunStatus.FAILED, TrainingRunStatus.CANCELLED])))
+        if active_retry:
+            raise ApplicationError("training_retry_exists", "A retry for this run already exists.", 409)
     dataset = db.get(Dataset, dataset_id)
     if dataset is None:
         raise ApplicationError("dataset_not_found", "Dataset was not found.", 404)

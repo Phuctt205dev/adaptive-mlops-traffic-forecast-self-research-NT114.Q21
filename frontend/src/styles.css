@@ -1867,6 +1867,15 @@ td {
   letter-spacing: -0.02em;
 }
 
+.training-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.training-backend-picker { display: flex; gap: 3px; margin: 0; padding: 3px; border: 1px solid #d9e3ee; border-radius: 10px; background: #f6f9fc; min-width: 0; }
+.training-backend-picker label { display: flex; align-items: center; gap: 5px; padding: 8px 10px; border-radius: 7px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.training-backend-picker label.is-selected { background: #fff; color: #007aaf; box-shadow: 0 1px 4px #1023391c; font-weight: 700; }
+.training-backend-picker label:has(input:disabled) { opacity: .55; cursor: not-allowed; }
+.training-backend-picker input { width: 13px; height: 13px; margin: 0; accent-color: #008bc7; }
+.training-backend-fixed { font-size: 13px; color: #536c82; }
+.training-monitor-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
+@media (max-width: 640px) { .train-modal-card .modal-header { flex-wrap: wrap; gap: 12px; } .train-modal-card .training-header-actions { width: 100%; justify-content: flex-start; } }
 .train-modal-card {
   width: min(620px, 100%);
 }

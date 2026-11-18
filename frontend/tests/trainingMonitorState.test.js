@@ -2,6 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { modelStatus, progressLabel, freshness } from "../src/trainingMonitorState.js";
 
+test("Local queue does not make an already finished tree model wait for CPU again", () => {
+  const run = { backend: "local", state: "running", branches: { tree: { observation: { phase: "waiting_resources" } } } };
+  assert.equal(modelStatus(run, { id: "xgboost_lag", stage: "queued" }), "Waiting for RKE2 resources");
+  assert.match(modelStatus(run, { id: "random_forest_lag", stage: "model_evaluated", ml_completed: true }), /^ML finished/);
+  assert.equal(modelStatus(run, { id: "random_forest_lag", stage: "output_verified", ml_completed: true }), "Results received and checked");
+});
+
+test("unknown Kaggle connection is distinct from failure and cancellation", () => {
+  const run = { state: "running", branches: { gru: { observation: { phase: "needs_attention" } } } };
+  assert.equal(modelStatus(run, { id: "gru", stage: "queued" }), "Connection needs attention");
+  assert.equal(modelStatus({ ...run, state: "cancelling" }, { id: "gru", state: "cancelling" }), "Stopping");
+});
+
 test("CV completion is a wait for final training, not completion of the run", () => {
   assert.match(modelStatus({}, { id: "lstm", stage: "model_cv_completed" }), /Waiting for final training/);
 });

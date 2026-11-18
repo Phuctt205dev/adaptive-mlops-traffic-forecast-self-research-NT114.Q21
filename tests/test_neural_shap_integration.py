@@ -23,6 +23,8 @@ class NeuralShapIntegrationTests(unittest.TestCase):
             data = Path(directory) / "synthetic.csv"
             data.write_bytes(b"a,b\n1,2\n")
             job = {"context": context, "configuration": configuration, "dataset_sha256": hashlib.sha256(data.read_bytes()).hexdigest()}
+            if backend == 'local':
+                job['local_model'] = branch
             fake_tf = SimpleNamespace(config=SimpleNamespace(list_physical_devices=lambda kind: ["synthetic GPU"]))
             with patch.dict(sys.modules, {"tensorflow": fake_tf}), patch.object(runner, "prepare_runtime"), patch.object(runner, "report"), \
                     patch.object(region_training_variants, "train_region_recurrent_candidate", return_value={
@@ -37,10 +39,10 @@ class NeuralShapIntegrationTests(unittest.TestCase):
             with self.subTest(branch=branch):
                 self.execute(branch, 'kaggle', {"enabled": True, "max_samples": 2})
 
-    def test_local_execution_contract_is_rejected_before_ml_runs(self):
-        with patch.object(runner, 'prepare_runtime') as prepare, self.assertRaisesRegex(ValueError, 'Kaggle'):
-            self.execute('lstm', 'local', {'enabled': True})
-        prepare.assert_not_called()
+    def test_local_honors_neural_shap_for_both_models(self):
+        for branch in ('lstm', 'gru'):
+            with self.subTest(branch=branch):
+                self.execute(branch, 'local', {'enabled': True, 'max_samples': 2})
 
     def test_explicit_disable_is_preserved(self):
         self.execute("lstm", "kaggle", {"enabled": False}, "disabled")

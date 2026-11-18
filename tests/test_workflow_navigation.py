@@ -140,8 +140,11 @@ class WorkflowNavigationTests(unittest.TestCase):
         for identifier,body in jobs:
             label=re.search(r'^    name: (.+)$',body,re.M)
             name=label.group(1).strip('"\'') if label else identifier
-            if identifier=='image':
-                roles=re.search(r'^        role: \[(.+)\]$',body,re.M).group(1).split(',')
+            if identifier in {'image','executor-image'}:
+                from scripts.cicd import components
+                output='applications' if identifier=='image' else 'executors'
+                self.assertIn('fromJSON(needs.tests.outputs.'+output,body)
+                roles=components.applications() if identifier=='image' else components.executors()
                 actual.update(name+' ('+role.strip()+')' for role in roles)
             else:actual.add(name)
         scope=pipeline.classify([],baseline=None,commit='a'*40,frontend=True,force=True)

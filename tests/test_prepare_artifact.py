@@ -56,10 +56,14 @@ class ArtifactPreparationTests(unittest.TestCase):
         images = {role: {'role': role, 'source_id': meta['source_id'], 'commit': COMMIT,
                          'image': 'ghcr.io/example/backend@sha256:' + hashlib.sha256(role.encode()).hexdigest()}
                   for role, meta in release['roles'].items()}
-        bound = {'schema': 'traffic-delivery/v2', 'commit': COMMIT, 'release_id': release['release_id'],
-                 'image': images['api']['image'], 'images': images, 'runtime_contract': CONTRACT,
-                 'deployments': {role: deployment_id(render(role, slots[0], images, directory=package))
-                                 for role, slots in SLOTS.items()}}
+        from scripts.cicd.bind_roles import bind
+        bindings=Path(cls.shared.name)/'bindings';bindings.mkdir()
+        for role, meta in release['executors'].items():
+            images[role]={'role':role,'source_id':meta['source_id'],'commit':COMMIT,
+                          'image':'ghcr.io/example/backend@sha256:'+hashlib.sha256(role.encode()).hexdigest()}
+        for role, value in images.items():
+            (bindings/('image-'+role+'.json')).write_text(json.dumps(value))
+        bound=bind(package,bindings,COMMIT)
         cls.files = {path.relative_to(package).as_posix(): path.read_bytes() for path in package.rglob('*') if path.is_file()}
         cls.files['delivery.json'] = json.dumps(bound).encode()
         cls.blob = cls.zip(cls.files)

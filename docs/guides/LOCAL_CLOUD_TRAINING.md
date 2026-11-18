@@ -87,14 +87,16 @@ reused across attempts; no model is automatically activated.
 
 ## CI/CD integration handover — required before enabling Local
 
-Normal backend/frontend source can use the existing application pipeline. The
-new **execution image and runtime ServiceAccounts are not built/applied by the
-current four-role pipeline**. This is an explicit integration task for the
-CI/CD window, not evidence that Local is already deployed. Workflow, runner,
-release receipts and delivery engine were not changed by this feature.
+The component pipeline packages/builds/reuses the **execution image** from
+`deployment/cicd/components.json` and binds its immutable digest to API/worker
+configuration. Runtime ServiceAccounts require a reviewed one-time owner
+bootstrap. `deployment/cicd/local-training.json` starts disabled; merged code or
+successful image checks do not establish that Local is enabled on the cluster.
+See [component delivery](COMPONENT_DELIVERY.md) for owner Plan/Apply commands.
 
-1. Build/publish `infra/local-training/Dockerfile` with repository root context,
-   pin the resulting `ghcr.io/...@sha256:...` digest. Dependencies come from
+1. The pipeline builds `infra/local-training/Dockerfile` from an isolated root
+   context containing its import closure and recursively included dependencies,
+   checks offline, publishes, and binds `ghcr.io/...@sha256:...`. Dependencies come from
    `requirements/local-training.txt` and the existing role constraints. Check
    imports for all three tree libraries, TensorFlow CPU, SHAP, MLflow and boto3;
    preserve compatibility with current serving-role dependency versions.
@@ -105,14 +107,16 @@ release receipts and delivery engine were not changed by this feature.
    authorized infrastructure workflow. It adds a dispatcher SA and an unprivileged
    Job SA. It grants no Secret-reading, node proxy, node mutation, or access to
    other namespaces. Keep delivery credentials separate from runtime credentials.
-3. Update both worker role templates (all slots) to use
+3. The reviewed renderer configures both worker role templates (all slots),
+   only when Local is enabled, to use
    `serviceAccountName: traffic-training-dispatcher` and
    `automountServiceAccountToken: true`. Job Pods themselves keep token mounting
    disabled and use `traffic-local-training`. Review the necessary read/list of
    nodes/metrics and create/get/list/delete Jobs, get/list Pods and Pod logs.
    Do not patch only a live Deployment that the next release will overwrite.
-4. Configure the following on **API and both workers** through the supported
-   release configuration, initially keeping Local disabled:
+4. Set the corresponding fields in `deployment/cicd/local-training.json` and
+   use the normal reviewed release. The renderer synchronizes these settings
+   on **API and both workers**, initially keeping Local disabled:
 
    | Variable | Value |
    | --- | --- |

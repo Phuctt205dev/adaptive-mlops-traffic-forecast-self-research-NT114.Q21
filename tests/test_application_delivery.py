@@ -23,7 +23,12 @@ CONFIG={'api_url':'https://api.example.com/api/v1','base_path':'/repo/'}
 
 
 def delivery_identity():
-    return {**old_identity(), 'schema':'traffic-delivery/v2','commit':A,
+    from scripts.cicd import components
+    registry=components.load()
+    executors={name:{'role':name,'source_id':'e'*64,'commit':A,'image':'ghcr.io/test/backend@sha256:'+'e'*64}
+               for name in components.executors(registry)}
+    return {**old_identity(), 'schema':'traffic-delivery/v3','commit':A,
+            'executors':executors,'component_registry_sha256':components.digest(components.canonical(registry)),
             'image':old_identity()['images']['api']['image']}
 
 
@@ -138,7 +143,8 @@ class DailyDeliveryTests(unittest.TestCase):
                 self.assertFalse(scope['current']);self.assertFalse(scope['full'])
                 self.assertEqual(proof['suites'],{})
                 self.assertEqual(pipeline.required_jobs(scope),
-                    {'scope','tests','package','acceptance'} | {'image ('+role+')' for role in ('api','tree','neural','sync')})
+                    {'scope','tests','package','acceptance','executor-image (local-training)'} |
+                    {'image ('+role+')' for role in ('api','tree','neural','sync')})
 
     def test_engine_storage_and_unknown_deployment_get_clusters_only_when_full_is_requested(self):
         for path in ('scripts/cicd/roles_deploy.py','backend/app/services/restore_cache.py',

@@ -52,7 +52,9 @@ print(json.dumps({'heads':heads,'active':active,'running':running,'paused':pause
 
 
 def validate_delivery(release, value):
-    if value.get('schema') != 'traffic-delivery/v2' or value.get('commit') != release['commit'] or value.get('release_id') != release['release_id']:
+    from scripts.cicd.components import validate_executors
+    schema = 'traffic-delivery/v3' if release.get('schema') == 'traffic-release/v3' else 'traffic-delivery/v2'
+    if value.get('schema') != schema or value.get('commit') != release['commit'] or value.get('release_id') != release['release_id']:
         raise ValueError('Role delivery identity differs')
     images = value.get('images', {})
     if set(images) != set(ROLES) or value.get('image') != images['api'].get('image'):
@@ -62,6 +64,7 @@ def validate_delivery(release, value):
                 or not DIGEST_IMAGE.fullmatch(image.get('image','')) or not image['image'].startswith('ghcr.io/')
                 or not re.fullmatch('[0-9a-f]{40}', image.get('commit',''))):
             raise ValueError('Invalid immutable role image')
+    validate_executors(release, value)
     return images
 
 
@@ -71,13 +74,14 @@ class RolesDelivery:
         self.release = verify(directory, expected_commit=commit)
         bound=json.loads(Path(binding).read_text(encoding='utf-8-sig'))
         self.images = validate_delivery(self.release, bound)
+        self.executors = bound.get('executors') if self.release['schema'] == 'traffic-release/v3' else None
         self.contract=contract(directory)
-        wanted={role:render(role,slots[0],self.images,directory=directory)['spec']['template']['metadata']['annotations'][ANNOTATION]
+        wanted={role:render(role,slots[0],self.images,directory=directory,executors=self.executors)['spec']['template']['metadata']['annotations'][ANNOTATION]
                 for role,slots in SLOTS.items()}
         if bound.get('runtime_contract')!=CONTRACT or bound.get('deployments')!=wanted:
             raise ValueError('Role deployment configuration binding differs')
         self.state = {'schema':'traffic-role-delivery/v2', 'commit':commit, 'release_id':self.release['release_id'],
-                      'image':self.images['api']['image'], 'images':self.images, 'patched':[],
+                      'image':self.images['api']['image'], 'images':self.images, 'executors':self.executors, 'patched':[],
                       'preflight_only':True, 'started':False, 'completed':False, 'rolled_back':False,
                       'guard_held':False,'recovery_required':False}
         if self.path.exists():
@@ -408,12 +412,31 @@ class RolesDelivery:
             time.sleep(1)
         raise RuntimeError('Service endpoints did not match the ready cohort')
 
+    def local_work(self):
+        """Also fence orphan/Pending/terminating Local work absent from DB counts."""
+        if not getattr(self, 'executors', None):
+            return []
+        selector='traffic.mlops/local-training=true'
+        jobs=self.cluster.call('get','jobs','-l',selector,'-o','json')['items']
+        pods=self.cluster.call('get','pods','-l',selector,'-o','json')['items']
+        unresolved=[]
+        for job in jobs:
+            terminal=any(c.get('type') in {'Complete','Failed'} and c.get('status')=='True'
+                         for c in job.get('status',{}).get('conditions',[]))
+            if not terminal or job['metadata'].get('deletionTimestamp'):
+                unresolved.append('job/'+job['metadata']['name'])
+        for pod in pods:
+            if pod.get('status',{}).get('phase') not in {'Succeeded','Failed'} or pod['metadata'].get('deletionTimestamp'):
+                unresolved.append('pod/'+pod['metadata']['name'])
+        return sorted(set(unresolved))
+
     def plan(self):
         self.public_base()
         if self.get('namespace','traffic-mlops')['metadata']['uid']!=self.cluster.namespace_uid:
             raise RuntimeError('Wrong cluster namespace')
         api=self.api(); active=api['metadata']['name']
         idle=self.remote(api,IDLE)
+        idle['local_jobs']=len(self.local_work())
         if idle['heads']!=self.release['baseline']['migration_heads']:
             raise RuntimeError('Unexpected migration state')
         changes={}; targets={}; originals={}
@@ -429,7 +452,7 @@ class RolesDelivery:
                 # Failure to observe the current version is never a reason to
                 # deploy another copy. A changed desired spec is a separate fact.
                 self.health(old,role,target=False)
-                wanted=render(role,old,self.images,directory=self.directory)['spec']
+                wanted=render(role,old,self.images,directory=self.directory,executors=getattr(self,'executors',None))['spec']
                 normalized=self.patch('deployment',source,[{'op':'replace','path':'/spec','value':wanted}],dry=True)
                 unchanged=source['spec']==normalized['spec']
             else:
@@ -442,7 +465,7 @@ class RolesDelivery:
             current=self.cluster.deployment(name)
             if current['spec'].get('replicas',0) and current['metadata']['name']!=source['metadata']['name']:
                 raise RuntimeError('Inactive cohort is not empty')
-            wanted=render(role,name,self.images,directory=self.directory)['spec']
+            wanted=render(role,name,self.images,directory=self.directory,executors=getattr(self,'executors',None))['spec']
             # Server defaulting is part of the persisted after hash.
             dry=self.patch('deployment',current,[{'op':'replace','path':'/spec','value':wanted}],dry=True)
             changes[name]=dry['spec']
@@ -597,7 +620,7 @@ class RolesDelivery:
         for role,name in (('api',active),('tree',tree),('neural',neural)):
             if name not in SLOTS[role]:raise RuntimeError('The requested role runtime is not deployed')
             value=self.cluster.deployment(name)
-            wanted=render(role,name,self.images,directory=self.directory)['spec']
+            wanted=render(role,name,self.images,directory=self.directory,executors=getattr(self,'executors',None))['spec']
             normalized=self.patch('deployment',value,[{'op':'replace','path':'/spec','value':wanted}],dry=True)
             if value['spec']!=normalized['spec']:
                 raise RuntimeError('The running role manifest differs from the requested release')
@@ -608,7 +631,26 @@ class RolesDelivery:
             self.endpoints(service,app,count)
         self.business()
         self.public_health()
+        self.verify_local(active,(tree,neural))
         return proof
+
+    def verify_local(self,api,workers):
+        if not getattr(self,'executors',None):
+            return
+        from scripts.cicd.components import local_config
+        config=local_config(json.loads((self.directory/'deploy/local-training.json').read_bytes()))
+        if not config['enabled']:
+            return
+        image=self.executors[config['component']]['image']
+        source=("import json,requests\nr=requests.get('http://127.0.0.1:8000/health/local-training',timeout=30);r.raise_for_status();print(json.dumps(r.json()))")
+        for name in workers:
+            result=self.remote(self.cluster.deployment(name),source)
+            if result.get('local_training') is not True or result.get('image')!=image:
+                raise RuntimeError('Local dispatcher readiness/image differs')
+        result=self.remote(self.cluster.deployment(api),
+            "import json;from backend.app.api.routes.training_monitor import capabilities;print(json.dumps(capabilities()))")
+        if result.get('local_training') is not True or 'local' not in result.get('supported_backends',[]):
+            raise RuntimeError('API did not expose the verified Local capability')
 
     def rollback(self):
         if self.state.get('completed') and not self.state.get('recovery_required'):
@@ -690,7 +732,7 @@ class RolesDelivery:
             self.resource_proof()
             self.save(completed=True,up_to_date=True,phase='completed',proof=proof,dag_was_paused=plan['idle']['paused'],drift_was_paused=plan['idle']['drift_paused'])
             return
-        if plan['idle']['active'] or plan['idle']['running']:
+        if plan['idle']['active'] or plan['idle']['running'] or plan['idle'].get('local_jobs'):
             self.save(deferred=True,reason='active_training',retry_ci_run_id=os.environ.get('CI_RUN_ID'))
             return
         self.save(started=True,preflight_only=False,dag_was_paused=plan['idle']['paused'],
@@ -701,12 +743,14 @@ class RolesDelivery:
             self.pause(True)
             self.pause(True,drift=True)
             idle=self.remote(self.api(),IDLE)
-            if idle['active'] or idle['running']:
+            if idle['active'] or idle['running'] or self.local_work():
                 self.pause(plan['idle']['paused'])
                 self.pause(plan['idle']['drift_paused'],drift=True)
                 self.save(started=False,preflight_only=True,deferred=True,reason='training_started_before_fence',retry_ci_run_id=os.environ.get('CI_RUN_ID'))
                 return
             self.start_guard()
+            if self.local_work():
+                raise RuntimeError('Unresolved Local work appeared after admission; reconcile before release')
             self.business()
             self.public_health()
             self.monitor_start()

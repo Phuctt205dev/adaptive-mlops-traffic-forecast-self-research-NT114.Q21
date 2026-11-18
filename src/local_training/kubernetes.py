@@ -109,6 +109,16 @@ class Kubernetes:
         self.call("GET", f"/api/v1/namespaces/{self.namespace}/pods?limit=1")
         self.call("GET", "/api/v1/nodes")
         self.call("GET", "/apis/metrics.k8s.io/v1beta1/nodes")
+        for group, resource, verb in [('batch','jobs','create'), ('batch','jobs','delete'),
+                                      ('','pods/log','get')]:
+            attributes={'namespace':self.namespace,'group':group,'resource':resource,'verb':verb}
+            if '/' in resource:
+                attributes['resource'],attributes['subresource']=resource.split('/',1)
+            result = self.call('POST', '/apis/authorization.k8s.io/v1/selfsubjectaccessreviews', document={
+                'apiVersion':'authorization.k8s.io/v1', 'kind':'SelfSubjectAccessReview',
+                'spec':{'resourceAttributes':attributes}})
+            if result.get('status',{}).get('allowed') is not True:
+                raise RuntimeError('Local dispatcher lacks required Job permissions.')
         return True
 
     def get(self, name):

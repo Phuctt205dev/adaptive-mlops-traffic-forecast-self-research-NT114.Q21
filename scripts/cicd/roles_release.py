@@ -7,24 +7,12 @@ from pathlib import Path
 import re
 
 from src.cloud_training.package import ml_sources
+from scripts.cicd import components
 
-SCHEMA = 'traffic-release/v2'
-ROLES = ('api', 'tree', 'neural', 'sync')
-ROOTS = {
-    'api': ['backend.app.services.serving_runtime', 'backend.app.services.lifecycle',
-            'backend.app.services.region_cleanup_runtime', 'backend.app.api.routes.training_monitor'],
-    'tree': ['backend.app.services.worker_runtime', 'backend.app.services.region_cleanup_runtime',
-             'src.cloud_training.kaggle_rpc'],
-    'neural': ['backend.app.services.worker_runtime', 'backend.app.services.region_cleanup_runtime',
-               'src.cloud_training.kaggle_rpc'],
-    'sync': ['backend.app.services.region_cleanup_uploader', 'backend.app.services.restore_cache',
-             'backend.app.services.artifact_sync_control'],
-}
-# Templates are read as data, so import traversal cannot discover them.
-RESOURCES = {
-    'tree': ('src/cloud_training/notebook.py',),
-    'neural': ('src/cloud_training/notebook.py',),
-}
+SCHEMA = 'traffic-release/v3'
+LEGACY_SCHEMA = 'traffic-release/v2'
+INVENTORY = components.load()
+ROLES = components.applications(INVENTORY)
 FORBIDDEN = {'src/pipeline.py', 'src/time_series_training.py', 'src/lstm_sequences.py',
              'backend/app/api/routes/internal_training.py'}
 
@@ -37,10 +25,11 @@ def digest(value):
     return hashlib.sha256(value).hexdigest()
 
 
-def closure(root, role):
+def closure(root, role, *, entrypoints=None, resources=None, allow_training=False):
     """Include local imports, with explicit dynamic entrypoints per role."""
     root = Path(root)
-    result, visited, pending = {}, set(), list(ROOTS[role])
+    spec = INVENTORY['components'].get(role, {})
+    result, visited, pending = {}, set(), list(entrypoints if entrypoints is not None else spec['entrypoints'])
 
     def file_for(module):
         base = root.joinpath(*module.split('.'))
@@ -68,10 +57,10 @@ def closure(root, role):
         path = file_for(module)
         if path is None:
             raise ValueError('A role entrypoint is missing: ' + module)
-        if path.is_symlink():
+        if not path.resolve(strict=True).is_relative_to(root.resolve()) or any(p.is_symlink() for p in (path,*path.parents)):
             raise ValueError('Role sources cannot follow symlinks')
         name = path.relative_to(root).as_posix()
-        if name in FORBIDDEN:
+        if name in FORBIDDEN and not allow_training:
             raise ValueError('Role imports training-only implementation: ' + name)
         if role == 'api' and name in {'backend/app/services/training_control.py',
                                      'backend/app/services/worker_runtime.py'}:
@@ -95,15 +84,16 @@ def closure(root, role):
             elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'import_module':
                 if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
                     enqueue(node.args[0].value)
-    for name in RESOURCES.get(role, ()):
+    for name in (resources if resources is not None else spec['resources']):
+        components.safe_path(name)
         path = root / name
-        if path.is_symlink():
+        if not path.resolve(strict=True).is_relative_to(root.resolve()) or any(p.is_symlink() for p in (path,*path.parents)):
             raise ValueError('Role resources cannot follow symlinks')
         result[name] = path.read_bytes().replace(b'\r\n', b'\n')
     return result
 
 
-def dockerfile(base):
+def dockerfile(base, inventory=None):
     header = f'''FROM {base} AS db
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
@@ -120,8 +110,9 @@ RUN --mount=type=cache,target=/root/.cache/pip /opt/kaggle-sdk/bin/python -m pip
 ENV KAGGLE_PYTHON=/opt/kaggle-sdk/bin/python
 '''
     output = header
-    for role in ROLES:
-        parent = 'db' if role == 'sync' else 'web' if role == 'api' else 'cloud'
+    inventory = inventory or INVENTORY
+    for role in components.applications(inventory):
+        parent = inventory['components'][role]['parent']
         output += f'FROM {parent} AS {role}\n'
         if role != 'sync':
             output += f'COPY requirements/{role}.txt /tmp/role-requirements/{role}.txt\n'
@@ -139,6 +130,8 @@ def build(root, output, commit):
     root, output = Path(root), Path(output)
     if output.exists() or not re.fullmatch('[0-9a-f]{40}', commit):
         raise ValueError('Use a fresh output and explicit commit')
+    inventory = components.load(root)
+    roles = components.applications(inventory)
     baseline = json.loads((root / 'deployment/rke2/role-baseline.json').read_text(encoding='utf-8'))
     if not re.fullmatch(r'docker\.io/library/python:[a-z0-9.-]+@sha256:[0-9a-f]{64}', baseline['python_base']):
         raise ValueError('Python role base must be pinned')
@@ -150,25 +143,24 @@ def build(root, output, commit):
     requirements = {path.name: path.read_bytes().replace(b'\r\n', b'\n')
                     for path in (root / 'requirements/roles').glob('*.txt')}
     bootstrap = 'deployment/rke2/runtime/role_runtime.py'
-    for role in ROLES:
-        files = closure(root, role)
+    for role in roles:
+        spec = inventory['components'][role]
+        files = closure(root, role, entrypoints=spec['entrypoints'], resources=spec['resources'])
         files[bootstrap] = (root / bootstrap).read_bytes().replace(b'\r\n', b'\n')
         if role == 'sync':
             files['scripts/cicd/roles_guard.py'] = (root / 'scripts/cicd/roles_guard.py').read_bytes().replace(b'\r\n', b'\n')
         if role == 'api':
             files['docs/index.html'] = (root / 'docs/index.html').read_bytes()
-        if role in {'tree', 'neural'}:
+        if spec['ml_bundle']:
             files.update({'kaggle-project/' + name: data for name, data in ml.items()})
         source_hashes = {name: digest(data) for name, data in sorted(files.items())}
-        used_requirements = ['constraints.txt','db.txt'] + ([] if role == 'sync' else ['web.txt',role+'.txt'])
-        if role in {'tree','neural'}:
-            used_requirements.append('sdk.txt')
+        used_requirements = spec['requirements']
         metadata = {'schema': 'traffic-role-runtime/v1', 'role': role,
-                    'bundle_id': bundle_id if role in {'tree','neural'} else digest(canonical(source_hashes)),
+                    'bundle_id': bundle_id if spec['ml_bundle'] else digest(canonical(source_hashes)),
                     'base_image': baseline['python_base'],
-                    'producer_profile': baseline['producer_profile'] if role in {'tree','neural'} else {},
+                    'producer_profile': baseline['producer_profile'] if spec['ml_bundle'] else {},
                     'dependency_hashes': {name:digest(requirements[name]) for name in used_requirements},
-                    'recipe_sha256': digest(dockerfile(baseline['python_base'])),
+                    'recipe_sha256': digest(dockerfile(baseline['python_base'], inventory)),
                     'files': source_hashes}
         metadata['source_id'] = digest(canonical(metadata))
         metadata['commit'] = commit
@@ -179,7 +171,7 @@ def build(root, output, commit):
         payload.update({'roles/' + role + '/' + name: data for name, data in files.items()})
     for path in (root / 'requirements/roles').glob('*.txt'):
         payload['requirements/' + path.name] = path.read_bytes().replace(b'\r\n', b'\n')
-    payload['Dockerfile'] = dockerfile(baseline['python_base'])
+    payload['Dockerfile'] = dockerfile(baseline['python_base'], inventory)
     payload['.dockerignore'] = b'**\n!Dockerfile\n!release.json\n!roles/\n!roles/**\n!requirements/\n!requirements/**\n'
     # Desired Kubernetes state and one-time migration metadata are release
     # inputs, independently hashed from application image content.
@@ -192,7 +184,16 @@ def build(root, output, commit):
                          ('legacy/traffic_region_training_worker.py', 'deployment/rke2/runtime/traffic_region_training_worker.py'),
                          ('airflow_control.py', 'src/cloud_training/airflow_control.py')]:
         payload['airflow/' + name] = (root / source).read_bytes().replace(b'\r\n', b'\n')
+    payload['components.json'] = canonical(inventory)
+    payload['deploy/local-training.json'] = canonical(components.local_config(json.loads(components.read(root, 'deployment/cicd/local-training.json'))))
+    payload['deploy/local-training-rbac.yaml'] = components.read(root, 'deployment/rke2/local-training-rbac.yaml')
+    executors = {}
+    for name, spec in components.executors(inventory).items():
+        files, metadata = components.prepare_executor(root, name, spec, closure, commit)
+        payload.update({'executors/' + name + '/' + path: data for path, data in files.items()})
+        executors[name] = {'source_id': metadata['source_id'], 'profile': spec}
     document = {'schema': SCHEMA, 'commit': commit, 'baseline': baseline, 'cloud_bundle_id': bundle_id,
+                'component_registry_sha256': digest(canonical(inventory)), 'executors': executors,
                 'roles': scopes, 'files': {name: digest(data) for name, data in sorted(payload.items())}}
     document['release_id'] = digest(canonical(document))
     for name, data in payload.items():
@@ -207,8 +208,13 @@ def build(root, output, commit):
 def verify(directory, *, expected_commit=None):
     root = Path(directory).resolve(strict=True)
     document = json.loads((root / 'release.json').read_bytes())
-    if document.get('schema') != SCHEMA or set(document.get('roles', {})) != set(ROLES):
+    if document.get('schema') not in {SCHEMA, LEGACY_SCHEMA}:
         raise ValueError('Unsupported role release')
+    inventory = (components.validate(json.loads((root / 'components.json').read_bytes()))
+                 if document['schema'] == SCHEMA else None)
+    roles = components.applications(inventory) if inventory else components.LEGACY_ROLES
+    if set(document.get('roles', {})) != set(roles):
+        raise ValueError('Application inventory differs')
     if not re.fullmatch('[0-9a-f]{40}', document.get('commit', '')) or (expected_commit and document['commit'] != expected_commit):
         raise ValueError('Role release commit differs')
     identity = {k: v for k, v in document.items() if k != 'release_id'}
@@ -225,7 +231,7 @@ def verify(directory, *, expected_commit=None):
             raise ValueError('Unsafe role release path')
         if digest((root / path).read_bytes()) != wanted:
             raise ValueError('Role release source differs')
-    for role in ROLES:
+    for role in roles:
         metadata = json.loads((root / 'roles' / role / 'role-release.json').read_bytes())
         content = {k:v for k,v in metadata.items() if k not in {'source_id','commit'}}
         if (metadata['role'] != role or metadata['commit'] != document['commit']
@@ -233,4 +239,28 @@ def verify(directory, *, expected_commit=None):
                 or metadata['source_id'] != document['roles'][role]['source_id']
                 or metadata['bundle_id'] != document['roles'][role]['bundle_id']):
             raise ValueError('Role binding differs')
+    if inventory:
+        if (document.get('component_registry_sha256') != digest(canonical(inventory)) or
+                set(document.get('executors', {})) != set(components.executors(inventory))):
+            raise ValueError('Execution inventory differs')
+        for name, spec in components.executors(inventory).items():
+            metadata = json.loads((root / 'executors' / name / 'executor-release.json').read_bytes())
+            content = {k: v for k, v in metadata.items() if k not in {'source_id', 'commit'}}
+            if (metadata.get('schema') != 'traffic-executor-image/v1' or metadata.get('role') != name or metadata.get('profile') != spec or metadata.get('commit') != document['commit'] or
+                    metadata.get('source_id') != digest(canonical(content)) or
+                    document['executors'][name] != {'source_id': metadata['source_id'], 'profile': spec}):
+                raise ValueError('Execution source identity differs')
+            prefix='executors/'+name+'/'
+            actual={path[len(prefix):] for path in document['files'] if path.startswith(prefix)}
+            if actual != set(metadata['files']) | {'executor-release.json'}:
+                raise ValueError('Execution source inventory differs')
+            for path, wanted in metadata['files'].items():
+                components.safe_path(path)
+                if digest((root / 'executors' / name / path).read_bytes()) != wanted:
+                    raise ValueError('Execution source differs')
+        config = components.local_config(json.loads((root / 'deploy/local-training.json').read_bytes()))
+        if config['component'] not in document['executors']:
+            raise ValueError('Local execution image is not declared')
+        if set(document['executors'][config['component']]['profile']['consumers']) != {'api','tree','neural'}:
+            raise ValueError('Local configuration must reach both workers and API')
     return document

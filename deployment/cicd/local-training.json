@@ -1,0 +1,12 @@
+{
+  "schema": "traffic-local-training-config/v1",
+  "component": "local-training",
+  "enabled": false,
+  "namespace": "traffic-mlops",
+  "memory_mib": 3072,
+  "cpu": 1,
+  "reserve_mib": 1536,
+  "deadline_seconds": 28800,
+  "service_account": "traffic-local-training",
+  "dispatcher_account": "traffic-training-dispatcher"
+}

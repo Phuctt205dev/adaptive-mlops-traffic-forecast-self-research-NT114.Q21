@@ -31,7 +31,8 @@ if ($manifest.release_id -ne $delivery.release_id) { throw 'Image receipt and re
 $receiptDirectory = Join-Path (Get-Location).Path 'results\cicd'
 New-Item -ItemType Directory -Path $receiptDirectory -Force | Out-Null
 $journal = Join-Path $receiptDirectory ('delivery-' + $ExpectedCommit + '-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT + '.json')
-if ($manifest.schema -ne 'traffic-release/v2' -or $delivery.schema -ne 'traffic-delivery/v2') {
+if (!(($manifest.schema -eq 'traffic-release/v2' -and $delivery.schema -eq 'traffic-delivery/v2') -or
+      ($manifest.schema -eq 'traffic-release/v3' -and $delivery.schema -eq 'traffic-delivery/v3'))) {
     throw 'The unified engine requires a checked role release. Recover a legacy transaction with its original controller/artifact.'
 }
 $deliveryScript = 'scripts/cicd/roles_deploy.py'

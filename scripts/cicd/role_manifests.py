@@ -4,10 +4,11 @@ from pathlib import Path
 import re
 
 from scripts.cicd.release import canonical,digest,DIGEST_IMAGE
+from scripts.cicd import components
 
 ROOT=Path(__file__).resolve().parents[2]/'deployment/rke2'
 CONTRACT='traffic-runtime-contract/v1'
-SLOTS={'api':('api','api-next'),'tree':('train-tree','tree-next'),'neural':('train-neural','neural-next')}
+SLOTS={name:tuple(spec['slots']) for name,spec in components.load()['components'].items() if 'slots' in spec}
 ANNOTATION='traffic.mlops/deployment-id'
 
 
@@ -26,7 +27,7 @@ def contract(directory=None):
     return value
 
 
-def render(role,slot,images,*,directory=None,inactive=False):
+def render(role,slot,images,*,directory=None,inactive=False,executors=None):
     settings=contract(directory)
     if role not in SLOTS or slot not in SLOTS[role]:
         raise ValueError('Unexpected role slot')
@@ -53,6 +54,27 @@ def render(role,slot,images,*,directory=None,inactive=False):
     pod=value['spec']['template']['spec']
     if pod.get('automountServiceAccountToken') is not False:
         raise ValueError('Application service account token must stay disabled')
+    if executors is not None:
+        config_path = Path(directory)/'deploy/local-training.json' if directory else components.ROOT/'deployment/cicd/local-training.json'
+        config = components.local_config(json.loads(config_path.read_bytes()))
+        binding = executors.get(config['component'])
+        if not binding or not DIGEST_IMAGE.fullmatch(binding.get('image','')):
+            raise ValueError('Local execution image must be bound by this release')
+        env = {'LOCAL_TRAINING_ENABLED':str(config['enabled']).lower(), 'LOCAL_TRAINING_IMAGE':binding['image'],
+               'LOCAL_TRAINING_NAMESPACE':config['namespace'], 'LOCAL_TRAINING_MEMORY_MIB':str(config['memory_mib']),
+               'LOCAL_TRAINING_CPU':str(config['cpu']), 'LOCAL_TRAINING_RESERVE_MIB':str(config['reserve_mib']),
+               'LOCAL_TRAINING_DEADLINE_SECONDS':str(config['deadline_seconds']),
+               'LOCAL_TRAINING_SERVICE_ACCOUNT':config['service_account']}
+        main = next(item for item in pod['containers'] if item['name'] != 'artifact-sync')
+        existing = main.setdefault('env', [])
+        existing[:] = [item for item in existing if not item['name'].startswith('LOCAL_TRAINING_')]
+        existing.extend({'name':name, 'value':value} for name,value in env.items())
+        # Only the reviewed dispatcher profile can receive a projected token.
+        # Disabled bootstrap releases do not require a ServiceAccount that the
+        # owner has not created yet. API and execution Job never get API tokens.
+        if config['enabled'] and role in {'tree','neural'}:
+            pod['serviceAccountName'] = config['dispatcher_account']
+            pod['automountServiceAccountToken'] = True
     for item in pod.get('volumes',[]):
         if 'hostPath' in item:raise ValueError('Host mounts are not part of the runtime contract')
     for item in [*pod['containers'],*pod.get('initContainers',[])]:
@@ -64,7 +86,7 @@ def render(role,slot,images,*,directory=None,inactive=False):
             if 'value' in env and re.search(r'(PASSWORD|SECRET|ACCESS_KEY|DATABASE_URL|TOKEN)$',env['name']):
                 raise ValueError('Manifest contains a literal credential')
     # Slot names affect placement/routing, not the identity of desired content.
-    logical=expand(template)
+    logical=json.loads(json.dumps(value))
     logical['metadata']['name']='role-slot'
     logical['spec']['selector']['matchLabels']['app']='role-slot'
     logical['spec']['template']['metadata']['labels']['app']='role-slot'

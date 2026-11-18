@@ -1,7 +1,7 @@
 """Backend policy shared by admission and workers; history remains immutable."""
 import re
 
-from backend.app.core.errors import ApplicationError
+from backend.app.core.application_error import ApplicationError
 
 
 def cloud_configuration(configuration):

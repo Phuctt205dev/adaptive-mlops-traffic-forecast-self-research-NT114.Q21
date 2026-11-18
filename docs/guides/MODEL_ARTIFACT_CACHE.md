@@ -71,6 +71,14 @@ Uploader tránh upload lại binary sạch còn đúng identity, giữ kiểm cl
 tombstone khi reconcile. Background uploader có thể prune sau ack dưới cùng
 cleanup barrier. Explicit flush không prune dưới inventory before/after;
 chỉ xác nhận retirement khi tập file ổn định và đầy đủ acknowledgement.
+Background sync giữ khóa cache riêng cho từng binary model, gồm kiểm identity,
+upload và ghi nhận ack; việc quét hoặc tải dataset/báo cáo lên không giữ khóa
+model. API có thể warm/load model trong khi các file không phải model vẫn
+đang đồng bộ. Prune vẫn giữ khóa khi chọn/xóa cache; explicit flush vẫn giữ
+khóa xuyên suốt inventory trước/upload/inventory sau. Không bỏ khóa, tăng
+timeout startup hoặc trả serving-ready trước khi model nạp xong. Một lần
+truyền binary chậm vẫn có thể chiếm khóa tới giới hạn chờ của reader; bản sửa
+không bảo đảm mọi trường hợp startup đều hết timeout.
 Eviction giới hạn128remote probes/30giây quan sát, thêm timeout client S3.
 Đĩa runtime vẫn có thể thiếu do writer khác; lỗi download hữu hạn giữ file
 cũ và không publish file tạm lỗi. Full volume/log/dirty data cần xử lý riêng.
@@ -91,6 +99,10 @@ download, pin/dirty/remote overwrite, LRU, khóa giữa process, upload/flush v�
 tombstone, manifest budget/resource, staging disk shortfall. Test loader tree/
 neural dùng bytes giả không thay nghiệm thu model thật đủ5family. CI full và
 current Kubernetes vẫn bắt buộc; kiểm local thiếu TensorFlow không thay chúng.
+Regression bổ sung dùng process reader riêng trong lúc upload: background
+CSV cho load model, binary đang upload vẫn chặn reader; explicit flush chặn
+reader xuyên cả CSV; upload lỗi nhả khóa và không ghi ack. Không dùng phép
+kiểm này làm benchmark thời gian startup trên cụm thật.
 
 Khi được giao phát hành: CI artifact mới → inventory/Plan mới → Manual gate →
 Apply+Verify → kiểm inference/DAG/model active/queue → lưu receipt. Đo cùng

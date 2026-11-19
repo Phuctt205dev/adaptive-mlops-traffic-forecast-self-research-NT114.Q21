@@ -27,6 +27,9 @@ from src.cloud_training.telemetry import operation_timing, source_timing
 
 TERMINAL = {"COMPLETE", "ERROR", "CANCEL_ACKNOWLEDGED"}
 TERMINAL_EVENT_WAIT_SECONDS = 90
+INPUT_PREPARATION_SECONDS = 600
+INPUT_ABSENCE_SECONDS = 15
+INPUT_UPLOAD_ATTEMPTS = 3
 
 
 class TrainingCancelled(ProviderError):
@@ -240,34 +243,120 @@ class KaggleExecution:
             raise ProviderError("Remote notebook source, inputs, privacy or resources differ from this attempt.")
         return source
 
-    def submit(self, cancelled=lambda: False):
+    def _upload_input(self, inputs, deadline):
+        # A retry is the SAME create-only slug, never a dataset version, new
+        # attempt or notebook execution. Journal the budget before the write.
+        if self.clock() >= deadline:
+            raise ProviderUncertain("Input confirmation deadline expired.", operation="dataset_create")
         self.phase("input_upload")
+        attempts = self.ledger.get("dataset_upload_attempts", int(self.ledger["dataset_pending"]))
+        self.save(dataset_pending=True, dataset_upload_attempts=attempts + 1,
+                  dataset_upload_confirmed=False)
+        try:
+            self.call("dataset_create", directory=str(inputs), timeout=min(300, deadline - self.clock()))
+        except ProviderError as error:
+            if not transient(error) and error.http_status != 409:
+                raise
+            self.save(last_failure={"operation": error.operation, "category": error.category,
+                                    "http_status": error.http_status})
+            self.phase("input_reconciling")
+        else:
+            self.save(dataset_upload_confirmed=True)
+            self.phase("input_processing")
+
+    def _prepare_input(self, inputs, cancelled):
+        deadline = self.ledger.get("input_deadline", self.clock() + INPUT_PREPARATION_SECONDS)
+        self.save(input_deadline=deadline)
+        absent_since = None
+        if cancelled():
+            raise TrainingCancelled("The run was cancelled before input upload.")
+        if self.clock() >= deadline:
+            raise ProviderUncertain("Input confirmation deadline expired.", operation="dataset_check")
+        if not self.ledger["dataset_pending"]:
+            self._upload_input(inputs, deadline)
+        while self.clock() < deadline:
+            if cancelled():
+                raise TrainingCancelled("The run was cancelled before notebook submission.")
+            try:
+                info = self.call("dataset_check", reference=self.ledger["dataset_reference"],
+                                 timeout=min(30, deadline - self.clock()))
+            except ProviderError as error:
+                if not transient(error) and error.http_status not in {403, 404}:
+                    raise
+                self.save(last_failure={"operation": error.operation, "category": error.category,
+                                        "http_status": error.http_status})
+                self.phase("input_reconciling")
+                present = None
+                if error.http_status in {403, 404} and self.clock() < deadline:
+                    try:
+                        presence = self.call("resource_exists", kind="dataset", reference=self.ledger["dataset_reference"],
+                                             timeout=min(30, deadline - self.clock()))
+                        present = presence.get("exists")
+                    except ProviderError as read_error:
+                        if not transient(read_error):
+                            raise
+                if present is False:
+                    if self.ledger.get("submit_pending") or self.ledger.get("version"):
+                        raise ProviderUncertain("Input is missing after a notebook may have started.", operation="dataset_check")
+                    # Allow eventual visibility; one 404 or failed presence read
+                    # never authorizes another write. A confirmed upload is read
+                    # only even while its dataset is still being processed.
+                    if absent_since is None:
+                        absent_since = self.clock()
+                    elif (self.clock() - absent_since >= INPUT_ABSENCE_SECONDS
+                          and not self.ledger.get("dataset_upload_confirmed")):
+                        if self.clock() >= deadline:
+                            break
+                        try:
+                            notebook = self.call("resource_exists", kind="notebook", reference=self.ledger["reference"],
+                                                 timeout=min(30, deadline - self.clock()))
+                        except ProviderError as read_error:
+                            if not transient(read_error):
+                                raise
+                            notebook = None
+                        if notebook is None:
+                            # A failed read is not proof of absence. Recheck the
+                            # dataset over a fresh visibility window as well.
+                            absent_since = None
+                        elif notebook.get("exists") is not False:
+                            raise ProviderUncertain("Notebook absence is not confirmed; input retry remains fenced.",
+                                                    operation="resource_exists")
+                        else:
+                            if cancelled():
+                                raise TrainingCancelled("The run was cancelled before input retry.")
+                            attempts = self.ledger.get("dataset_upload_attempts", 1)
+                            if attempts >= INPUT_UPLOAD_ATTEMPTS:
+                                raise ProviderError("Input upload failed after bounded retries and confirmed absence.",
+                                                    operation="dataset_create", category="input_upload_failed")
+                            self._upload_input(inputs, deadline)
+                            absent_since = None
+                else:
+                    absent_since = None
+            else:
+                absent_since = None
+                if info.get("private") is not True or info.get("version") != 1:
+                    raise ProviderError("The immutable private dataset version was not confirmed.")
+                self.save(dataset_upload_confirmed=True)
+                if info["status"] == "ready":
+                    return
+                if info["status"] in {"error", "failed"}:
+                    raise ProviderError("The private dataset failed processing.")
+                self.phase("input_processing")
+            # Stop stays responsive during read/backoff; no fake ML progress.
+            for _ in range(5):
+                if cancelled():
+                    raise TrainingCancelled("The run was cancelled while confirming input.")
+                if self.clock() >= deadline:
+                    break
+                self.sleep(min(1, deadline - self.clock()))
+        raise ProviderUncertain("Input could not be confirmed within its deadline.", operation="dataset_check")
+
+    def submit(self, cancelled=lambda: False):
         inputs = self.directory / "input"
         metadata = {"id": self.ledger["dataset_reference"], "title": self.ledger["dataset_reference"].split("/")[1],
                     "licenses": [{"name": "other"}], "description": "Private temporary training snapshot. All rights reserved."}
         (inputs / "dataset-metadata.json").write_bytes(canonical(metadata))
-        if not self.ledger["dataset_pending"]:
-            self.save(dataset_pending=True)
-            self.call("dataset_create", directory=str(inputs), timeout=300)
-        self.phase("input_processing")
-        deadline = self.clock() + 600
-        while True:
-            if cancelled():
-                raise TrainingCancelled("The run was cancelled before notebook submission.")
-            try:
-                info = self.call("dataset_check", reference=self.ledger["dataset_reference"])
-            except ProviderError as error:
-                if error.http_status not in {403, 404} or self.clock() >= deadline:
-                    raise
-                self.sleep(5)
-                continue
-            if info.get("private") is not True or info.get("version") != 1:
-                raise ProviderError("The immutable private dataset version was not confirmed.")
-            if info["status"] == "ready":
-                break
-            if info["status"] in {"error", "failed"} or self.clock() >= deadline:
-                raise ProviderError("The private dataset did not become ready within its deadline.")
-            self.sleep(5)
+        self._prepare_input(inputs, cancelled)
         self.milestone("input_ready")
         self.phase("notebook_submit")
         notebook = self.directory / "notebook"

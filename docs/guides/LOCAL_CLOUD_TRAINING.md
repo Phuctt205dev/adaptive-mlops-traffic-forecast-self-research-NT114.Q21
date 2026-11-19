@@ -18,6 +18,26 @@ input, including when a request UUID is supplied.
 
 ## Execution
 
+Kaggle input-upload recovery is separate from starting a notebook. A transient
+upload error first checks the same private dataset/version. Missing metadata
+alone is not proof of absence: two or more successful absence observations
+at least 15 seconds apart and a confirmed absent notebook are required before
+retrying the same create-only dataset slug. The total upload budget is three
+attempts, persisted before each write, within a persisted 10 minute input
+deadline. Confirmed uploads are never uploaded again while processing.
+No dataset versions, replacement attempts or extra notebook fits are created.
+An existing/maybe-started notebook, an unknown presence result or exhausted
+confirmation deadline keeps the safety fence. Proven absence after all upload
+attempts fails the branch through normal Stop/cleanup; it does not remain
+silently queued. Stop is checked during every backoff. Training Monitor shows
+"Checking uploaded training data" during reconciliation, without claiming ML
+progress. This recovery runs inside an owned attempt before its notebook starts;
+it does not resume an older `needs_attention` attempt after controller replacement.
+
+The [official Kaggle dataset metadata contract](https://github.com/Kaggle/kaggle-cli/blob/main/docs/datasets_metadata.md)
+defines create with a unique owner/slug separately from creating a new dataset
+version. Retries preserve that original create-only identity and source snapshot.
+
 The existing controlled graph remains validate → tree/LSTM/GRU → finalize.
 Controllers run no fits. Local creates **one Kubernetes Job per selected model**.
 The tree controller runs its three algorithms sequentially; independent neural

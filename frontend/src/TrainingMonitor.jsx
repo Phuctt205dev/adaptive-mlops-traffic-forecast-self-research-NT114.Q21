@@ -61,7 +61,9 @@ function RunCard({ run, timezone, onDismiss, snapshotAgeSeconds, capabilities })
   const failed = (Boolean(run.error_code) && run.error_code !== "admin_cancelled") || run.state === "failed";
   const terminal = ["failed", "cancelled", "completed"].includes(run.state);
   const phases = Object.values(run.branches || {}).map((b) => b.observation?.phase);
-  const connection = phases.includes("needs_attention") ? "needs_attention" : phases.includes("reconnecting") ? "reconnecting" : null;
+  const connection = phases.includes("needs_attention") ? "needs_attention"
+    : phases.includes("input_reconciling") ? "input_reconciling"
+      : phases.includes("reconnecting") ? "reconnecting" : null;
   const cvCompleted = Number(run.cv_completed_models) || 0;
   const outputVerified = Number(run.output_verified_models) || 0;
 
@@ -109,7 +111,8 @@ function RunCard({ run, timezone, onDismiss, snapshotAgeSeconds, capabilities })
       </div>}
       {dismissError && <p className="training-monitor-error" role="alert">{dismissError}</p>}
       {connection && !run.cancel_requested && <div className="training-location-note" role="status">
-        {connection === "reconnecting" ? "Contact with Kaggle was interrupted. The last confirmed progress is shown; no duplicate training was submitted."
+        {connection === "input_reconciling" ? "Checking whether Kaggle received the training data. If needed, only the upload is retried. No duplicate model training is started."
+          : connection === "reconnecting" ? "Contact with Kaggle was interrupted. The last confirmed progress is shown; no duplicate training was submitted."
           : "Kaggle's outcome could not be confirmed. Stop this run and wait for stop confirmation before starting a replacement. No Local fallback has started."}
       </div>}
       {run.error_code === "admin_cancelled" && <p role="status">{run.state === "cancelled"

@@ -15,6 +15,13 @@ test("unknown Kaggle connection is distinct from failure and cancellation", () =
   assert.equal(modelStatus({ ...run, state: "cancelling" }, { id: "gru", state: "cancelling" }), "Stopping");
 });
 
+test("input reconciliation shows data checks without claiming ML has started", () => {
+  const run = { backend: "kaggle", state: "running", branches: { gru: { observation: { phase: "input_reconciling" } } } };
+  assert.equal(modelStatus(run, { id: "gru", stage: "queued", state: "waiting" }), "Checking uploaded training data");
+  assert.equal(modelStatus(run, { id: "gru", stage: "output_verified", ml_completed: true }), "Results received and checked");
+  assert.equal(modelStatus({ ...run, state: "cancelling" }, { id: "gru", state: "cancelling" }), "Stopping");
+});
+
 test("CV completion is a wait for final training, not completion of the run", () => {
   assert.match(modelStatus({}, { id: "lstm", stage: "model_cv_completed" }), /Waiting for final training/);
 });

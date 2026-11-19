@@ -157,7 +157,16 @@ def main():
             state["runs"] = [{"training_run_id": "run", "dataset": "five-models.csv", "backend": "local", "purpose": "training",
                 "state": "running", "cancel_requested": False, "models": [{"id": "gru", "name": "GRU", "state": "waiting", "stage": "queued"}],
                 "total_models": 1, "sequence": 1, "events": [], "branches": {"gru": {"attempt_id": "attempt", "observation": {"phase": "waiting_resources"}}}}]
+            state["runs"][0]["backend"] = "kaggle"
+            state["runs"][0]["branches"]["gru"]["observation"]["phase"] = "input_reconciling"
             tab("Training Monitor")
+            expect(page.locator(".training-monitor-card")).to_contain_text("Checking uploaded training data")
+            expect(page.locator(".training-monitor-card")).to_contain_text("only the upload is retried")
+            expect(page.locator(".training-monitor-card")).to_contain_text("No ML progress received yet")
+            cases.append("input reconciliation explains upload recovery without claiming ML has started")
+            state["runs"][0]["backend"] = "local"
+            state["runs"][0]["branches"]["gru"]["observation"]["phase"] = "waiting_resources"
+            page.reload()
             expect(page.locator(".training-monitor-card")).to_contain_text("Local · RKE2 CPU")
             expect(page.locator(".training-monitor-card")).to_contain_text("Waiting for RKE2 resources")
             page.get_by_role("button", name="Stop training", exact=True).click()

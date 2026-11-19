@@ -17,6 +17,7 @@ export const stages = {
 export const providerPhases = {
   waiting_resources: "Waiting for RKE2 resources", local_running: "Training on RKE2",
   reconnecting: "Reconnecting to Kaggle", needs_attention: "Connection needs attention",
+  input_reconciling: "Checking uploaded training data",
   prepare_input: "Preparing input", input_upload: "Uploading input", input_processing: "Kaggle is preparing input",
   notebook_submit: "Submitting to Kaggle", provider_wait: "Submitted · Waiting for Kaggle progress",
   supervisor_started: "Starting the Kaggle environment", child_running: "Starting the training process",

@@ -27,7 +27,16 @@ class ComponentDeliveryTests(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory()
         cls.addClassCleanup(cls.temp.cleanup)
         cls.package = Path(cls.temp.name) / 'release'
-        cls.release = roles_release.build(ROOT, cls.package, A)
+        # Exercise both profiles independently of the production enable flag.
+        source_read = components.read
+        def disabled_fixture(root, path):
+            value = source_read(root, path)
+            if path == 'deployment/cicd/local-training.json':
+                config = json.loads(value)
+                return roles_release.canonical({**config, 'enabled': False})
+            return value
+        with patch.object(components, 'read', side_effect=disabled_fixture):
+            cls.release = roles_release.build(ROOT, cls.package, A)
         cls.bindings = {name: {'role':name, 'source_id':spec['source_id'], 'commit':A,
                               'image':'ghcr.io/test/backend@sha256:'+hashlib.sha256(name.encode()).hexdigest()}
                         for name, spec in {**cls.release['roles'], **cls.release['executors']}.items()}

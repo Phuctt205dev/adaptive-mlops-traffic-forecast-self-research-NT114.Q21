@@ -115,15 +115,25 @@ class RolesDelivery:
     def get(self, kind, name):
         return self.cluster.call('get',kind,name,'-o','json')
 
-    def remote(self,deployment,source):
-        return self.execute(self.cluster.pod(deployment),container(deployment)[1]['name'],source)
+    def remote(self,deployment,source,*,purpose=None):
+        return self.execute(self.cluster.pod(deployment),container(deployment)[1]['name'],source,purpose=purpose)
 
-    def execute(self,pod,name,source,*,timeout=100):
+    def cluster_exec(self,pod,name,source,*,purpose=None,timeout=100,json_output=True):
+        try:
+            return self.cluster.call('exec',pod,'-c',name,'--','python','-B','-c',source,
+                                     timeout=timeout,json_output=json_output)
+        except ClusterOperationError as error:
+            error.facts.update(phase=diagnostics.identifier(self.state.get('phase','preflight')))
+            if purpose is not None:
+                error.facts['purpose']=diagnostics.identifier(purpose)
+            raise
+
+    def execute(self,pod,name,source,*,timeout=100,purpose=None):
         """Keep sanitized exception facts even when every application pod is Ready."""
         wrapped=("import json,traceback\ntry:\n exec("+repr(source)+")\n"
                  "except Exception as e:\n print(json.dumps({'execution_failed':True,'error_type':type(e).__name__,"
                  "'frames':[{'file':f.filename.replace(chr(92),'/').rsplit('/',1)[-1],'line':f.lineno} for f in traceback.extract_tb(e.__traceback__)[-8:]]}))")
-        result=self.cluster.call('exec',pod,'-c',name,'--','python','-B','-c',wrapped,timeout=timeout)
+        result=self.cluster_exec(pod,name,wrapped,timeout=timeout,purpose=purpose)
         if result.get('execution_failed'):
             fact={'phase':self.state.get('phase','preflight'),'pod':diagnostics.identifier(pod),
                   'container':diagnostics.identifier(name),'error_type':diagnostics.identifier(result.get('error_type')),
@@ -210,7 +220,24 @@ class RolesDelivery:
                 "c=requests.Session();c.trust_env=False;base=s.airflow_api_url+'/dags/'+s."+('drift_dag_id' if drift else 'training_dag_id')+";"
                 "auth=(s.airflow_admin_username,s.airflow_admin_password);r="+expression+
                 ";r.raise_for_status();print(json.dumps({'paused':r.json()['is_paused']}))")
-        actual = self.remote(self.api(),code)['paused']
+        purpose=('read_' if value is None else 'set_')+('drift_dag_pause' if drift else 'training_dag_pause')
+        try:
+            actual = self.remote(self.api(),code,purpose=purpose)['paused']
+        except ClusterOperationError as error:
+            if value is None or error.facts['category'] in {'forbidden','unauthorized','tls_verification','not_found'}:
+                raise
+            # The write may have succeeded before kubectl lost its response.
+            # Read the authoritative DAG state once; never replay this write.
+            try:
+                confirmed = self.pause(None,drift=drift)
+            except Exception:
+                confirmed = None
+            if confirmed is not value:
+                raise
+            self.save(confirmed_operations=[*self.state.get('confirmed_operations',[])[-15:],
+                {'phase':self.state.get('phase','preflight'),'purpose':purpose,
+                 'confirmed_by':'dag_readback','failure':dict(error.facts)}])
+            return confirmed
         if value is not None and actual is not value:
             raise RuntimeError('DAG pause state was not confirmed')
         return actual
@@ -334,13 +361,13 @@ class RolesDelivery:
         self.monitor_check()
 
     def guard_status(self):
-        return self.cluster.call('exec',self.state['guard_pod'],'--','python','-B','-c',STATUS)
+        return self.cluster_exec(self.state['guard_pod'],'guard',STATUS,purpose='read_guard_status')
 
     def flag(self, name, value):
         if name not in {'peer','release'}:
             raise ValueError('Unexpected lease flag')
         code = "from pathlib import Path;p=Path('/tmp/role-guard-"+name+"');" + ('p.touch()' if value else 'p.unlink(missing_ok=True)')
-        self.cluster.call('exec',self.state['guard_pod'],'--','python','-B','-c',code,json_output=False)
+        self.cluster_exec(self.state['guard_pod'],'guard',code,json_output=False,purpose='set_guard_'+name)
 
     def peer(self, value):
         self.flag('peer',value)
@@ -388,16 +415,34 @@ class RolesDelivery:
     def release_guard(self):
         if self.guard_status().get('state')!='held':
             raise RuntimeError('Deployment admission lease was lost')
-        self.flag('release',True)
+        # Bind completion evidence to this Job, even if another actor replaces it.
+        job_uid=self.get('job',self.state['guard_job'])['metadata']['uid']
+        flag_error=None
+        try:
+            self.flag('release',True)
+        except ClusterOperationError as error:
+            if error.facts['category'] in {'forbidden','unauthorized','tls_verification','not_found'}:
+                raise
+            flag_error=error
         deadline=time.monotonic()+20
         while time.monotonic()<deadline:
             # The process exits after writing released. Job completion is proof
             # the DB connection is closed, including every advisory lock.
             job=self.get('job',self.state['guard_job'])
+            if job['metadata']['uid']!=job_uid:
+                raise RuntimeError('Admission Job ownership changed during release')
             if any(c['type']=='Complete' and c['status']=='True' for c in job.get('status',{}).get('conditions',[])):
                 self.save(guard_held=False)
+                if flag_error:
+                    self.save(confirmed_operations=[*self.state.get('confirmed_operations',[])[-15:],
+                        {'phase':self.state.get('phase','preflight'),'purpose':'set_guard_release',
+                         'confirmed_by':'same_job_complete','failure':dict(flag_error.facts)}])
                 return
+            if any(c['type']=='Failed' and c['status']=='True' for c in job.get('status',{}).get('conditions',[])):
+                raise RuntimeError('Admission Job failed while releasing its lease')
             time.sleep(1)
+        if flag_error:
+            raise flag_error
         raise RuntimeError('Admission lease release was not confirmed')
 
     def endpoints(self, service, app, count):

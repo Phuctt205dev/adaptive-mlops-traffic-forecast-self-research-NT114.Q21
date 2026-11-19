@@ -10,6 +10,11 @@ after a lost HTTP reply. Reusing a UUID with different parameters is rejected;
 the same Airflow run is not dispatched twice. Retry actions use a new UUID and
 retain it across transport retries. These are JSON metadata fields, not new DB
 tables or columns.
+Published neural results store midnight datetime strings for the training
+window. Replayed submissions compare those saved values as calendar dates,
+preserving the stored metadata. Changed parameters or saved windows that
+cannot be compared safely return a conflict. New requests require date-only
+input, including when a request UUID is supplied.
 
 ## Execution
 

@@ -18,7 +18,7 @@ import time
 from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from scripts.cicd.deploy import Cluster, container, ready_pods, now, spec_hash, AIRFLOW_FILES, DAG_CHECK, DAG_COMPATIBILITY_CHECK
+from scripts.cicd.deploy import Cluster, ClusterOperationError, container, ready_pods, now, spec_hash, AIRFLOW_FILES, DAG_CHECK, DAG_COMPATIBILITY_CHECK
 from scripts.cicd.release import canonical, digest, DIGEST_IMAGE
 from scripts.cicd.roles_release import verify, ROLES
 from scripts.cicd.role_manifests import render,contract,CONTRACT,ANNOTATION,SLOTS
@@ -844,6 +844,8 @@ def main():
             print(json.dumps({k:op.state.get(k,False) for k in ('rolled_back','guard_held','recovery_required')}))
     except Exception as error:
         op.save(error_type=type(error).__name__,failed_phase=op.state.get('failed_phase',op.state.get('phase','preflight')))
+        if isinstance(error, ClusterOperationError):
+            op.save(cluster_failure=error.facts)
         if args.action=='Verify' and op.state.get('completed'):
             op.save(completed=False,recovery_required=True,failed_at=now(),phase='verify_failed_after_release')
         print(json.dumps({'delivery_failed':True,'error_type':type(error).__name__,

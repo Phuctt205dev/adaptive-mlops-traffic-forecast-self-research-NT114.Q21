@@ -209,6 +209,40 @@ def release_patch(deployment, image, release_id, *, pull_secret=None, cache_sync
     return forward, inverse
 
 
+class ClusterOperationError(RuntimeError):
+    """Public failure facts contain no command, credentials or server output."""
+    def __init__(self, arguments, category, attempts):
+        operation = arguments[0] if arguments else ''
+        resource, name = None, None
+        if operation in {'get', 'patch', 'delete', 'scale'} and len(arguments) > 1:
+            resource = diagnostics.identifier(arguments[1]) if not arguments[1].startswith('-') else None
+            if len(arguments) > 2 and not arguments[2].startswith('-'):
+                name = diagnostics.identifier(arguments[2])
+        self.facts = {'operation': diagnostics.identifier(operation), 'resource': resource,
+                      'name': name, 'category': category, 'attempts': attempts}
+        super().__init__('Cluster operation failed: ' + json.dumps(self.facts) + '; raw output omitted.')
+
+
+def cluster_error_category(stderr):
+    """Allowlist known transport failures; unknown/permanent errors fail fast."""
+    message = (stderr or '').lower()
+    for category, markers in (
+        ('forbidden', ('forbidden',)),
+        ('unauthorized', ('unauthorized', 'you must be logged in')),
+        ('not_found', ('notfound', 'not found')),
+        ('tls_verification', ('x509:', 'unknown authority', 'certificate verify failed')),
+        ('timeout', ('tls handshake timeout', 'context deadline exceeded', 'i/o timeout',
+                     'request timed out', 'client.timeout exceeded')),
+        ('connection', ('connection reset', 'connection refused', 'unexpected eof')),
+        ('server_unavailable', ('serviceunavailable', 'service unavailable', 'gateway timeout',
+                                'internalerror', 'internal server error')),
+        ('throttled', ('toomanyrequests', 'too many requests')),
+    ):
+        if any(marker in message for marker in markers):
+            return category
+    return 'unknown'
+
+
 class Cluster:
     def __init__(self, executable, context, namespace_uid, kubeconfig):
         if not context or not namespace_uid:
@@ -219,11 +253,39 @@ class Cluster:
         self.namespace_uid = namespace_uid
 
     def call(self, *arguments, value=None, timeout=100, json_output=True):
-        result = subprocess.run([*self.prefix, *arguments], input=json.dumps(value) if value is not None else None,
-                                text=True, encoding="utf-8", capture_output=True, timeout=timeout)
-        if result.returncode or len(result.stdout) > 8 * 1024 * 1024:
-            raise RuntimeError("Cluster operation failed: " + arguments[0] + "; raw output omitted.")
-        return json.loads(result.stdout) if json_output and result.stdout.strip() else result.stdout
+        # Replaying a write/exec could duplicate work after an ambiguous response.
+        # Only ordinary GETs can retry, within the ORIGINAL total time budget.
+        read = (len(arguments) > 1 and arguments[0] == 'get' and value is None
+                and not arguments[1].startswith('-')
+                and not any(a.split('=')[0] in {'--raw', '--watch', '--watch-only', '-w'} for a in arguments))
+        deadline = time.monotonic() + timeout
+        max_attempts = 3 if read else 1
+        for attempt in range(1, max_attempts + 1):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ClusterOperationError(arguments, 'process_timeout', attempt - 1) from None
+            try:
+                result = subprocess.run([*self.prefix, *arguments], input=json.dumps(value) if value is not None else None,
+                                        text=True, encoding='utf-8', capture_output=True, timeout=remaining)
+            except subprocess.TimeoutExpired:
+                category = 'process_timeout'
+            else:
+                if len(result.stdout) > 8 * 1024 * 1024:
+                    raise ClusterOperationError(arguments, 'response_budget', attempt) from None
+                if not result.returncode:
+                    try:
+                        return json.loads(result.stdout) if json_output and result.stdout.strip() else result.stdout
+                    except json.JSONDecodeError:
+                        raise ClusterOperationError(arguments, 'invalid_json', attempt) from None
+                category = cluster_error_category(result.stderr)
+            error = ClusterOperationError(arguments, category, attempt)
+            delay = attempt  # 1s then 2s; no retry extends the caller's deadline.
+            if (attempt == max_attempts or category not in
+                    {'timeout', 'connection', 'server_unavailable', 'throttled', 'process_timeout'}
+                    or deadline - time.monotonic() <= delay):
+                raise error from None
+            print(json.dumps({'cluster_read_retry': error.facts}))
+            time.sleep(delay)
 
     def deployment(self, name):
         return self.call("get", "deployment", name, "-o", "json")

@@ -1,7 +1,7 @@
 {
   "schema": "traffic-local-training-config/v1",
   "component": "local-training",
-  "enabled": false,
+  "enabled": true,
   "namespace": "traffic-mlops",
   "memory_mib": 3072,
   "cpu": 1,

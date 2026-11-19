@@ -2,16 +2,18 @@
   "schema": "traffic-cd-control/v1",
   "mode": "auto",
   "epoch": 7,
-  "blocked": false,
-  "active": {
+  "blocked": true,
+  "active": null,
+  "failure": {
     "run_id": "44540726226",
     "attempt": 1,
     "commit": "baa4406b7fc986c637e7f1dd554d87a2b9bfb65b",
     "ci_number": 87,
     "mode": "auto",
-    "epoch": 7
+    "epoch": 7,
+    "recovery_required": false,
+    "url": "https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/44540726226"
   },
-  "failure": null,
   "last_success": {
     "run_id": "44495169648",
     "attempt": 1,
@@ -21,5 +23,5 @@
     "epoch": 6
   },
   "last_control": 44511155583,
-  "updated_by": "delivery"
+  "updated_by": "delivery-result"
 }

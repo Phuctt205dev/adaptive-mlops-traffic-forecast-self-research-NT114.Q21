@@ -11,7 +11,7 @@ from backend.app.api.dependencies import require_admin
 from backend.app.api.routes import datasets
 from backend.app.core.config import Settings
 from backend.app.core.errors import register_exception_handlers
-from backend.app.db.models import Base, Dataset, DatasetStatus, Region, TrainingRun, User, UserRole
+from backend.app.db.models import Base, Dataset, DatasetStatus, Region, TrainingRun, TrainingRunStatus, User, UserRole
 from backend.app.db.session import get_db
 from backend.app.db.training_execution import TrainingExecution
 
@@ -61,6 +61,70 @@ class TrainingSubmissionTests(unittest.TestCase):
             changed = self.client.post(self.url, json={**self.payload, "train_end_date": "2026-10-01"})
         self.assertEqual(changed.status_code, 409)
         trigger.assert_called_once()
+
+    def publish_neural_configuration(self):
+        # Real result publication stores midnight datetime strings in the
+        # run's metadata; the browser retries its original date-only payload.
+        run = self.db.scalar(select(TrainingRun))
+        run.status = TrainingRunStatus.COMPLETED
+        run.configuration_json = {**run.configuration_json,
+            'model_family': 'neural_sequence',
+            'train_start_date': '2026-01-01T00:00:00',
+            'train_end_date': '2026-11-01T00:00:00'}
+        self.db.commit()
+        return str(run.id)
+
+    def test_completed_neural_request_reuses_original_run_without_dispatch(self):
+        with patch.object(datasets, 'get_settings', return_value=self.settings), \
+             patch.object(datasets.airflow_client, 'trigger_dag', return_value={}) as trigger:
+            self.assertEqual(self.client.post(self.url, json=self.payload).status_code, 202)
+            original_id = self.publish_neural_configuration()
+            response = self.client.post(self.url, json=self.payload)
+        self.assertEqual(response.status_code, 202, response.text)
+        self.assertEqual(response.json()['training_run']['id'], original_id)
+        self.assertTrue(response.json()['airflow_response']['reused_submission'])
+        trigger.assert_called_once()
+        self.assertEqual(self.db.scalar(select(func.count()).select_from(TrainingRun)), 1)
+        saved = self.db.get(TrainingRun, uuid.UUID(original_id))
+        self.assertEqual(saved.configuration_json['train_start_date'], '2026-01-01T00:00:00')
+        self.assertEqual(saved.configuration_json['train_end_date'], '2026-11-01T00:00:00')
+
+    def test_completed_request_still_rejects_changed_training_parameters(self):
+        for change in ({'train_end_date': '2026-10-01'}, {'selected_models': ['lstm']}):
+            with self.subTest(change=change), \
+                 patch.object(datasets, 'get_settings', return_value=self.settings), \
+                 patch.object(datasets.airflow_client, 'trigger_dag', return_value={}) as trigger:
+                # Each request UUID identifies its own original submission.
+                self.payload['request_id'] = str(uuid.uuid4())
+                self.assertEqual(self.client.post(self.url, json=self.payload).status_code, 202)
+                run = self.db.scalar(select(TrainingRun).where(
+                    TrainingRun.configuration_json['request_id'].as_string() == self.payload['request_id']))
+                run.status = TrainingRunStatus.COMPLETED
+                run.configuration_json = {**run.configuration_json,
+                    'train_start_date': '2026-01-01T00:00:00', 'train_end_date': '2026-11-01T00:00:00'}
+                self.db.commit()
+                response = self.client.post(self.url, json={**self.payload, **change})
+                self.assertEqual(response.status_code, 409)
+                trigger.assert_called_once()
+
+    def test_non_midnight_saved_window_is_not_silently_truncated(self):
+        with patch.object(datasets, 'get_settings', return_value=self.settings), \
+             patch.object(datasets.airflow_client, 'trigger_dag', return_value={}) as trigger:
+            self.assertEqual(self.client.post(self.url, json=self.payload).status_code, 202)
+            self.publish_neural_configuration()
+            run = self.db.scalar(select(TrainingRun))
+            run.configuration_json = {**run.configuration_json, 'train_end_date': '2026-11-01T12:00:00'}
+            self.db.commit()
+            response = self.client.post(self.url, json=self.payload)
+        self.assertEqual(response.status_code, 409)
+        trigger.assert_called_once()
+
+    def test_new_request_still_requires_date_only_input(self):
+        with patch.object(datasets, 'get_settings', return_value=self.settings), \
+             patch.object(datasets.airflow_client, 'trigger_dag') as trigger:
+            response = self.client.post(self.url, json={**self.payload, 'train_start_date': '2026-01-01T00:00:00'})
+        self.assertEqual(response.status_code, 422)
+        trigger.assert_not_called()
 
     def test_local_retrain_is_rejected_before_any_run_or_dispatch(self):
         with patch.object(datasets, "get_settings", return_value=self.settings), \

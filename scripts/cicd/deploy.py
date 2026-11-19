@@ -211,7 +211,7 @@ def release_patch(deployment, image, release_id, *, pull_secret=None, cache_sync
 
 class ClusterOperationError(RuntimeError):
     """Public failure facts contain no command, credentials or server output."""
-    def __init__(self, arguments, category, attempts):
+    def __init__(self, arguments, category, attempts, *, exit_code=None, remote_exit_code=None):
         operation = arguments[0] if arguments else ''
         resource, name = None, None
         if operation in {'get', 'patch', 'delete', 'scale'} and len(arguments) > 1:
@@ -220,6 +220,20 @@ class ClusterOperationError(RuntimeError):
                 name = diagnostics.identifier(arguments[2])
         self.facts = {'operation': diagnostics.identifier(operation), 'resource': resource,
                       'name': name, 'category': category, 'attempts': attempts}
+        if operation == 'exec':
+            options = arguments[1:arguments.index('--')] if '--' in arguments else arguments[1:]
+            if options and not options[0].startswith('-'):
+                self.facts.update(resource='pod', name=diagnostics.identifier(options[0]))
+            for index, option in enumerate(options):
+                if option in {'-c', '--container'} and index + 1 < len(options):
+                    self.facts['container'] = diagnostics.identifier(options[index + 1])
+                    break
+                if option.startswith('--container='):
+                    self.facts['container'] = diagnostics.identifier(option.split('=', 1)[1])
+                    break
+        for key, value in (('exit_code', exit_code), ('remote_exit_code', remote_exit_code)):
+            if type(value) is int and -255 <= value <= 255:
+                self.facts[key] = value
         super().__init__('Cluster operation failed: ' + json.dumps(self.facts) + '; raw output omitted.')
 
 
@@ -231,6 +245,7 @@ def cluster_error_category(stderr):
         ('unauthorized', ('unauthorized', 'you must be logged in')),
         ('not_found', ('notfound', 'not found')),
         ('tls_verification', ('x509:', 'unknown authority', 'certificate verify failed')),
+        ('remote_exit', ('command terminated with exit code', 'command terminated with signal')),
         ('timeout', ('tls handshake timeout', 'context deadline exceeded', 'i/o timeout',
                      'request timed out', 'client.timeout exceeded')),
         ('connection', ('connection reset', 'connection refused', 'unexpected eof')),
@@ -261,6 +276,7 @@ class Cluster:
         deadline = time.monotonic() + timeout
         max_attempts = 3 if read else 1
         for attempt in range(1, max_attempts + 1):
+            exit_code = remote_exit_code = None
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise ClusterOperationError(arguments, 'process_timeout', attempt - 1) from None
@@ -278,7 +294,12 @@ class Cluster:
                     except json.JSONDecodeError:
                         raise ClusterOperationError(arguments, 'invalid_json', attempt) from None
                 category = cluster_error_category(result.stderr)
-            error = ClusterOperationError(arguments, category, attempt)
+                exit_code = result.returncode
+                match = re.search(r'command terminated with exit code ([0-9]{1,3})(?:\D|$)', result.stderr or '')
+                if match:
+                    remote_exit_code = int(match[1])
+            error = ClusterOperationError(arguments, category, attempt,
+                                          exit_code=exit_code, remote_exit_code=remote_exit_code)
             delay = attempt  # 1s then 2s; no retry extends the caller's deadline.
             if (attempt == max_attempts or category not in
                     {'timeout', 'connection', 'server_unavailable', 'throttled', 'process_timeout'}

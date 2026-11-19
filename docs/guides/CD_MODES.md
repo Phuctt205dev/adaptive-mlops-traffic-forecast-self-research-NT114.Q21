@@ -153,6 +153,20 @@ vẫn cần giám sát riêng; không hứa rollback mọi lỗi muộn hoặc z
 Các ca lỗi/CrashLoop, rollback và chốt chặn Auto được kiểm bằng fixture/mock;
 không cố gây lỗi pod production hoặc chạy training để nghiệm thu công tắc.
 
+Ở bước kết thúc triển khai, lỗi `kubectl exec` có thể làm mất phản hồi của
+lệnh đã chạy. Controller không tự gửi lại lệnh ghi: khi đặt trạng thái pause
+DAG lỗi, đọc lại đúng DAG và chỉ tiếp tục nếu giá trị boolean đã đúng yêu cầu.
+Khi gửi cờ nhả khóa lỗi, chỉ chấp nhận trạng thái `Complete=True` của cùng
+Job UID đã kiểm; không suy từ pod Ready rằng khóa đã nhả. Không xác minh được,
+Job thất bại/đổi chủ, hoặc lỗi quyền/TLS thì giữ nhánh thất bại và phục hồi.
+Receipt ghi `confirmed_operations` khi xác nhận được kết quả sau mất phản hồi;
+lỗi exec ghi pod/container, mã thoát và thao tác được phép công khai. Các lệnh
+Apply, flush, drain và exec khác vẫn không được tự động phát lại.
+
+Đây là cách áp dụng đối chiếu trạng thái mong muốn với trạng thái quan sát
+theo [mô hình controller của Kubernetes](https://kubernetes.io/docs/concepts/architecture/controller/),
+không thay gate Manual, guard, Verify, chốt lỗi Auto hoặc kiểm thử ứng dụng.
+
 Runner dùng bundle CA công khai riêng cho Node/Python và vẫn kiểm TLS/hostname.
 Nếu Python báo lỗi chuỗi chứng thư, kiểm CA/chuỗi issuer mà Windows xác thực
 và làm mới bundle riêng trước khi chạy tiếp; không tắt TLS hoặc sửa state để

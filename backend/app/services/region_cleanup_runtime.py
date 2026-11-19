@@ -20,11 +20,13 @@ from backend.app.core.errors import ApplicationError
 from backend.app.db.models import AuditLog
 from backend.app.db.session import engine, SessionLocal
 from backend.app.services.region_cleanup import (
-    COMPLETED, PENDING, canonical_id, database_barrier, local_prefixes, pending_cleanup,
+    COMPLETED, PENDING, MODEL_COMPLETED, MODEL_PENDING, COMPLETED_ACTIONS,
+    canonical_id, database_barrier, local_prefixes, pending_cleanup,
 )
 
 
-DELETE_PATH = re.compile(r'^/api/v1/admin/regions/[0-9a-f-]{36}/?$')
+DELETE_PATH = re.compile(r'^/api/v1/admin/(regions|model-versions)/[0-9a-f-]{36}/?$')
+STATUS_PATH = re.compile(r'^/api/v1/admin/(regions|model-versions)/[0-9a-f-]{36}/cleanup-status/?$')
 
 
 def validated_directory(root, relative):
@@ -85,7 +87,11 @@ def clear_caches(app, plan):
 
 
 def purge_local(app, plan, *, root='/app', log_root=None):
-    expected = local_prefixes(plan['region_id'], plan['run_ids'])
+    if plan.get('scope') == 'model':
+        from backend.app.services.model_cleanup import local_prefixes as model_prefixes
+        expected = model_prefixes(plan['region_id'], plan['run_ids'])
+    else:
+        expected = local_prefixes(plan['region_id'], plan['run_ids'])
     if plan['local_prefixes'] != expected:
         raise ValueError('Cleanup inventory paths differ from the region identity')
     paths = [validated_directory(root, prefix) for prefix in expected]
@@ -116,6 +122,7 @@ class CleanupBarrierMiddleware:
                 or (method == 'GET' and path.rstrip('/') in {'/api/v1/admin/regions', '/api/v1/regions'})
                 or (self.role == 'api' and path.startswith('/api/v1/internal/training-runs'))
                 or (method == 'DELETE' and DELETE_PATH.fullmatch(path)))
+        skip = skip or (method == 'GET' and STATUS_PATH.fullmatch(path))
         if skip:
             return await self.app(scope, receive, send)
         barrier = database_barrier(engine)
@@ -127,7 +134,7 @@ class CleanupBarrierMiddleware:
                 with SessionLocal() as db:
                     return pending_cleanup(db) is not None
             if await run_in_threadpool(pending):
-                raise ApplicationError('region_cleanup_pending', 'A region cleanup needs to finish. Retry Delete for that region before continuing.', 503)
+                raise ApplicationError('region_cleanup_pending', 'A model or region deletion needs to finish. Check its saved progress before continuing.', 503)
             await self.app(scope, receive, send)
         except ApplicationError as error:
             response = JSONResponse({'error': {'code': error.code, 'message': error.message, 'details': {}}},
@@ -162,7 +169,7 @@ def install(app, *, role='api', log_root=None):
     def cleanup_peer(journal_id: uuid.UUID):
         with SessionLocal() as db:
             journal = db.get(AuditLog, uuid.UUID(canonical_id(journal_id)))
-            if journal is None or journal.action != PENDING or journal.entity_type != 'region':
+            if journal is None or (journal.action, journal.entity_type) not in {(PENDING, 'region'), (MODEL_PENDING, 'model')}:
                 raise HTTPException(409, 'No pending cleanup inventory')
             plan = journal.after_json['plan']
             # Only a coordinator currently holding the exclusive DB barrier
@@ -189,7 +196,7 @@ def install(app, *, role='api', log_root=None):
             try:
                 def clean():
                     with SessionLocal() as db:
-                        for record in db.scalars(select(AuditLog).where(AuditLog.action == COMPLETED)):
+                        for record in db.scalars(select(AuditLog).where(AuditLog.action.in_(COMPLETED_ACTIONS))):
                             plan = record.after_json['plan']
                             if any((Path('/app') / prefix).exists() for prefix in plan['local_prefixes']):
                                 purge_local(app, plan, log_root=log_root)

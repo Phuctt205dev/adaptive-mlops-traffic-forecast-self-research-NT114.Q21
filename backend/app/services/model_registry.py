@@ -126,7 +126,12 @@ def activate_model_version(db: Session, model_version_id: uuid.UUID) -> ModelVer
     return model_version
 
 
-def delete_model_version(db: Session, model_version_id: uuid.UUID) -> None:
+def delete_model_version(db: Session, model_version_id: uuid.UUID, *, backend=None) -> None:
+    from backend.app.services.model_cleanup import delete_model_version as cleanup
+    cleanup(db, model_version_id, backend=backend)
+
+
+def _delete_model_records(db: Session, model_version_id: uuid.UUID, *, commit=True) -> None:
     model_version = get_model_version_or_404(db, model_version_id)
     region = ensure_region_exists(db, model_version.region_id)
 
@@ -148,7 +153,8 @@ def delete_model_version(db: Session, model_version_id: uuid.UUID) -> None:
         )
         db.execute(delete(Prediction).where(Prediction.model_version_id == model_version.id))
         db.delete(model_version)
-        db.commit()
+        if commit:
+            db.commit()
     except IntegrityError:
         db.rollback()
         raise ApplicationError(

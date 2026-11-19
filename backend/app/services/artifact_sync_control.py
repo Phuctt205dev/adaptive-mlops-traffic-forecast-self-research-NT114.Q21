@@ -55,7 +55,9 @@ def inventory(root,module):
         with module.SessionLocal() as db:
             if module.pending_cleanup(db) is not None:
                 raise RuntimeError('Artifact cleanup is active; flush is not confirmed')
-            prefixes=[target['prefix'] for record in db.scalars(module.select(module.AuditLog).where(module.AuditLog.action==module.COMPLETED))
+            # Historical migration fixtures expose only the original action.
+            actions=getattr(module,'COMPLETED_ACTIONS',(module.COMPLETED,))
+            prefixes=[target['prefix'] for record in db.scalars(module.select(module.AuditLog).where(module.AuditLog.action.in_(actions)))
                       for target in record.after_json['plan']['objects']
                       if target['bucket']==module.os.environ['TRAFFIC_API_RUNTIME_BUCKET']]
     files={}

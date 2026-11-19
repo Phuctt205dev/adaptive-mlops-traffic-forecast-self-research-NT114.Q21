@@ -16,7 +16,7 @@ from backend.app.db.models import (
 from backend.app.services.model_registry import (
     activate_model_version,
     create_queued_training_run,
-    delete_model_version,
+    _delete_model_records as delete_model_version,
     list_region_model_versions,
     register_training_result,
 )

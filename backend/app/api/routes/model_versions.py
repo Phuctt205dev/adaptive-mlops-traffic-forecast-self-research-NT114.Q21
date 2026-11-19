@@ -68,3 +68,9 @@ def delete_model_version(
 ):
     model_registry.delete_model_version(db, model_version_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/model-versions/{model_version_id}/cleanup-status")
+def model_cleanup_status(model_version_id: uuid.UUID, db: Session = Depends(get_db)):
+    from backend.app.services.region_cleanup import cleanup_status
+    return cleanup_status(db, model_version_id, 'model')

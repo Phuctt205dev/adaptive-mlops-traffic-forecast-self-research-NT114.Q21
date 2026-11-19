@@ -1,7 +1,7 @@
 {
   "schema": "traffic-cd-control/v1",
-  "mode": "manual",
-  "epoch": 8,
+  "mode": "auto",
+  "epoch": 9,
   "blocked": false,
   "active": null,
   "failure": null,
@@ -13,6 +13,6 @@
     "mode": "manual",
     "epoch": 8
   },
-  "last_control": 44551231296,
-  "updated_by": "delivery-result"
+  "last_control": 44563815737,
+  "updated_by": "Phuctt205dev"
 }

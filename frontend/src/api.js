@@ -112,6 +112,10 @@ export const api = {
     apiRequest(`/admin/regions/${id}`, {
       method: "DELETE",
     }),
+  cleanupStatus: (kind, id, options = {}) =>
+    apiRequest(`/admin/${kind === "region" ? "regions" : "model-versions"}/${id}/cleanup-status`, options),
+  deleteCleanupItem: (kind, id, options = {}) =>
+    apiRequest(`/admin/${kind === "region" ? "regions" : "model-versions"}/${id}`, { ...options, method: "DELETE" }),
   datasets: (regionId) =>
     apiRequest(`/admin/regions/${regionId}/datasets?page_size=100`),
   dataset: (datasetId) => apiRequest(`/admin/datasets/${datasetId}`),

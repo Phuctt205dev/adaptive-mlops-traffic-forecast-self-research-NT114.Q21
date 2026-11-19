@@ -65,6 +65,39 @@ sở hữu đều bị chặn. Không báo thành công nếu S3 trả lỗi xó
 
 ## Kiểm chứng và triển khai
 
+### Xóa riêng một model
+
+Model phát hành qua Local/Kaggle có thư mục riêng theo UUID vùng/lượt train.
+Khi xóa, hệ thống kiểm model khác không cùng dùng thư mục, preprocessor hoặc
+MLflow run đó; chỉ nhận layout và tag xác định được chủ sở hữu. Layout legacy
+không chứng minh được quyền sở hữu bị chặn trước khi xóa, cần kiểm kê riêng.
+
+Journal model dùng chung barrier và uploader với xóa vùng, lưu tiến độ trước
+khi dọn cache, đánh dấu xóa đúng MLflow run và xóa artifact MinIO. Không xóa
+MLflow experiment, dataset, DAG run hoặc lịch sử drift của vùng khi chỉ xóa
+model. Sau Verify mới xóa bản ghi model/prediction và nhả các tham chiếu;
+giữ lịch sử training/drift. Nếu admin xóa đúng model đang phục vụ, con trỏ
+active được nhả như trước; cần Activate model khác để dự báo tiếp.
+
+Lỗi ngoài DB giữ inventory và chặn công việc xung đột cho tới khi admin Retry;
+không báo thành công vì chỉ đã xóa bản ghi. Tombstone chặn uploader/flush và
+dọn cache ở pod thay thế để file đã xóa không bị tải lên lại.
+
+GET `.../regions/{id}/cleanup-status` hoặc
+`.../model-versions/{id}/cleanup-status` yêu cầu quyền admin, chỉ trả bước,
+trạng thái, thời điểm cập nhật và khả năng thử lại; không trả đường dẫn lưu trữ,
+địa chỉ peer hay lỗi thô. GET này đọc được khi coordinator đang giữ khóa.
+F5/mất phản hồi chỉ đối soát GET; không tự gửi thêm lệnh xóa.
+
+Dung lượng object không đồng nhất với Disk toàn node: PostgreSQL giữ trang
+đã cấp, image/log thuộc phần khác và MinIO dọn trash ở nền. Không xóa tay
+`.minio.sys`. [Source MinIO](https://github.com/minio/minio/blob/master/cmd/erasure-sets.go)
+mô tả vòng dọn trash định kỳ; thời gian thực tế còn phụ thuộc tải/phiên bản.
+
+Kiểm synthetic mới: `tests/test_model_cleanup.py` và
+`scripts/maintenance/check_cleanup_ui.py`; không chạy xóa/train production
+chỉ để nghiệm thu code.
+
 - tests/test_region_cleanup.py dùng SQLite bật foreign key, storage/peer giả
   và thư mục tạm; kiểm xóa drift, giữ vùng khác, retry, ownership, path traversal.
 - tests/test_region_service.py tiếp tục kiểm service xóa hiện có với adapter giả.

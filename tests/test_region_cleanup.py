@@ -321,6 +321,15 @@ class CleanupTests(unittest.TestCase):
         @app.delete('/api/v1/admin/regions/{rid}')
         def retry(rid:str):
             return {'retry':True}
+        @app.get('/api/v1/admin/regions/{rid}/cleanup-status')
+        def progress(rid:str):
+            return {'state':'pending','phase':'objects'}
+        @app.delete('/api/v1/admin/model-versions/{mid}')
+        def retry_model(mid:str):
+            return {'retry':True}
+        @app.get('/api/v1/admin/model-versions/{mid}/cleanup-status')
+        def model_progress(mid:str):
+            return {'state':'pending','phase':'objects'}
         client = TestClient(app)
         with patch('backend.app.services.region_cleanup_runtime.database_barrier',return_value=nullcontext()), \
              patch('backend.app.services.region_cleanup_runtime.SessionLocal') as session:
@@ -329,6 +338,9 @@ class CleanupTests(unittest.TestCase):
                 self.assertEqual(client.get('/api/v1/admin/regions').status_code,200)
                 self.assertEqual(client.get('/api/v1/admin/datasets/test').status_code,503)
                 self.assertEqual(client.delete('/api/v1/admin/regions/'+str(self.region.id)).status_code,200)
+                self.assertEqual(client.get('/api/v1/admin/regions/'+str(self.region.id)+'/cleanup-status').status_code,200)
+                self.assertEqual(client.delete('/api/v1/admin/model-versions/'+str(self.model.id)).status_code,200)
+                self.assertEqual(client.get('/api/v1/admin/model-versions/'+str(self.model.id)+'/cleanup-status').status_code,200)
 
     def test_cleanup_peer_rejects_unauthenticated_purge_before_db(self):
         app = FastAPI()

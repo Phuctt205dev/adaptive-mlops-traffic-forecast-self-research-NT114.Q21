@@ -52,7 +52,10 @@ def main():
             unexpected.append({"method": request.method, "path": path})
             reply(route, {"error": {"message": "Unexpected synthetic mutation"}}, 500)
             return
-        if path.endswith("/auth/me"):
+        if path.endswith("/cleanup-status"):
+            body = {"state": "pending" if state["hold"] else "not_started", "phase": "preparing",
+                    "done": [], "can_retry": not state["hold"]}
+        elif path.endswith("/auth/me"):
             body = {"id": state["user"], "display_name": "Admin", "email": "admin@example.test", "role": state["role"], "is_active": True}
         elif path.endswith("/regions"):
             body = {"items": [{"id": rid, "name": {"region-a": "Alpha", "region-b": "Beta"}[rid],
@@ -139,11 +142,11 @@ def main():
             delete_button.click()
             dialog.get_by_role("button", name="Delete model", exact=True).click()
             expect(dialog.get_by_role("alert")).to_contain_text("Synthetic item is busy")
-            expect(dialog.get_by_role("button", name="Delete model", exact=True)).to_be_enabled()
+            expect(dialog.get_by_role("button", name="Retry deletion", exact=True)).to_be_enabled()
             page.screenshot(path=str(OUTPUT / "delete-model-error.png"))
             state.update(fail=False, hold=True)
-            dialog.get_by_role("button", name="Delete model", exact=True).click()
-            expect(dialog.get_by_role("button", name="Cancel", exact=True)).to_be_disabled()
+            dialog.get_by_role("button", name="Retry deletion", exact=True).click()
+            expect(dialog.get_by_role("button", name="Close", exact=True)).to_be_disabled()
             expect(dialog.get_by_role("button", name="Close dialog")).to_be_disabled()
             expect(dialog.get_by_role("button", name="Deleting…", exact=True)).to_be_disabled()
             page.keyboard.press("Escape")
@@ -182,7 +185,7 @@ def main():
             expanded.get_by_label("Random seed", exact=True).fill("17")
             expanded.get_by_label("Epoch limit per CV fold", exact=True).fill("9")
             expanded.get_by_label("Start date", exact=True).fill("2026-02-01")
-            expanded.get_by_label("End date", exact=True).fill("2026-10-01")
+            expanded.get_by_label("End date (excluded)", exact=True).fill("2026-10-01")
             expect(expanded.get_by_label("artifact_root", exact=True)).to_have_attribute("readonly", "")
             page.screenshot(path=str(OUTPUT / "configuration-expanded-desktop.png"))
             page.mouse.click(5, 5)

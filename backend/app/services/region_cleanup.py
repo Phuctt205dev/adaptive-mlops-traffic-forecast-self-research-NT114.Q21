@@ -5,6 +5,7 @@ table therefore holds a small cleanup journal; it survives a crash/retry. The
 region and its rows are removed LAST, not before their file locations are known.
 """
 from contextlib import contextmanager
+from datetime import UTC, datetime
 import time
 import uuid
 from urllib.parse import urlsplit
@@ -20,6 +21,10 @@ from backend.app.db.models import (
 
 PENDING = 'region_cleanup_pending'
 COMPLETED = 'region_cleanup_completed'
+MODEL_PENDING = 'model_cleanup_pending'
+MODEL_COMPLETED = 'model_cleanup_completed'
+PENDING_ACTIONS = (PENDING, MODEL_PENDING)
+COMPLETED_ACTIONS = (COMPLETED, MODEL_COMPLETED)
 LOCK_KEY = 73918046215
 INTENT_KEY = LOCK_KEY + 2
 STEPS = ('local_files', 'mlflow', 'airflow', 'objects')
@@ -33,10 +38,45 @@ def canonical_id(value):
 
 
 def pending_cleanup(db, region_id=None):
-    query = select(AuditLog).where(AuditLog.action == PENDING)
+    query = select(AuditLog).where(AuditLog.action.in_(PENDING_ACTIONS))
     if region_id is not None:
         query = query.where(AuditLog.entity_id == region_id)
     return db.scalars(query.order_by(AuditLog.created_at)).first()
+
+
+def progress(db, journal, phase, **changes):
+    journal.after_json = {**journal.after_json, **changes, 'phase': phase,
+                          'updated_at': datetime.now(UTC).isoformat()}
+    db.commit()
+
+
+def cleanup_status(db, entity_id, entity_type):
+    """Read-only progress, available even while the exclusive barrier is held.
+
+    Never expose inventory paths, peer addresses or raw exception messages.
+    A pending journal alone is not proof a coordinator is still running.
+    """
+    actions = (PENDING, COMPLETED) if entity_type == 'region' else (MODEL_PENDING, MODEL_COMPLETED)
+    journal = db.scalars(select(AuditLog).where(AuditLog.entity_id == entity_id,
+        AuditLog.entity_type == entity_type, AuditLog.action.in_(actions))
+        .order_by(AuditLog.created_at.desc())).first()
+    def coordinator_active():
+        engine = db.get_bind()
+        if engine.dialect.name != 'postgresql':
+            return False
+        with engine.connect() as connection:
+            return cleanup_requested(connection)
+
+    if journal:
+        data = journal.after_json
+        return {'state': data['state'], 'phase': data.get('phase', 'preparing'),
+                'done': data.get('done', []), 'updated_at': data.get('updated_at'),
+                'can_retry': data['state'] != 'completed' and not coordinator_active()}
+    record = db.get(Region if entity_type == 'region' else ModelVersion, entity_id)
+    if record is None:
+        raise ApplicationError('cleanup_not_found', 'The item or its deletion record was not found.', 404)
+    return {'state': 'not_started', 'phase': 'preparing', 'done': [], 'updated_at': None,
+            'can_retry': not coordinator_active()}
 
 
 def _try_lock(connection, key, *, shared=False):
@@ -175,8 +215,7 @@ def _remove_records(db, region, journal):
     db.execute(delete(Dataset).where(Dataset.region_id == rid))
     db.delete(region)
     journal.action = COMPLETED
-    journal.after_json = {**journal.after_json, 'state': 'completed'}
-    db.commit()
+    progress(db, journal, 'completed', state='completed')
 
 
 def delete_region(db: Session, region_id: uuid.UUID, *, backend=None):
@@ -191,7 +230,7 @@ def delete_region(db: Session, region_id: uuid.UUID, *, backend=None):
                 return  # A lost HTTP response can safely be retried.
             raise ApplicationError('region_not_found', 'Region was not found.', 404)
         journal = pending_cleanup(db)
-        if journal is not None and journal.entity_id != region_id:
+        if journal is not None and (journal.entity_id != region_id or journal.action != PENDING):
             raise ApplicationError('region_cleanup_pending', 'Finish deleting the previous region before deleting another region.', 409)
         if journal is None:
             plan = _inventory(db, region)
@@ -202,7 +241,7 @@ def delete_region(db: Session, region_id: uuid.UUID, *, backend=None):
             except Exception:
                 raise ApplicationError('region_cleanup_unavailable', 'Could not inspect region storage or training services. Nothing was deleted; please retry later.', 503) from None
             journal = AuditLog(action=PENDING, entity_type='region', entity_id=region_id,
-                               after_json={'state': 'pending', 'plan': plan, 'done': []})
+                               after_json={'state': 'pending', 'plan': plan, 'done': [], 'phase': 'preparing'})
             region.is_active = False
             db.add(journal)
             db.commit()  # Persist the inventory BEFORE touching external stores.
@@ -213,16 +252,18 @@ def delete_region(db: Session, region_id: uuid.UUID, *, backend=None):
                 # Revisit local files on EVERY retry, including replacement pods.
                 if step != 'local_files' and step in journal.after_json['done']:
                     continue
+                progress(db, journal, step, state='pending')
                 backend.clean(step, plan, str(journal.id))
                 done = list(dict.fromkeys([*journal.after_json['done'], step]))
                 journal.after_json = {**journal.after_json, 'state': 'pending', 'done': done}
                 db.commit()
+            progress(db, journal, 'verifying')
             backend.verify(plan, str(journal.id))
             _remove_records(db, region, journal)
         except Exception as error:
             db.rollback()
             # Keep rows/locations and disable writes until an explicit retry.
             journal = db.get(AuditLog, journal.id)
-            journal.after_json = {**journal.after_json, 'state': 'retry_required', 'error_type': type(error).__name__}
-            db.commit()
+            progress(db, journal, journal.after_json.get('phase', 'preparing'),
+                     state='retry_required', error_type=type(error).__name__)
             raise ApplicationError('region_cleanup_incomplete', 'Region cleanup is unfinished. Please retry Delete for this region; its cleanup progress has been saved.', 503) from None

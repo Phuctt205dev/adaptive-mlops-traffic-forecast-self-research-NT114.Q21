@@ -6,6 +6,8 @@ import FeatureImportancePanel from "./FeatureImportancePanel";
 import TrainingMonitor from "./TrainingMonitor";
 import TrainingConfiguration from "./TrainingConfiguration.jsx";
 import ConfirmDialog from "./ConfirmDialog.jsx";
+import CleanupDialog from "./CleanupDialog.jsx";
+import { readPendingCleanup } from "./cleanupProgress.js";
 import { pages, rememberedPage, rememberPage } from "./pageNavigation.js";
 import { normalizeTrainingConfiguration } from "./trainingConfiguration.js";
 import "./styles.css";
@@ -622,12 +624,12 @@ function TrafficChart({ points }) {
   );
 }
 
-function RegionManager({ regions, selectedRegion, refresh }) {
+function RegionManager({ regions, selectedRegion, refresh, userId }) {
   const lookupSequence = useRef(0);
   const [lookupReady, setLookupReady] = useState(false);
   const [creating, setCreating] = useState(false);
   const [deletingRegionId, setDeletingRegionId] = useState(null);
-  const [regionToDelete, setRegionToDelete] = useState(null);
+  const [regionToDelete, setRegionToDelete] = useState(() => readPendingCleanup(userId, "region"));
   const [lookupQuery, setLookupQuery] = useState("");
   const [lookingUp, setLookingUp] = useState(false);
   const [form, setForm] = useState({
@@ -704,22 +706,6 @@ function RegionManager({ regions, selectedRegion, refresh }) {
   async function toggleRegion(region) {
     await api.updateRegion(region.id, { is_active: !region.is_active });
     await refresh();
-  }
-
-  async function deleteRegion(region) {
-    if (deletingRegionId) return;
-    setDeletingRegionId(region.id);
-    setMessage(`Deleting "${region.name}" and its data. Please wait…`);
-    try {
-      await api.deleteRegion(region.id);
-      setMessage(`Deleted "${region.name}" and its data.`);
-      await refresh();
-    } catch (err) {
-      setMessage(err.message);
-      throw err;
-    } finally {
-      setDeletingRegionId(null);
-    }
   }
 
   function activeModelLabel(region) {
@@ -802,10 +788,12 @@ function RegionManager({ regions, selectedRegion, refresh }) {
           ])}
         />
       </Card>
-      {regionToDelete && <ConfirmDialog
-        title="Delete region?" subject={regionToDelete.name} confirmLabel="Delete region"
+      {regionToDelete && <CleanupDialog key={regionToDelete.id} kind="region" id={regionToDelete.id}
+        userId={userId} subject={regionToDelete.subject || regionToDelete.name}
         description="The region and its datasets, models, training history, predictions, drift history, SHAP reports and stored files will be permanently deleted."
-        onConfirm={() => deleteRegion(regionToDelete)} onClose={() => setRegionToDelete(null)} />}
+        onBusyChange={(busy) => setDeletingRegionId(busy ? regionToDelete.id : null)}
+        onDeleted={async () => { setMessage("Region and its data deleted."); await refresh(); }}
+        onClose={() => setRegionToDelete(null)} />}
     </div>
   );
 }
@@ -1301,16 +1289,11 @@ function isDriftRetrainedModel(model) {
   return model.training_configuration?.trigger_source === "feature_drift";
 }
 
-function ModelManager({ selectedRegion, models, refreshModels, refreshRegions }) {
+function ModelManager({ selectedRegion, models, refreshModels, refreshRegions, userId }) {
   const [expandedModelId, setExpandedModelId] = useState("");
   const [deletingModelId, setDeletingModelId] = useState("");
-  const [modelToDelete, setModelToDelete] = useState(null);
-  const [deleteError, setDeleteError] = useState("");
-  const regionIdRef = useRef(selectedRegion?.id);
-  regionIdRef.current = selectedRegion?.id;
-
+  const [modelToDelete, setModelToDelete] = useState(() => readPendingCleanup(userId, "model"));
   useEffect(() => {
-    setDeleteError("");
     setExpandedModelId("");
   }, [selectedRegion?.id]);
 
@@ -1319,30 +1302,9 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions })
     await Promise.all([refreshModels(), refreshRegions()]);
   }
 
-  async function deleteModel(model) {
-    if (deletingModelId) return;
-    const regionId = selectedRegion?.id;
-    setDeletingModelId(model.id);
-    setDeleteError("");
-    try {
-      await api.deleteModel(model.id);
-      if (regionIdRef.current === regionId) {
-        await Promise.all([refreshModels(), refreshRegions()]);
-      }
-    } catch (error) {
-      if (regionIdRef.current === regionId) {
-        setDeleteError(`Could not delete ${model.version}. ${error.message || "Please try again."}`);
-      }
-      throw error;
-    } finally {
-      setDeletingModelId("");
-    }
-  }
-
   return (
     <div className="grid model-management">
     <Card title="Model Versions">
-      {deleteError && <div className="alert alert-error" role="alert">{deleteError}</div>}
       {models.length ? (
         <div className="table-wrap">
           <table>
@@ -1443,10 +1405,12 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions })
         <p className="muted">No data yet.</p>
       )}
     </Card>
-    {modelToDelete && <ConfirmDialog
-      title="Delete model?" subject={`${modelToDelete.version} · ${modelToDelete.variant}`} confirmLabel="Delete model"
-      description="This model version and its related predictions will be permanently deleted. Other model versions will be kept."
-      onConfirm={() => deleteModel(modelToDelete)} onClose={() => setModelToDelete(null)} />}
+    {modelToDelete && <CleanupDialog key={modelToDelete.id} kind="model" id={modelToDelete.id}
+      userId={userId} subject={modelToDelete.subject || `${modelToDelete.version} · ${modelToDelete.variant}`}
+      description="This model, its training output files and related predictions will be permanently deleted. Other models and the dataset will be kept. Deleting a serving model stops predictions until another model is activated."
+      onBusyChange={(busy) => setDeletingModelId(busy ? modelToDelete.id : "")}
+      onDeleted={() => Promise.all([refreshModels(), refreshRegions()])}
+      onClose={() => setModelToDelete(null)} />}
     </div>
   );
 }
@@ -2518,6 +2482,7 @@ function App() {
           <>
             <section className="page-panel" hidden={page !== "regions"}>
               <RegionManager
+                userId={user.id}
                 regions={regions}
                 selectedRegion={selectedRegion}
                 refresh={() => refreshRegions(user)}
@@ -2533,7 +2498,7 @@ function App() {
               />
             </section>
             <section className="page-panel" hidden={page !== "models"}>
-              <ModelManager selectedRegion={selectedRegion} models={models} refreshModels={refreshModels} refreshRegions={() => refreshRegions(user)} />
+              <ModelManager userId={user.id} selectedRegion={selectedRegion} models={models} refreshModels={refreshModels} refreshRegions={() => refreshRegions(user)} />
             </section>
             <section className="page-panel" hidden={page !== "quality"}>
               <ModelQualityPanel region={selectedRegion} enabled={page === "quality"} />

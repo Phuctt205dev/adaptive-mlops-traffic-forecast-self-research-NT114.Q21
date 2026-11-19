@@ -59,3 +59,9 @@ def update_region(
 def delete_region(region_id: uuid.UUID, db: Session = Depends(get_db)):
     region_service.delete_region(db, region_id)
     return None
+
+
+@router.get("/{region_id}/cleanup-status")
+def region_cleanup_status(region_id: uuid.UUID, db: Session = Depends(get_db)):
+    from backend.app.services.region_cleanup import cleanup_status
+    return cleanup_status(db, region_id, 'region')

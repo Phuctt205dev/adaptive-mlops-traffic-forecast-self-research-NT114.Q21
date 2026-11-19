@@ -28,13 +28,13 @@ export default function TrainingConfiguration({ value, onChange }) {
             max={value.train_end_date || undefined}
             onChange={(event) => update("train_start_date", event.target.value)} />
         </label>
-        <label htmlFor={`${prefix}-end`}>End date
+        <label htmlFor={`${prefix}-end`}>End date (excluded)
           <input id={`${prefix}-end`} type="date" required value={value.train_end_date}
             min={value.train_start_date || undefined}
             onChange={(event) => update("train_end_date", event.target.value)} />
         </label>
       </div>
-      <p className="training-config-hint">The end date is excluded from training. Advanced settings also apply when hidden.</p>
+      <p className="training-config-hint">From the start date at 00:00 up to, but not including, the end date at 00:00, using the dataset timestamps. Advanced settings also apply when hidden.</p>
       {advanced && <div className="training-config-advanced">
         <fieldset>
           <legend>All selected models</legend>
@@ -52,7 +52,7 @@ export default function TrainingConfiguration({ value, onChange }) {
             {numberField("recurrent_epochs", "Epoch limit per CV fold")}
             {numberField("recurrent_batch_size", "Batch size")}
           </div>
-          <p className="training-config-hint">CV may stop early. Final training uses the epoch count selected from CV.</p>
+          <p className="training-config-hint">Each CV fold can stop before this limit. Final training uses the median of the best epoch counts from CV.</p>
         </fieldset>
         <fieldset className="training-config-managed">
           <legend>System managed · no training control</legend>
@@ -98,7 +98,7 @@ export default function TrainingConfiguration({ value, onChange }) {
       {!expanded ? fields() : <p className="muted">Advanced settings are open in the expanded view.</p>}
     </section>
     {expanded && <AppDialog title="Advanced training configuration" size="wide"
-      description="Changes are kept in your current training setup when you close this window."
+      description="Closing keeps these settings for this page session. Reloading the page resets the draft."
       onClose={() => setExpanded(false)}
       footer={<button type="button" onClick={() => setExpanded(false)}>Done</button>}>
       <div className="training-config-expanded">{fields()}</div>

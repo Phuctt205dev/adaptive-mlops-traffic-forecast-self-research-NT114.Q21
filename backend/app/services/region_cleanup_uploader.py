@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from backend.app.db.models import AuditLog
 from backend.app.db.session import engine, SessionLocal
-from backend.app.services.region_cleanup import COMPLETED, cleanup_requested, database_barrier, pending_cleanup
+from backend.app.services.region_cleanup import COMPLETED, COMPLETED_ACTIONS, cleanup_requested, database_barrier, pending_cleanup
 from backend.app.services.artifact_paths import owns_key
 from backend.app.services.artifact_cache import configured,internal,sha256_file
 from backend.app.services.restore_cache import MODEL_BINARIES,bootstrap_keys
@@ -118,7 +118,7 @@ def _upload_cycle(root,*,state=None,cache=None):
                 with SessionLocal() as db:
                     if pending_cleanup(db) is not None:
                         return count
-                    prefixes = [target['prefix'] for record in db.scalars(select(AuditLog).where(AuditLog.action == COMPLETED))
+                    prefixes = [target['prefix'] for record in db.scalars(select(AuditLog).where(AuditLog.action.in_(COMPLETED_ACTIONS)))
                                 for target in record.after_json['plan']['objects'] if target['bucket'] == bucket]
                 if not path.is_file() or path.is_symlink() or path.name.endswith('.tmp'):
                     continue

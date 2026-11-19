@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from backend.app.core.errors import ApplicationError
 from backend.app.db.models import (Base, Dataset, DatasetStatus, DriftCheck, DriftCheckStatus,
                                    ForecastMode, ModelVersion, Prediction, Region, TrainingRun, User, UserRole)
-from backend.app.services.model_registry import activate_model_version, delete_model_version, register_training_result
+from backend.app.services.model_registry import activate_model_version, _delete_model_records as delete_model_version, register_training_result
 
 
 class ModelDeletionConstraintTests(unittest.TestCase):

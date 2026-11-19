@@ -8,9 +8,23 @@ Delete model/Delete region màu đỏ. Focus ban đầu ở Cancel; Enter tại 
 không xác nhận xóa. Tab/Shift+Tab ở trong cửa sổ, Esc/X/bấm ngoài để hủy,
 đóng xong trả focus về nút mở nếu nút còn tồn tại.
 
-Trong lúc gửi yêu cầu, khóa thao tác lặp và đóng cửa sổ. Nếu API báo lỗi,
-giữ thông báo trong cửa sổ để admin xem và thử lại; không tự báo thành công.
-Thay đổi chỉ ở frontend, không đổi phạm vi hay điều kiện xóa của backend.
+Trong lúc xóa, cửa sổ hiển thị bước backend đã lưu: dọn cache/file, tracking,
+file lưu trữ và kiểm tra kết quả. Không dùng phần trăm giả hoặc suy heartbeat
+là đã xong. Khóa thao tác lặp trong lúc chờ; sau ba phút chưa xác nhận được,
+cho đóng hoặc kiểm tra lại. Đóng cửa sổ không hủy công việc phía server.
+
+Mỗi lần admin xác nhận chỉ gửi một DELETE; việc theo dõi tự động chỉ gửi GET
+trạng thái. Nếu mất phản hồi, đối soát journal trước khi kết luận. Lỗi giữa
+chừng giữ nút Retry deletion để admin tiếp tục các bước còn thiếu. Backend
+giữ khóa chống chạy hai lượt dọn đồng thời và xác nhận lại kết quả cuối.
+
+SessionStorage giữ ID/nhãn đối tượng đang xóa theo tài khoản và loại đối tượng
+để F5 trong cùng tab trình duyệt có thể đọc tiếp trạng thái. Không lưu token
+vào khóa này, không tự gửi DELETE khi khôi phục trang. Nếu storage bị chặn,
+cửa sổ hiện tại vẫn hoạt động nhưng không phục hồi được qua F5.
+
+Xóa model nay dọn cả file riêng của lượt tạo model, tracking artifact và cache;
+không xóa dataset hoặc experiment dùng chung. Xem [phạm vi cleanup](REGION_CLEANUP.md).
 
 ## Refresh giữ tab
 

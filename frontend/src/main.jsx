@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { api, getStoredToken, setStoredToken } from "./api";
+import { api, ApiError, getStoredToken, setStoredToken } from "./api";
 import ModelQualityPanel from "./ModelQualityPanel";
 import FeatureImportancePanel from "./FeatureImportancePanel";
 import TrainingMonitor from "./TrainingMonitor";
@@ -295,7 +295,7 @@ function TrafficStateIcon({ tone }) {
   );
 }
 
-function AuthPage({ onLogin }) {
+function AuthPage({ onLogin, initialError = "" }) {
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("admin@example.com");
   const [password, setPassword] = useState("admin123456");
@@ -340,7 +340,7 @@ function AuthPage({ onLogin }) {
             onChange={(event) => setPassword(event.target.value)}
           />
         </label>
-        {error && <div className="error">{error}</div>}
+        {(error || initialError) && <div className="error" role="alert">{error || initialError}</div>}
         <button disabled={loading}>{loading ? "Working..." : mode === "login" ? "Login" : "Register"}</button>
         <button
           className="link-button"
@@ -682,6 +682,7 @@ function RegionManager({ regions, selectedRegion, refresh, userId }) {
     timezone: "Asia/Ho_Chi_Minh",
   });
   const [message, setMessage] = useState("");
+  const [toggleError, setToggleError] = useState("");
   const mapUrl = mapPreviewUrl(form.latitude, form.longitude);
 
   useEffect(() => {
@@ -746,8 +747,18 @@ function RegionManager({ regions, selectedRegion, refresh, userId }) {
   }
 
   async function toggleRegion(region) {
-    await api.updateRegion(region.id, { is_active: !region.is_active });
-    await refresh();
+    setToggleError("");
+    try {
+      await api.updateRegion(region.id, { is_active: !region.is_active });
+    } catch (err) {
+      setToggleError(`Could not ${region.is_active ? "disable" : "enable"} ${region.name}: ${err.message}`);
+      return;
+    }
+    try {
+      await refresh();
+    } catch (err) {
+      setToggleError(`The change was saved, but the region list could not be refreshed: ${err.message}`);
+    }
   }
 
   function activeModelLabel(region) {
@@ -807,6 +818,7 @@ function RegionManager({ regions, selectedRegion, refresh, userId }) {
         </form>
       </Card>
       <Card title="Regions">
+        {toggleError && <div className="alert alert-error" role="alert">{toggleError}</div>}
         <Table
           columns={["Name", "Timezone", "Status", "Active Model", "Action"]}
           rows={regions.map((region) => [
@@ -1267,7 +1279,20 @@ function TrainingAction({ dataset, activeTraining, onTrain }) {
   const hasRunningTraining = activeTraining && !["completed", "failed", "cancelled"].includes(activeTraining.status);
 
   if (isCompleted) {
-    return <span className="inline-status inline-status-success">Model ready</span>;
+    // A finished run can be repeated with new settings without reloading the page.
+    return (
+      <span className="train-again">
+        <span className="inline-status inline-status-success">Model ready</span>
+        <button
+          type="button"
+          className="secondary compact-button"
+          disabled={dataset.status !== "valid" || hasRunningTraining}
+          onClick={() => onTrain(dataset)}
+        >
+          Train again
+        </button>
+      </span>
+    );
   }
 
   if (isFailed) {
@@ -1344,19 +1369,32 @@ function ModelManager({ selectedRegion, models, modelsLoading = false, refreshMo
   const [expandedModelId, setExpandedModelId] = useState("");
   const [deletingModelId, setDeletingModelId] = useState("");
   const [modelToDelete, setModelToDelete] = useState(() => readPendingCleanup(userId, "model"));
+  const [actionError, setActionError] = useState("");
   useEffect(() => {
     setExpandedModelId("");
+    setActionError("");
   }, [selectedRegion?.id]);
 
   async function activate(model) {
     if (!belongsToRegion(model, selectedRegion?.id)) return;
-    await api.activateModel(model.id);
-    await Promise.all([refreshModels(), refreshRegions()]);
+    setActionError("");
+    try {
+      await api.activateModel(model.id);
+    } catch (err) {
+      setActionError(`Could not activate ${model.version}: ${err.message}`);
+      return;
+    }
+    try {
+      await Promise.all([refreshModels(), refreshRegions()]);
+    } catch (err) {
+      setActionError(`${model.version} was activated, but the list could not be refreshed: ${err.message}`);
+    }
   }
 
   return (
     <div className="grid model-management">
     <Card title="Model Versions">
+      {actionError && <div className="alert alert-error" role="alert">{actionError}</div>}
       {models.length ? (
         <div className="table-wrap">
           <table>
@@ -2071,8 +2109,18 @@ function UserManager() {
   }, []);
 
   async function update(user, patch) {
-    await api.updateUser(user.id, patch);
-    await refresh();
+    setMessage("");
+    try {
+      await api.updateUser(user.id, patch);
+    } catch (err) {
+      setMessage(`Could not update ${user.email}: ${err.message}`);
+      return;
+    }
+    try {
+      await refresh();
+    } catch (err) {
+      setMessage(`The change was saved, but the user list could not be refreshed: ${err.message}`);
+    }
   }
 
   return (
@@ -2426,6 +2474,7 @@ function App() {
   const [datasetScope, setDatasetScope] = useState({ regionId: "", items: [] });
   const [modelScope, setModelScope] = useState({ regionId: "", items: [] });
   const [error, setError] = useState("");
+  const [regionsError, setRegionsError] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
 
@@ -2511,16 +2560,31 @@ function App() {
     }
   }
 
-  async function bootstrap() {
-    setError("");
+  // Only an authentication failure ends the session. A temporary problem while
+  // loading the region list keeps the user signed in and offers a retry.
+  async function loadRegions(current) {
+    setRegionsError("");
     try {
-      const current = await loadMe();
       await refreshRegions(current);
     } catch (err) {
-      setStoredToken("");
-      setUser(null);
-      setError(err.message);
+      setRegionsError(err.message || "The region list could not be loaded.");
     }
+  }
+
+  async function bootstrap() {
+    setError("");
+    setRegionsError("");
+    let current;
+    try {
+      current = await loadMe();
+    } catch (err) {
+      const expired = err instanceof ApiError && (err.status === 401 || err.status === 403);
+      if (expired) setStoredToken("");
+      setUser(null);
+      setError(expired ? err.message : `Could not sign you in right now: ${err.message}`);
+      return;
+    }
+    await loadRegions(current);
   }
 
   useEffect(() => {
@@ -2577,6 +2641,12 @@ function App() {
             />
           )}
         </header>
+        {regionsError && (
+          <div className="alert alert-error" role="alert">
+            Could not load the region list: {regionsError}{" "}
+            <button type="button" className="secondary compact-button" onClick={() => loadRegions(user)}>Retry</button>
+          </div>
+        )}
         <section className="page-panel" hidden={page !== "dashboard"}>
           <Dashboard regions={regions} selectedRegion={selectedRegion} datasets={datasets} models={models} user={user} />
         </section>

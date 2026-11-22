@@ -76,9 +76,51 @@ def authenticate_user(db: Session, email: str, password: str) -> User:
     return user
 
 
+def _lock_active_admins(db: Session) -> list[User]:
+    """Lock every active admin row in a fixed order.
+
+    Two admins changing each other at the same time then wait for one another,
+    so the check "another active admin remains" cannot be passed by both.
+    """
+    return list(
+        db.scalars(
+            select(User)
+            .where(User.role == UserRole.ADMIN, User.is_active.is_(True))
+            .order_by(User.id)
+            .with_for_update()
+        )
+    )
+
+
 def update_user(db: Session, user_id: uuid.UUID, payload: UserUpdate) -> User:
-    user = get_user_or_404(db, user_id)
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    # A null value means "not provided"; it must never be written to a required column.
+    changes = {
+        field: value
+        for field, value in payload.model_dump(exclude_unset=True).items()
+        if value is not None
+    }
+    if "role" in changes or "is_active" in changes:
+        active_admins = _lock_active_admins(db)
+        user = get_user_or_404(db, user_id)
+        db.refresh(user)
+        stays_admin = (
+            changes.get("role", user.role) == UserRole.ADMIN
+            and changes.get("is_active", user.is_active)
+        )
+        was_active_admin = user.role == UserRole.ADMIN and user.is_active
+        if was_active_admin and not stays_admin and not any(
+            admin.id != user.id for admin in active_admins
+        ):
+            db.rollback()
+            raise ApplicationError(
+                "last_admin_required",
+                "At least one active administrator must remain. "
+                "Make another account an active administrator first.",
+                409,
+            )
+    else:
+        user = get_user_or_404(db, user_id)
+    for field, value in changes.items():
         setattr(user, field, value)
     db.commit()
     db.refresh(user)
@@ -111,17 +153,31 @@ def change_password(
 
 
 def ensure_bootstrap_admin(db: Session, email: str, password: str) -> None:
+    """Make sure the configured bootstrap account can administer a new system.
+
+    A missing account is created as admin. An existing account is only
+    promoted/re-enabled when no active admin is left, so that an admin who was
+    deliberately demoted or disabled is not silently restored at the next start.
+    """
     normalized_email = normalize_email(email)
     if not normalized_email or not password:
         return
     existing = get_user_by_email(db, normalized_email)
-    if existing is not None:
-        if existing.role != UserRole.ADMIN:
-            existing.role = UserRole.ADMIN
-            db.commit()
+    if existing is None:
+        create_user(
+            db,
+            UserCreate(email=normalized_email, password=password),
+            role=UserRole.ADMIN,
+        )
         return
-    create_user(
-        db,
-        UserCreate(email=normalized_email, password=password),
-        role=UserRole.ADMIN,
-    )
+    if existing.role == UserRole.ADMIN and existing.is_active:
+        return
+    if db.scalar(
+        select(func.count())
+        .select_from(User)
+        .where(User.role == UserRole.ADMIN, User.is_active.is_(True))
+    ):
+        return
+    existing.role = UserRole.ADMIN
+    existing.is_active = True
+    db.commit()

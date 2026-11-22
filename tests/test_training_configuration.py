@@ -28,6 +28,29 @@ def configuration(**overrides):
     }).model_dump(mode="json")
 
 
+class SystemManagedFieldTests(unittest.TestCase):
+    """artifact_root and model_role are chosen by the system, never by the caller."""
+
+    def test_caller_values_are_replaced_by_the_system_values(self):
+        for root, role in (("/etc", "champion"), ("../../outside", ""), ("C:/Windows", "x" * 500)):
+            with self.subTest(root=root):
+                stored = configuration(artifact_root=root, model_role=role)
+                self.assertEqual(stored["artifact_root"], "models/regions")
+                self.assertEqual(stored["model_role"], "candidate")
+
+    def test_defaults_and_ui_values_are_unchanged(self):
+        stored = configuration(artifact_root="models/regions", model_role="candidate")
+        self.assertEqual((stored["artifact_root"], stored["model_role"]), ("models/regions", "candidate"))
+        self.assertEqual(configuration()["artifact_root"], "models/regions")
+
+    def test_old_stored_configuration_still_validates_and_compares_equal(self):
+        legacy = {**configuration(), "artifact_root": "models/old-layout", "model_role": "champion"}
+        current = {**configuration()}
+        again = TrainingRunCreate.model_validate(legacy).model_dump(mode="json")
+        same_shape = TrainingRunCreate.model_validate(current).model_dump(mode="json")
+        self.assertEqual(again, same_shape)
+
+
 class TrainingConfigurationTests(unittest.TestCase):
     def test_tree_and_neural_reserve_the_same_latest_rows_including_rounding(self):
         for size in (48, 71, 100):

@@ -35,7 +35,9 @@ dẫn file hoặc prefix S3. File không xác định được chủ sở hữu 
 ## Những gì được dọn
 
 - DB ứng dụng: DriftCheck, Prediction, ModelVersion, TrainingRun, Dataset,
-  các con trỏ active/recommended, cuối cùng Region. Chặn tham chiếu chéo vùng
+  thiết lập auto-retrain của vùng (AuditLog `region_drift_settings_updated`),
+  các con trỏ active/recommended, cuối cùng Region. Journal dọn vùng được giữ
+  vì nó làm cho việc gửi lại Delete sau khi mất phản hồi an toàn. Chặn tham chiếu chéo vùng
   trước khi xóa bất cứ file nào.
 - Dataset gốc và quality report tại regions/<region UUID>/ trên bucket dataset.
 - Các multipart upload còn dở trong đúng prefix sở hữu, gồm phần còn sót
@@ -115,3 +117,13 @@ Nguồn cơ chế: [khóa advisory PostgreSQL](https://www.postgresql.org/docs/c
 [MLflow delete experiment](https://mlflow.org/docs/latest/api_reference/rest-api.html#delete-experiment)
 và [MLflow GC](https://mlflow.org/docs/latest/api_reference/cli.html#mlflow-gc).
 Các nguồn giải thích cơ chế, không chứng minh trạng thái cụm của dự án.
+
+## Trường do hệ thống quản lý khi tạo lượt train
+
+`artifact_root` (`models/regions`) và `model_role` (`candidate`) hiển thị chỉ đọc
+trong Training Configuration → Advanced. Backend cũng cố định hai giá trị này:
+`TrainingRunCreate` thay mọi giá trị do người gọi API gửi bằng giá trị hệ thống,
+nên không thể chọn thư mục ghi kết quả hoặc vai trò model. Train Kaggle/Local vốn
+dùng thư mục output riêng và vai trò `candidate`, hai ô này không điều khiển
+huấn luyện. Cấu hình đã lưu từ trước vẫn đọc được. Kiểm tra:
+`tests/test_training_configuration.py` (`SystemManagedFieldTests`).

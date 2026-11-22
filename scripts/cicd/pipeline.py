@@ -19,8 +19,11 @@ from scripts.cicd.cd_state import GitHub, Store, emit
 LEGACY_SCOPE = 'traffic-application-scope/v1'
 V2_SCOPE = 'traffic-application-scope/v2'
 V3_SCOPE = 'traffic-application-scope/v3'
-SCOPE = 'traffic-application-scope/v4'
-SCOPE_SCHEMAS = {LEGACY_SCOPE, V2_SCOPE, V3_SCOPE, SCOPE}
+V4_SCOPE = 'traffic-application-scope/v4'
+SCOPE = 'traffic-application-scope/v5'
+SCOPE_SCHEMAS = {LEGACY_SCOPE, V2_SCOPE, V3_SCOPE, V4_SCOPE, SCOPE}
+# Scopes that carry the reviewed component inventory (v4 stays readable, frozen).
+REGISTRY_SCOPES = {V4_SCOPE, SCOPE}
 ACCEPTANCE = 'traffic-application-acceptance/v1'
 PR_SCOPE = 'traffic-pull-request-scope/v1'
 RUNTIME_PREFIXES = ('scripts/cicd/', 'deployment/', 'requirements/roles/', 'alembic/',
@@ -48,6 +51,18 @@ UI_CHECK_FILES = {
     'scripts/shap/check_feature_importance_ui.py',
     'scripts/cloud_training/check_training_monitor_ui.py',
 }
+# v5 recognises the browser-check naming convention instead of a hand-kept list:
+# scripts/<tool>/check_<name>_ui.py. tests/test_release_clarity.py proves that no
+# such file is ever part of a packaged role. v1-v4 keep the frozen list above.
+UI_CHECK_PATTERN = re.compile(r'scripts/[a-z0-9_]+/check_[a-z0-9_]+_ui\.py')
+
+
+def legacy_ui_check(path):
+    return path in UI_CHECK_FILES
+
+
+def ui_check_path(path):
+    return path in UI_CHECK_FILES or bool(UI_CHECK_PATTERN.fullmatch(path))
 
 
 def backend_path(path):
@@ -122,10 +137,10 @@ def classify_v1(paths, *, baseline, commit, force=False, frontend=False):
             'reason': 'application_contract_changed' if contract_changed else legacy['reason']}
 
 
-def classify_v2(paths, *, baseline, commit, force=False, frontend=False):
+def classify_v2(paths, *, baseline, commit, force=False, frontend=False, ui_check=legacy_ui_check):
     """Frozen v2 reader: controller changes selected disposable clusters."""
     paths = sorted(set(paths))
-    release_paths = [p for p in paths if p not in UI_CHECK_FILES]
+    release_paths = [p for p in paths if not ui_check(p)]
     value = classify_v1(release_paths, baseline=baseline, commit=commit, force=force, frontend=frontend)
     current = value['full'] or any(
         p.startswith(DEEP_PREFIXES) or p in RUNTIME_FILES or
@@ -135,14 +150,14 @@ def classify_v2(paths, *, baseline, commit, force=False, frontend=False):
     # even if it isn't under one of the application source directories.
     value['backend'] = current or any(backend_path(p) for p in release_paths)
     value['tests'] = value['backend'] or any(
-        p.startswith('tests/') or p in UI_CHECK_FILES or
+        p.startswith('tests/') or ui_check(p) or
         p in {'requirements/ci.txt', 'requirements/backend.txt'} for p in paths)
     return value
 
 
-def classify_v3(paths, *, baseline, commit, force=False, frontend=False):
+def classify_v3(paths, *, baseline, commit, force=False, frontend=False, ui_check=legacy_ui_check):
     """Every release is fast; only requested/weekly full checks create kind."""
-    value = classify_v2(paths, baseline=baseline, commit=commit, force=force, frontend=frontend)
+    value = classify_v2(paths, baseline=baseline, commit=commit, force=force, frontend=frontend, ui_check=ui_check)
     value.update(schema=V3_SCOPE, current=bool(force), full=bool(force))
     # Unknown inputs/history still run all fast checks. They never silently
     # skip regression, images or frontend, and cannot start a cluster on push.
@@ -151,17 +166,30 @@ def classify_v3(paths, *, baseline, commit, force=False, frontend=False):
     return value
 
 
-def classify(paths, *, baseline, commit, force=False, frontend=False, registry=None):
+def _inventory_scope(schema, ui_check, paths, *, baseline, commit, force, frontend, registry):
     registry = components.validate(registry) if registry is not None else components.load()
     paths = sorted(set(paths))
-    # Infra inputs are known backend inputs in v4; frozen v1-v3 readers retain
+    # Infra inputs are known backend inputs from v4; frozen v1-v3 readers retain
     # their original unknown-impact policy.
     mapped = ['deployment/component-input/' + p if p.startswith('infra/') else p for p in paths]
-    value = classify_v3(mapped, baseline=baseline, commit=commit, force=force, frontend=frontend)
+    value = classify_v3(mapped, baseline=baseline, commit=commit, force=force, frontend=frontend, ui_check=ui_check)
     if any(p.startswith(('requirements/', 'infra/')) for p in paths):
         value.update(backend=True, tests=True)
-    value.update(schema=SCOPE, paths=paths, component_registry=registry)
+    value.update(schema=schema, paths=paths, component_registry=registry)
     return value
+
+
+def classify_v4(paths, *, baseline, commit, force=False, frontend=False, registry=None):
+    """Frozen v4 reader: only the two listed browser checks were exempt."""
+    return _inventory_scope(V4_SCOPE, legacy_ui_check, paths, baseline=baseline, commit=commit,
+                            force=force, frontend=frontend, registry=registry)
+
+
+def classify(paths, *, baseline, commit, force=False, frontend=False, registry=None):
+    """v5: any scripts/<tool>/check_<name>_ui.py browser check is test-only, so a UI-only
+    change publishes Pages without building or deploying a backend release."""
+    return _inventory_scope(SCOPE, ui_check_path, paths, baseline=baseline, commit=commit,
+                            force=force, frontend=frontend, registry=registry)
 
 
 def validate_scope(value, commit):
@@ -174,9 +202,10 @@ def validate_scope(value, commit):
     for key in ('backend', 'tests', 'frontend', 'current', 'full', 'forced'):
         if type(value.get(key)) is not bool:
             raise ValueError('Application scope flags must be boolean')
-    classifier = {LEGACY_SCOPE:classify_v1, V2_SCOPE:classify_v2, V3_SCOPE:classify_v3, SCOPE:classify}[value['schema']]
-    options = {'registry': value.get('component_registry')} if value['schema'] == SCOPE else {}
-    if value['schema'] == SCOPE and 'component_registry' not in value:
+    classifier = {LEGACY_SCOPE:classify_v1, V2_SCOPE:classify_v2, V3_SCOPE:classify_v3,
+                  V4_SCOPE:classify_v4, SCOPE:classify}[value['schema']]
+    options = {'registry': value.get('component_registry')} if value['schema'] in REGISTRY_SCOPES else {}
+    if value['schema'] in REGISTRY_SCOPES and 'component_registry' not in value:
         raise ValueError('Component inventory is missing')
     expected = classifier(paths, baseline=value.get('baseline'), commit=commit,
                           force=value['forced'], frontend=value['frontend'], **options)
@@ -191,7 +220,7 @@ def required_results(scope):
         jobs.add('tests')
     if scope['backend']:
         jobs.update(('image', 'package'))
-        if scope['schema'] == SCOPE and components.executors(scope['component_registry']):
+        if scope['schema'] in REGISTRY_SCOPES and components.executors(scope['component_registry']):
             jobs.add('executor-image')
     if scope['frontend']:
         jobs.add('frontend-build')
@@ -206,7 +235,7 @@ def required_jobs(scope):
     jobs = required_results(scope) | {'acceptance'}
     if 'image' in jobs:
         jobs.remove('image')
-        roles = components.applications(scope['component_registry']) if scope['schema'] == SCOPE else components.LEGACY_ROLES
+        roles = components.applications(scope['component_registry']) if scope['schema'] in REGISTRY_SCOPES else components.LEGACY_ROLES
         jobs.update('image (' + role + ')' for role in roles)
     if 'executor-image' in jobs:
         jobs.remove('executor-image')
@@ -229,7 +258,7 @@ def aggregate(scope, proofs, results, *, commit, run_id, attempt, identity=None)
             raise ValueError('Missing immutable backend delivery')
         images=identity.get('images',{})
         expected_roles = (components.applications(scope['component_registry'])
-                          if scope['schema'] == SCOPE else components.LEGACY_ROLES)
+                          if scope['schema'] in REGISTRY_SCOPES else components.LEGACY_ROLES)
         if set(images) != set(expected_roles):
             raise ValueError('Incomplete application image bindings')
         for role,binding in images.items():
@@ -239,7 +268,7 @@ def aggregate(scope, proofs, results, *, commit, run_id, attempt, identity=None)
                 raise ValueError('Invalid application image binding')
         if identity.get('image') != images['api']['image']:
             raise ValueError('Application API image binding differs')
-        if scope['schema'] == SCOPE:
+        if scope['schema'] in REGISTRY_SCOPES:
             inventory = scope['component_registry']
             wanted = components.executors(inventory)
             if (identity.get('schema') != 'traffic-delivery/v3' or
@@ -265,7 +294,7 @@ def check_acceptance(proof, run):
             proof.get('deployable') is not True):
         raise ValueError('Application acceptance belongs to another commit/run/attempt')
     scope = validate_scope(proof['scope'], run['head_sha'])
-    if scope['schema'] in {V3_SCOPE, SCOPE}:
+    if scope['schema'] in {V3_SCOPE, V4_SCOPE, SCOPE}:
         if run.get('event') == 'push' and scope['forced']:
             raise ValueError('Release pushes cannot claim full validation')
         if run.get('event') == 'schedule' and not scope['forced']:
@@ -275,8 +304,11 @@ def check_acceptance(proof, run):
     return scope
 
 
-def current_source(repository, commit, fetch):
-    """Read the full trees: completion order never establishes source freshness."""
+def current_source(repository, commit, fetch, details=None):
+    """Read the full trees: completion order never establishes source freshness.
+
+    When the release is superseded and a dict is given, it receives the newer master
+    commit and a bounded list of the release inputs that differ, so the run can say why."""
     repo = fetch('repos/' + repository)
     latest = fetch('repos/' + repository + '/git/ref/heads/' + repo['default_branch'])['object']['sha']
     if latest == commit:
@@ -286,9 +318,15 @@ def current_source(repository, commit, fetch):
         tree = fetch('repos/' + repository + '/git/trees/' + commit_tree + '?recursive=1')
         if tree.get('truncated') is not False:
             raise ValueError('Cannot establish current source from an incomplete tree')
-        return {e['path']: e['sha'] for e in tree['tree'] if e.get('type') == 'blob' and
+        return {e['path']: e['sha'] for e in tree['tree'] if e.get('type') == 'blob' and not ui_check_path(e['path']) and
                 (backend_path(e['path']) or e['path'].startswith(('.github/workflows/', 'infra/', 'requirements/')))}
-    return inputs(commit) == inputs(latest)
+    before, after = inputs(commit), inputs(latest)
+    if before == after:
+        return True
+    if details is not None:
+        changed = sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
+        details.update(latest=latest, changed=changed[:10], changed_total=len(changed))
+    return False
 
 
 def full_validation(env):
@@ -373,7 +411,7 @@ def accept_main():
         emit({'pull_request_checked': True, 'deployable': False})
         return
     scope = validate_scope(raw_scope, env['GITHUB_SHA'])
-    if scope['schema'] in {V3_SCOPE, SCOPE} and scope['forced'] != full_validation(env):
+    if scope['schema'] in {V3_SCOPE, V4_SCOPE, SCOPE} and scope['forced'] != full_validation(env):
         raise ValueError('Validation selection differs from this workflow event/input')
     modes = (['current'] if scope['current'] else []) + (['migration'] if scope['full'] else [])
     identity = json.loads((root / 'release/delivery.json').read_text()) if scope['backend'] else None

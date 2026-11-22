@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler,Request,build_opener
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
+from scripts.cicd import transient
 from scripts.cicd.ci_scope import validate as validate_scope
 
 SCHEMA='traffic-ci-acceptance/v1'
@@ -102,7 +103,9 @@ def read_artifact(repository,run_id,name,fetch):
     if not isinstance(artifact.get('id'),int):raise ValueError('Invalid acceptance artifact')
     request=Request(f'https://api.github.com/repos/{repository}/actions/artifacts/{artifact["id"]}/zip',
                     headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
-    with build_opener(SafeRedirect()).open(request,timeout=60) as response:raw=response.read(4*1024*1024+1)
+    def download():
+        with build_opener(SafeRedirect()).open(request,timeout=60) as response:return response.read(4*1024*1024+1)
+    raw=transient.retry(download)
     if len(raw)>4*1024*1024:raise ValueError('Acceptance artifact exceeds its budget')
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         if archive.namelist()!=['ci-acceptance.json'] or archive.getinfo('ci-acceptance.json').file_size>4*1024*1024:

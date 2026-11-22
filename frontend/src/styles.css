@@ -2504,3 +2504,10 @@ td {
     grid-template-columns: 1fr;
   }
 }
+
+.train-again {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}

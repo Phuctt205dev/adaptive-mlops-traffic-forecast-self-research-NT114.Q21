@@ -1,3 +1,5 @@
+import { apiErrorMessage } from "./apiErrors.js";
+
 function defaultApiBaseUrl() {
   if (window.location.port === "30073") {
     return "http://localhost:30080/api/v1";
@@ -40,11 +42,19 @@ export function setStoredToken(token) {
 
 async function parseResponse(response) {
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
+  let payload = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      // A gateway error page is not JSON; fall back to the status below.
+      if (response.ok) {
+        throw new ApiError("The server returned an unreadable response.", response.status, null);
+      }
+    }
+  }
   if (!response.ok) {
-    const message =
-      payload?.error?.message || payload?.detail || `HTTP ${response.status}`;
-    throw new ApiError(message, response.status, payload);
+    throw new ApiError(apiErrorMessage(payload, response.status), response.status, payload);
   }
   return payload;
 }

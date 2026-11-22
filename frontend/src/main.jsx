@@ -10,6 +10,9 @@ import CleanupDialog from "./CleanupDialog.jsx";
 import { readPendingCleanup } from "./cleanupProgress.js";
 import { pages, rememberedPage, rememberPage } from "./pageNavigation.js";
 import { normalizeTrainingConfiguration } from "./trainingConfiguration.js";
+import {
+  belongsToRegion, createRequestGate, hourBucket, isScopeLoaded, itemsForRegion, scopedItems,
+} from "./regionScope.js";
 import "./styles.css";
 
 const trainingModelOptions = [
@@ -351,6 +354,28 @@ function AuthPage({ onLogin }) {
   );
 }
 
+// Changes when a new hour starts or when the tab becomes visible again, so the
+// dashboard asks for fresh forecasts instead of showing an hour-old snapshot.
+function useCurrentHour() {
+  const [hour, setHour] = useState(() => hourBucket());
+  useEffect(() => {
+    const update = () => setHour((current) => {
+      const next = hourBucket();
+      return next === current ? current : next;
+    });
+    const onVisible = () => { if (!document.hidden) update(); };
+    const timer = window.setInterval(update, 60000);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", update);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", update);
+    };
+  }, []);
+  return hour;
+}
+
 function Dashboard({ regions, selectedRegion, datasets, models, user }) {
   const activeModel = models.find((item) => item.id === selectedRegion?.active_model_version_id);
   const activeModelText = activeModel
@@ -368,16 +393,33 @@ function Dashboard({ regions, selectedRegion, datasets, models, user }) {
   const [highlightedHourIndex, setHighlightedHourIndex] = useState(null);
   const hourlyStripRef = useRef(null);
   const hourCardRefs = useRef([]);
+  const currentHour = useCurrentHour();
+  const forecastContext = `${selectedRegion?.id || ""}:${selectedRegion?.active_model_version_id || ""}`;
+  const loadedContext = useRef("");
+
+  // Leave the day-detail view only when the region or model changes, not on the hourly refresh.
+  useEffect(() => {
+    setSelectedDayIndex(0);
+    setDailyMode("list");
+  }, [forecastContext]);
 
   useEffect(() => {
     if (!selectedRegion?.id || !selectedRegion.active_model_version_id) {
+      loadedContext.current = "";
       setHourlyForecasts([]);
       setDailyForecasts([]);
-      return;
+      setForecastError("");
+      setLoadingForecasts(false);
+      return undefined;
     }
 
     let cancelled = false;
     async function loadForecasts() {
+      if (loadedContext.current !== forecastContext) {
+        // Do not keep showing another region's forecast while this one loads.
+        setHourlyForecasts([]);
+        setDailyForecasts([]);
+      }
       setLoadingForecasts(true);
       setForecastError("");
       try {
@@ -408,13 +450,13 @@ function Dashboard({ regions, selectedRegion, datasets, models, user }) {
         });
 
         if (!cancelled) {
+          loadedContext.current = forecastContext;
           setHourlyForecasts(hourlyResults);
           setDailyForecasts(dailyResults);
-          setSelectedDayIndex(0);
-          setDailyMode("list");
         }
       } catch (err) {
         if (!cancelled) {
+          loadedContext.current = "";
           setHourlyForecasts([]);
           setDailyForecasts([]);
           setForecastError(err.message);
@@ -428,7 +470,7 @@ function Dashboard({ regions, selectedRegion, datasets, models, user }) {
     return () => {
       cancelled = true;
     };
-  }, [selectedRegion?.id, selectedRegion?.active_model_version_id]);
+  }, [selectedRegion?.id, selectedRegion?.active_model_version_id, currentHour]);
 
   const selectedDay = dailyForecasts[selectedDayIndex];
   const strongestHour = hourlyForecasts.reduce((best, item) => (
@@ -798,7 +840,7 @@ function RegionManager({ regions, selectedRegion, refresh, userId }) {
   );
 }
 
-function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshModels, refreshRegions }) {
+function DatasetManager({ selectedRegion, datasets, datasetsLoading = false, refreshDatasets, refreshModels, refreshRegions }) {
   const [file, setFile] = useState(null);
   const [dragActive, setDragActive] = useState(false);
   const [message, setMessage] = useState("");
@@ -819,6 +861,11 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
     recurrent_batch_size: 32,
     final_test_ratio: 0.15,
   });
+
+  // A training window opened for one region must not stay open on another.
+  useEffect(() => {
+    setTrainingDataset(null);
+  }, [selectedRegion?.id]);
 
   useEffect(() => {
     const latestValidDataset = datasets.find((dataset) => dataset.status === "valid");
@@ -939,6 +986,9 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
   async function train(dataset, selectedModels = defaultTrainingModels, trainingConfigOverride = null) {
     setMessage("");
     try {
+      if (!belongsToRegion(dataset, selectedRegion?.id)) {
+        throw new Error("This dataset belongs to a different region. Select the region again and retry.");
+      }
       const trainingConfig = normalizeTrainingConfiguration({
         ...trainForm,
         ...(trainingConfigOverride || {}),
@@ -1036,6 +1086,7 @@ function DatasetManager({ selectedRegion, datasets, refreshDatasets, refreshMode
       <Card title="Datasets">
         <Table
           columns={["File", "Rows", "Date Range", "Status", "Action"]}
+          emptyText={datasetsLoading ? "Loading datasets…" : "No data yet."}
           rows={datasets.map((dataset) => [
             dataset.original_filename,
             dataset.row_count || "-",
@@ -1289,7 +1340,7 @@ function isDriftRetrainedModel(model) {
   return model.training_configuration?.trigger_source === "feature_drift";
 }
 
-function ModelManager({ selectedRegion, models, refreshModels, refreshRegions, userId }) {
+function ModelManager({ selectedRegion, models, modelsLoading = false, refreshModels, refreshRegions, userId }) {
   const [expandedModelId, setExpandedModelId] = useState("");
   const [deletingModelId, setDeletingModelId] = useState("");
   const [modelToDelete, setModelToDelete] = useState(() => readPendingCleanup(userId, "model"));
@@ -1297,8 +1348,9 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions, u
     setExpandedModelId("");
   }, [selectedRegion?.id]);
 
-  async function activate(id) {
-    await api.activateModel(id);
+  async function activate(model) {
+    if (!belongsToRegion(model, selectedRegion?.id)) return;
+    await api.activateModel(model.id);
     await Promise.all([refreshModels(), refreshRegions()]);
   }
 
@@ -1352,7 +1404,7 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions, u
                           >
                             {expanded ? "Hide" : "Details"}
                           </button>
-                          <button disabled={Boolean(deletingModelId) || model.id === selectedRegion?.active_model_version_id} onClick={() => activate(model.id)}>
+                          <button disabled={Boolean(deletingModelId) || model.id === selectedRegion?.active_model_version_id} onClick={() => activate(model)}>
                             Activate
                           </button>
                           <button className="danger" disabled={Boolean(deletingModelId)} onClick={() => setModelToDelete(model)}>
@@ -1402,7 +1454,7 @@ function ModelManager({ selectedRegion, models, refreshModels, refreshRegions, u
           </table>
         </div>
       ) : (
-        <p className="muted">No data yet.</p>
+        <p className="muted">{modelsLoading ? "Loading models…" : "No data yet."}</p>
       )}
     </Card>
     {modelToDelete && <CleanupDialog key={modelToDelete.id} kind="model" id={modelToDelete.id}
@@ -1421,35 +1473,48 @@ function PredictionPage({ selectedRegion }) {
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [loadingWindow, setLoadingWindow] = useState(false);
+  // The window and the result depend on the region *and* on its active model,
+  // so both are reloaded when either changes. Responses for an older context are dropped.
+  const contextKey = `${selectedRegion?.id || ""}:${selectedRegion?.active_model_version_id || ""}`;
+  const contextRef = useRef(contextKey);
+  contextRef.current = contextKey;
 
   useEffect(() => {
-    if (!selectedRegion?.id) return;
     setError("");
     setResult(null);
     setPredictionWindow(null);
     setForecastFor("");
+    if (!selectedRegion?.id) {
+      setLoadingWindow(false);
+      return undefined;
+    }
+    let cancelled = false;
     setLoadingWindow(true);
     api.predictionWindow(selectedRegion.id)
       .then((window) => {
+        if (cancelled) return;
         setPredictionWindow(window);
         const start = currentForecastStart(window);
         setForecastFor(start ? toDatetimeLocalFromDate(start) : isoToDatetimeLocalValue(window.production_start_at));
       })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoadingWindow(false));
-  }, [selectedRegion?.id]);
+      .catch((err) => { if (!cancelled) setError(err.message); })
+      .finally(() => { if (!cancelled) setLoadingWindow(false); });
+    return () => { cancelled = true; };
+  }, [selectedRegion?.id, selectedRegion?.active_model_version_id]);
 
   async function submit(event) {
     event.preventDefault();
+    const requestContext = contextRef.current;
     setError("");
     setResult(null);
     try {
       const payload = {
         forecast_for: localDatetimeToIsoWithOffset(forecastFor),
       };
-      setResult(await api.predict(selectedRegion.id, payload));
+      const prediction = await api.predict(selectedRegion.id, payload);
+      if (contextRef.current === requestContext) setResult(prediction);
     } catch (err) {
-      setError(err.message);
+      if (contextRef.current === requestContext) setError(err.message);
     }
   }
 
@@ -2030,8 +2095,8 @@ function UserManager() {
   );
 }
 
-function Table({ columns, rows }) {
-  if (!rows.length) return <p className="muted">No data yet.</p>;
+function Table({ columns, rows, emptyText = "No data yet." }) {
+  if (!rows.length) return <p className="muted">{emptyText}</p>;
   return (
     <div className="table-wrap">
       <table>
@@ -2356,8 +2421,10 @@ function App() {
   const [page, setPage] = useState("dashboard");
   const [regions, setRegions] = useState([]);
   const [selectedRegionId, setSelectedRegionId] = useState("");
-  const [datasets, setDatasets] = useState([]);
-  const [models, setModels] = useState([]);
+  // Rows are stored together with the region they were loaded for, so a slow
+  // response from the previous region can never appear under the new one.
+  const [datasetScope, setDatasetScope] = useState({ regionId: "", items: [] });
+  const [modelScope, setModelScope] = useState({ regionId: "", items: [] });
   const [error, setError] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
@@ -2366,6 +2433,18 @@ function App() {
     () => regions.find((region) => region.id === selectedRegionId) || regions[0],
     [regions, selectedRegionId],
   );
+  const datasets = scopedItems(datasetScope, selectedRegion?.id);
+  const models = scopedItems(modelScope, selectedRegion?.id);
+  const isAdmin = user?.role === "admin";
+  const datasetsLoading = isAdmin && Boolean(selectedRegion) && !isScopeLoaded(datasetScope, selectedRegion.id);
+  const modelsLoading = isAdmin && Boolean(selectedRegion) && !isScopeLoaded(modelScope, selectedRegion.id);
+  // Async callbacks may run after a re-render; the refs always hold the latest choice.
+  const selectedRegionIdRef = useRef("");
+  const userRef = useRef(null);
+  selectedRegionIdRef.current = selectedRegion?.id || "";
+  userRef.current = user;
+  const datasetGate = useRef(createRequestGate());
+  const modelGate = useRef(createRequestGate());
 
   async function loadMe() {
     const current = await api.me();
@@ -2380,8 +2459,10 @@ function App() {
     setRegions(items);
     if (!items.length) {
       setSelectedRegionId("");
-      setDatasets([]);
-      setModels([]);
+      datasetGate.current.invalidate();
+      modelGate.current.invalidate();
+      setDatasetScope({ regionId: "", items: [] });
+      setModelScope({ regionId: "", items: [] });
       return;
     }
     const savedRegionId = rememberedRegion(currentUser.id);
@@ -2402,22 +2483,32 @@ function App() {
     setPage(rememberPage(user, nextPage));
   }
 
+  // Always loads the region that is selected *now*, even when called from a
+  // handler created before the admin switched regions.
   async function refreshDatasets() {
-    if (!selectedRegion || user?.role !== "admin") {
-      setDatasets([]);
+    const regionId = selectedRegionIdRef.current;
+    const token = datasetGate.current.begin();
+    if (!regionId || userRef.current?.role !== "admin") {
+      setDatasetScope({ regionId, items: [] });
       return;
     }
-    const data = await api.datasets(selectedRegion.id);
-    setDatasets(data.items || []);
+    const data = await api.datasets(regionId);
+    if (datasetGate.current.isCurrent(token) && selectedRegionIdRef.current === regionId) {
+      setDatasetScope({ regionId, items: itemsForRegion(data.items, regionId) });
+    }
   }
 
   async function refreshModels() {
-    if (!selectedRegion || user?.role !== "admin") {
-      setModels([]);
+    const regionId = selectedRegionIdRef.current;
+    const token = modelGate.current.begin();
+    if (!regionId || userRef.current?.role !== "admin") {
+      setModelScope({ regionId, items: [] });
       return;
     }
-    const data = await api.modelVersions(selectedRegion.id);
-    setModels(data.items || []);
+    const data = await api.modelVersions(regionId);
+    if (modelGate.current.isCurrent(token) && selectedRegionIdRef.current === regionId) {
+      setModelScope({ regionId, items: itemsForRegion(data.items, regionId) });
+    }
   }
 
   async function bootstrap() {
@@ -2438,8 +2529,14 @@ function App() {
 
   useEffect(() => {
     if (user && selectedRegion) {
-      refreshDatasets().catch(() => setDatasets([]));
-      refreshModels().catch(() => setModels([]));
+      const regionId = selectedRegion.id;
+      // A failed load shows an empty list for this region only if it is still selected.
+      refreshDatasets().catch(() => {
+        if (selectedRegionIdRef.current === regionId) setDatasetScope({ regionId, items: [] });
+      });
+      refreshModels().catch(() => {
+        if (selectedRegionIdRef.current === regionId) setModelScope({ regionId, items: [] });
+      });
     }
   }, [user?.id, selectedRegion?.id]);
 
@@ -2457,7 +2554,15 @@ function App() {
         onToggle={() => setSidebarCollapsed((value) => !value)}
         onNavigate={navigate}
         onProfile={() => navigate("profile")}
-        onLogout={() => { setStoredToken(""); setUser(null); setPage("dashboard"); }}
+        onLogout={() => {
+          setStoredToken("");
+          datasetGate.current.invalidate();
+          modelGate.current.invalidate();
+          setDatasetScope({ regionId: "", items: [] });
+          setModelScope({ regionId: "", items: [] });
+          setUser(null);
+          setPage("dashboard");
+        }}
       />
       <main>
         <header className="topbar">
@@ -2492,13 +2597,14 @@ function App() {
               <DatasetManager
                 selectedRegion={selectedRegion}
                 datasets={datasets}
+                datasetsLoading={datasetsLoading}
                 refreshDatasets={refreshDatasets}
                 refreshModels={refreshModels}
                 refreshRegions={() => refreshRegions(user)}
               />
             </section>
             <section className="page-panel" hidden={page !== "models"}>
-              <ModelManager userId={user.id} selectedRegion={selectedRegion} models={models} refreshModels={refreshModels} refreshRegions={() => refreshRegions(user)} />
+              <ModelManager userId={user.id} selectedRegion={selectedRegion} models={models} modelsLoading={modelsLoading} refreshModels={refreshModels} refreshRegions={() => refreshRegions(user)} />
             </section>
             <section className="page-panel" hidden={page !== "quality"}>
               <ModelQualityPanel region={selectedRegion} enabled={page === "quality"} />

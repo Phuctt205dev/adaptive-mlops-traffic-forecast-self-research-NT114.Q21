@@ -51,6 +51,8 @@ cố định; thời gian build, CD, chờ duyệt và Kaggle được tách ri�
 | Rollout/Verify/flush lỗi trong transaction | Engine thu chứng cứ và rollback khi ownership/spec còn phù hợp; workflow vẫn failed dù phục hồi thành công. |
 | Runner mất kết nối hoặc rollback chưa xác minh | Giữ chốt/owner để kiểm phục hồi, không Apply chồng hoặc sửa state cho qua. |
 | Triển khai đã completed nhưng thử chức năng mới thấy sai | Phát hành phục hồi từ phiên bản tốt, kiểm tương thích dữ liệu; không replay journal rollback của release completed. |
+| Run màu xanh nhưng bản không lên (Summary ghi **Not deployed: a newer commit supersedes this release**) | Không phải lỗi. Có commit mới hơn trên master đổi đầu vào phát hành, nên chỉ run của commit đó phát hành và gồm cả thay đổi này. Nếu run mới hơn lỗi/bị hủy, mở run đó và chọn **Re-run all jobs** (không chọn *failed jobs only*). |
+| Job `inspect` đỏ, annotation **Release gate rejected this run** | Đọc lý do ngay trong annotation/Summary. Nếu ghi lỗi GitHub API tạm thời (đã tự thử lại 3 lần) thì **Re-run all jobs**. Nếu là quy tắc (Auto bị chặn, có release khác đang giữ quyền, CI chưa đạt) thì chạy lại không đổi kết quả; xử lý nguyên nhân được nêu. |
 
 Health xanh không chứng minh mọi chức năng đúng. Rollback ứng dụng không
 hoàn tác dataset, model đã Activate hoặc schema/data. Image/build/binding,

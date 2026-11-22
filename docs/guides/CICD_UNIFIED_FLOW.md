@@ -87,11 +87,18 @@ và suite được yêu cầu. Proof legacy vẫn đọc được để phục h
 sửa/bỏ hash của proof cũ. Rerun phải dùng **Re-run all jobs**: artifact mới
 ghi đè đúng tên trong cùng run, nhưng attempt cũ không được ghép với attempt mới.
 
-Scope `traffic-application-scope/v4` kế thừa lựa chọn full của v3 và gắn thêm
+Scope `traffic-application-scope/v5` kế thừa lựa chọn full của v3/v4 và gắn thêm
 inventory image đúng thời điểm kiểm: push luôn daily; manual chọn full hoặc
-lịch tuần mới tạo cụm. Reader v1/v2/v3
+lịch tuần mới tạo cụm. Reader v1/v2/v3/v4
 giữ chính sách cũ và không diễn giải lại proof đã phát hành thành coverage nhẹ
-hơn. Scope v3/v4 không được khai full cho push hoặc daily cho lịch kiểm định kỳ.
+hơn. Scope v3/v4/v5 không được khai full cho push hoặc daily cho lịch kiểm định kỳ.
+Khác biệt duy nhất của v5 so với v4: script kiểm giao diện theo quy ước
+`scripts/<thư mục>/check_<tên>_ui.py` (trình duyệt + API giả) là file chỉ để test,
+không còn bị coi là mã backend. Một thay đổi chỉ gồm frontend và loại script này
+chạy tests + build rồi publish Pages, không dựng image hay deploy backend. Quy ước
+này được bảo vệ bằng test: không file nào khớp mẫu được nằm trong closure của
+role image. Cùng quy tắc áp dụng khi quyết định một release bị "thay thế" bởi
+commit mới hơn; khi đó run ghi rõ commit mới và các file đầu vào đã khác.
 Matrix image được sinh từ `deployment/cicd/components.json`; execution image
 có digest riêng, được dùng lại nếu đầu vào/check profile không đổi. Xem
 [thành phần và Local Job](COMPONENT_DELIVERY.md). Bootstrap Local và enable

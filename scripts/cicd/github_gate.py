@@ -7,10 +7,11 @@ import re
 import base64
 import ssl
 import sys
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.cicd import transient
 from scripts.cicd.cd_state import BRANCH, FILE, ENVIRONMENTS, initial, validate as validate_state
 from scripts.cicd.ci_coverage import check_run
 
@@ -23,12 +24,64 @@ class Superseded(ValueError):
     """A release not yet claimed was replaced. This is not a CD failure."""
 
 
+def superseded_message(details):
+    """Say which newer commit replaced this release and which release inputs differ."""
+    latest = (details or {}).get('latest')
+    if not latest:
+        return 'A newer application/controller source superseded this release'
+    shown = details.get('changed', [])[:5]
+    extra = details.get('changed_total', len(shown)) - len(shown)
+    files = ', '.join(shown) + (' and %d more' % extra if extra > 0 else '')
+    return ('Newer master ' + latest[:7] + ' changes release inputs (' + files +
+            '); the run for that commit releases everything up to it.')
+
+
+def redact(text, limit=400):
+    """One short line with credentials removed; safe for annotations and the job summary."""
+    text = str(text)
+    token = os.environ.get('GH_TOKEN')
+    if token and len(token) >= 8:
+        text = text.replace(token, '***')
+    text = re.sub(r'(?i)\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|bearer\s+\S+)', '***', text)
+    return ' '.join(text.split())[:limit]
+
+
+def write_summary(text):
+    path = os.environ.get('GITHUB_STEP_SUMMARY')
+    if path:
+        with Path(path).open('a', encoding='utf-8') as stream:
+            stream.write(text)
+
+
+def annotation(level, title, message):
+    escaped = message.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+    return '::' + level + ' title=' + title + '::' + escaped
+
+
+def announce_superseded(message):
+    write_summary('## Not deployed: a newer commit supersedes this release\n\n' + message + '\n\n'
+                  '- Nothing is wrong with this commit; the run for the newer commit releases everything up to it.\n'
+                  '- If that newer run fails or is cancelled, open it and choose **Re-run all jobs** '
+                  '(not "failed jobs only"): the release proof belongs to the attempt.\n')
+
+
+def announce_failure(error):
+    message = redact(error) or type(error).__name__
+    temporary = isinstance(error, RuntimeError) and 'GitHub API check failed' in str(error)
+    print(annotation('error', 'Release gate rejected this run', message))
+    advice = ('This looks like a temporary GitHub API problem (the read was already retried 3 times). '
+              'Open this run and choose **Re-run all jobs**, not "failed jobs only": the release proof belongs to the attempt.'
+              if temporary else
+              'This is a rule decision, not a network error. Re-running will not change it; fix the cause named above.')
+    write_summary('## Release gate rejected this run\n\n' + message + '\n\n' + advice + '\n')
+
+
 def get(path):
     token = os.environ["GH_TOKEN"]
     request = Request("https://api.github.com/" + path, headers={"Authorization": "Bearer " + token,
                       "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
                       'Cache-Control': 'no-cache'})
-    try:
+    def once():
         context = ssl.create_default_context()
         if os.name == 'nt' and os.environ.get('NODE_EXTRA_CA_CERTS'):
             context.load_verify_locations(cafile=os.environ['NODE_EXTRA_CA_CERTS'])
@@ -37,10 +90,16 @@ def get(path):
             if len(raw) > 2 * 1024 * 1024:
                 raise ValueError('GitHub response exceeds its budget.')
             return json.loads(raw)
+    try:
+        # Reads are idempotent: ride out a network blip or a 5xx/429 instead of failing the release.
+        return transient.retry(once)
     except HTTPError as error:
         if error.code == 404:
             raise MissingResource('GitHub resource is missing.') from None
         raise RuntimeError("GitHub API check failed (HTTP " + str(error.code) + "); token/body omitted.") from None
+    except (URLError, OSError) as error:
+        raise RuntimeError('GitHub API check failed (network error ' + type(error).__name__ +
+                           ' after 3 attempts); token/body omitted.') from None
 
 
 def validate(repository, run_id, *, fetch=get, operation='release', coverage=check_run,
@@ -114,8 +173,9 @@ def validate(repository, run_id, *, fetch=get, operation='release', coverage=che
     application = isinstance(proof, dict) and proof.get('schema') == 'traffic-application-acceptance/v1'
     if current_run or application:
         from scripts.cicd.pipeline import current_source
-        if not current_source(repository, run['head_sha'], fetch):
-            raise Superseded('A newer application/controller source superseded this release')
+        details = {}
+        if not current_source(repository, run['head_sha'], fetch, details):
+            raise Superseded(superseded_message(details))
     return {"sha": run["head_sha"], "run_id": str(run_id), "artifact": "backend-release-" + run["head_sha"],
             'mode': mode, 'epoch': str(state['epoch']), 'environment': environment_name, 'ci_number': str(run['run_number']),
             'ci_attempt': str(run['run_attempt']), 'operation':operation,
@@ -144,8 +204,9 @@ def recheck_source(repository, choice, *, fetch=get, current_run=False):
         raise ValueError('The selected CI is no longer the same successful completed attempt.')
     if current_run or choice.get('application') == 'true':
         from scripts.cicd.pipeline import current_source
-        if not current_source(repository, choice['sha'], fetch):
-            raise Superseded('A newer application/controller source superseded this release')
+        details = {}
+        if not current_source(repository, choice['sha'], fetch, details):
+            raise Superseded(superseded_message(details))
 
 
 def main():
@@ -176,8 +237,11 @@ def main():
                 recheck_source(os.environ['GITHUB_REPOSITORY'], choice, current_run=True)
             else:
                 recheck_source(os.environ['GITHUB_REPOSITORY'], choice)
-        except Superseded:
-            print(json.dumps({'eligible':False,'reason':'Superseded before claim'}))
+        except Superseded as skipped:
+            # stdout is parsed as JSON by the deploy step, so report through the job summary only.
+            message = redact(skipped)
+            announce_superseded(message)
+            print(json.dumps({'eligible':False,'reason':'Superseded before claim: ' + message}))
             return
         print(json.dumps({'ci_rechecked': True, 'eligible':True, **choice}))
         return
@@ -186,8 +250,14 @@ def main():
         result = validate(os.environ["GITHUB_REPOSITORY"], args.run_id, operation=os.environ.get('DELIVERY_OPERATION','release'),
                           expected_commit=commit, expected_attempt=attempt, **options)
         recheck_source(os.environ['GITHUB_REPOSITORY'], result, **options)
-    except Superseded:
-        result={'eligible':'false','reason':'Superseded before deployment'}
+    except Superseded as skipped:
+        message = redact(skipped)
+        print(annotation('notice', 'Not deployed, superseded by a newer commit', message))
+        announce_superseded(message)
+        result={'eligible':'false','reason':'Superseded before deployment: ' + message}
+    except Exception as error:
+        announce_failure(error)
+        raise
     with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as stream:
         for key, value in result.items():
             stream.write(key + "=" + value + "\n")

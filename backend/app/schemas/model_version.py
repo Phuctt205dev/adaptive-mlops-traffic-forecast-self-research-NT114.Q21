@@ -60,14 +60,20 @@ class ModelActivationResponse(BaseModel):
     active_model_version: ModelVersionRead
 
 
+SYSTEM_ARTIFACT_ROOT = "models/regions"
+SYSTEM_MODEL_ROLE = "candidate"
+
+
 class TrainingRunCreate(BaseModel):
     training_backend: Literal["kaggle", "local"] = "kaggle"
     retry_of: uuid.UUID | None = None
     request_id: uuid.UUID | None = None
     train_start_date: str
     train_end_date: str
-    artifact_root: str = "models/regions"
-    model_role: str = "candidate"
+    # System managed: the caller cannot choose where results are written or
+    # which role a model gets. Any supplied value is replaced by the system value.
+    artifact_root: str = SYSTEM_ARTIFACT_ROOT
+    model_role: str = SYSTEM_MODEL_ROLE
     cv_splits: int = Field(default=3, ge=2)
     random_state: int = Field(default=42, ge=0, le=4294967295)
     selected_models: list[str] = Field(
@@ -87,6 +93,16 @@ class TrainingRunCreate(BaseModel):
     shap: dict = Field(default_factory=dict)
     drift_current_end: str | None = None
     retrain_source_model_id: uuid.UUID | None = None
+
+    @field_validator("artifact_root", mode="before")
+    @classmethod
+    def pin_artifact_root(cls, _value):
+        return SYSTEM_ARTIFACT_ROOT
+
+    @field_validator("model_role", mode="before")
+    @classmethod
+    def pin_model_role(cls, _value):
+        return SYSTEM_MODEL_ROLE
 
     @field_validator("train_start_date", "train_end_date")
     @classmethod

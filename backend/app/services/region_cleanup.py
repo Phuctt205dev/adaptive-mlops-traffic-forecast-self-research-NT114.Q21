@@ -25,6 +25,9 @@ MODEL_PENDING = 'model_cleanup_pending'
 MODEL_COMPLETED = 'model_cleanup_completed'
 PENDING_ACTIONS = (PENDING, MODEL_PENDING)
 COMPLETED_ACTIONS = (COMPLETED, MODEL_COMPLETED)
+# Same value as drift_settings.ACTION (a test keeps them equal); not imported here
+# because this module also runs where the HTTP stack is not loaded.
+DRIFT_SETTINGS_ACTION = 'region_drift_settings_updated'
 LOCK_KEY = 73918046215
 INTENT_KEY = LOCK_KEY + 2
 STEPS = ('local_files', 'mlflow', 'airflow', 'objects')
@@ -213,6 +216,10 @@ def _remove_records(db, region, journal):
     db.execute(delete(ModelVersion).where(ModelVersion.region_id == rid))
     db.execute(delete(TrainingRun).where(TrainingRun.region_id == rid))
     db.execute(delete(Dataset).where(Dataset.region_id == rid))
+    # The auto-retrain preference belongs to the region. The cleanup journal itself
+    # is kept: it is what makes a lost "delete" reply safe to retry.
+    db.execute(delete(AuditLog).where(
+        AuditLog.entity_type == 'region', AuditLog.entity_id == rid, AuditLog.action == DRIFT_SETTINGS_ACTION))
     db.delete(region)
     journal.action = COMPLETED
     progress(db, journal, 'completed', state='completed')

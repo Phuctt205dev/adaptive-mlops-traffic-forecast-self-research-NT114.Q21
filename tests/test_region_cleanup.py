@@ -18,7 +18,7 @@ from backend.app.db.models import (
     ModelVersion, ModelVersionStatus, Prediction, Region, TrainingRun,
     TrainingRunStatus, User, UserRole,
 )
-from backend.app.services import region_cleanup as cleanup
+from backend.app.services import drift_settings, region_cleanup as cleanup
 from backend.app.services.region_cleanup_resources import CleanupResources, owns_key
 from backend.app.services.region_cleanup_runtime import CleanupBarrierMiddleware, install, purge_local, validated_directory
 
@@ -105,6 +105,30 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual(backend.calls, [*cleanup.STEPS, 'verify'])
         cleanup.delete_region(self.db, rid, backend=backend)
         self.assertEqual(backend.preflights, 1)
+
+    def test_deleting_a_region_removes_only_its_auto_retrain_setting(self):
+        self.assertEqual(cleanup.DRIFT_SETTINGS_ACTION, drift_settings.ACTION)
+        for region in (self.region, self.other):
+            drift_settings.update_settings(self.db, region.id, True, self.user.id)
+
+        def settings_rows(region_id):
+            return list(self.db.scalars(select(AuditLog).where(
+                AuditLog.entity_id == region_id, AuditLog.action == drift_settings.ACTION)))
+
+        backend = FakeResources('objects')
+        with self.assertRaises(ApplicationError):
+            cleanup.delete_region(self.db, self.region.id, backend=backend)
+        # An unfinished cleanup keeps everything so Retry sees the same region.
+        self.assertEqual(len(settings_rows(self.region.id)), 1)
+        backend.failure = None
+        cleanup.delete_region(self.db, self.region.id, backend=backend)
+        self.assertEqual(settings_rows(self.region.id), [])
+        self.assertEqual(len(settings_rows(self.other.id)), 1)
+        self.assertTrue(drift_settings.auto_retrain_enabled(self.db, self.other.id))
+        completed = self.db.scalar(select(AuditLog).where(
+            AuditLog.entity_id == self.region.id, AuditLog.action == cleanup.COMPLETED))
+        self.assertIsNotNone(completed)
+        cleanup.delete_region(self.db, self.region.id, backend=backend)  # lost reply stays idempotent
 
     def test_failure_keeps_inventory_and_retry_skips_completed_external_steps(self):
         backend = FakeResources('objects')

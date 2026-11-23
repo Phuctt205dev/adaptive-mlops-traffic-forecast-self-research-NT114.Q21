@@ -159,6 +159,7 @@ class ModelCleanupTests(unittest.TestCase):
         self.assertEqual(result.exception.code, 'region_cleanup_pending')
 
     def test_preflight_targets_one_tracking_run_and_never_the_region_experiment(self):
+        self.other_run = self.db.scalar(select(TrainingRun).where(TrainingRun.region_id == self.other.id))
         plan = cleanup.inventory(self.db, self.model)
         resource = object.__new__(cleanup.ModelCleanupResources)
         resource.runtime_bucket, resource.mlflow_bucket = 'runtime', 'tracking'
@@ -173,6 +174,9 @@ class ModelCleanupTests(unittest.TestCase):
             resource.clean('mlflow', result, 'test-journal')
         self.assertIn({'bucket':'tracking', 'prefix':f'7/{rid}/'}, result['objects'])
         self.assertNotIn({'bucket':'tracking', 'prefix':'7/'}, result['objects'])
+        # An interrupted Local training attempt may leave its staging copy behind: it is part of this run's cleanup.
+        self.assertIn({'bucket':'runtime', 'prefix':f'local-training/v1/{self.run.id}/'}, result['objects'])
+        self.assertFalse(any(str(self.other_run.id) in item['prefix'] for item in result['objects']))
         self.assertFalse(any('region_uploads' in item['prefix'] or item['prefix'].startswith('regions/') for item in result['objects']))
         client.delete_run.assert_called_once_with(rid)
         client.delete_experiment.assert_not_called()

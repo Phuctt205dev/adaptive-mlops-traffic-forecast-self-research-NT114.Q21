@@ -46,6 +46,9 @@ dẫn file hoặc prefix S3. File không xác định được chủ sở hữu 
   để xử lý trường hợp dịch vụ lưu trữ trả thiếu kết quả khi lọc trên server.
 - Cây/thư mục model legacy, recurrent, distributed-serving, distributed-training,
   dữ liệu trung gian, SHAP, file upload cache và training-exchange đúng UUID.
+- Thư mục tạm của Local training `local-training/v1/<run>/` của từng lượt train thuộc vùng
+  (và của lượt train của model bị xóa riêng). Bình thường Local training tự dọn nó sau mỗi
+  attempt; đưa vào kế hoạch xóa để phần dư của attempt bị gián đoạn không bị bỏ sót.
 - Airflow: DAG run training thuộc vùng, kể cả run tìm thêm qua conf, và
   thư mục log dag_id=.../run_id=... tương ứng. Không xóa DAG hoặc lịch sử
   drift chạy chung nhiều vùng. Worker recurrent được mount PVC log đang ở
@@ -127,3 +130,45 @@ nên không thể chọn thư mục ghi kết quả hoặc vai trò model. Train
 dùng thư mục output riêng và vai trò `candidate`, hai ô này không điều khiển
 huấn luyện. Cấu hình đã lưu từ trước vẫn đọc được. Kiểm tra:
 `tests/test_training_configuration.py` (`SystemManagedFieldTests`).
+
+## Kiểm kê dữ liệu của lượt train không còn model (chỉ đọc)
+
+Xóa một model bằng bản cũ chỉ gỡ bản ghi, không xóa file; những file đó còn lại trong kho
+và không có thao tác nào trên giao diện dọn được (không có chức năng xóa riêng lượt train).
+`scripts/maintenance/unreferenced_run_data.py` **chỉ liệt kê**, không xóa hay ghi gì:
+
+- Với mỗi lượt train có file trong kho: dung lượng theo từng vị trí (serving, exchange,
+  training, local-training, thư mục legacy, MLflow), và kết luận **REMOVABLE** hoặc **KEEP**
+  kèm lý do (còn model dùng, lượt đang chạy, execution chưa xong, đang có thao tác xóa dở,
+  một model đang dùng nhắc tới file của lượt này).
+- Tách riêng các MLflow run không có tag lượt train: không chứng minh được chủ sở hữu nên
+  không bao giờ là ứng viên. Cũng liệt kê thư mục của lượt train không có trong DB nếu có.
+- Không bao giờ là ứng viên: model của mọi vùng và file chúng phục vụ, SHAP dùng chung,
+  dataset/quality report, thư mục model legacy theo vùng.
+
+Chạy trong pod API: `kubectl exec -i <api-pod> -c api -- sh -c 'cd /app && PYTHONPATH=/app python -B -' < scripts/maintenance/unreferenced_run_data.py`
+(thêm `--json` để in bản JSON). Việc xóa thật là bước riêng, ở mục dưới.
+Kiểm tra: `tests/test_unreferenced_run_data.py` (kho và MLflow giả chỉ có thao tác liệt kê,
+nên test chứng minh công cụ không thể ghi).
+
+## Xóa file của lượt train không còn model
+
+`scripts/maintenance/purge_unreferenced_run_data.py` xóa file của **đúng các lượt train được chỉ
+định** (mỗi lượt phải ghi đủ UUID, lấy từ báo cáo ở trên; không có chế độ tự chọn). Mặc định là
+chạy thử: thực hiện mọi bước kiểm tra, in sẽ xóa những gì, không đổi gì. `--execute` mới xóa thật,
+từng lượt một:
+
+- Dùng lại cơ chế của xóa model: journal có thể tiếp tục khi gián đoạn, khóa DB chung, kiểm
+  sức khỏe đủ hai API và hai worker, cache của bốn pod bị xóa, file đã xóa không thể bị pod
+  còn bản local đẩy ngược lên kho (tombstone), MLflow run bị đánh dấu xóa rồi file bị xóa khỏi
+  MinIO, bước Verify đọc lại kho.
+- Từ chối (HTTP 409 `run_cleanup_conflict`, không đổi gì) khi lượt train còn model dùng, còn model
+  đang dùng nhắc tới file của nó, đang chạy hoặc execution chưa xong, hoặc có một thao tác xóa
+  khác đang dở. Một MLflow run không chứng minh được thuộc lượt train, thuộc vùng khác, đang chạy
+  hoặc đang được model dùng cũng làm cả lượt bị từ chối.
+- Bản ghi lượt train và lịch sử của nó được giữ; chỉ file bị xóa. Gọi lại sau khi xong là không
+  làm gì thêm.
+
+Chạy trong pod API (sau khi bản có công cụ đã được triển khai):
+`kubectl exec -i <api-pod> -c api -- sh -c 'cd /app && PYTHONPATH=/app python -B - --run <uuid> [--execute]' < scripts/maintenance/purge_unreferenced_run_data.py`.
+Kiểm tra: `tests/test_run_data_cleanup.py`.

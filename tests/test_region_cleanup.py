@@ -310,6 +310,47 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual([item['VersionId'] for item in entries], ['v1','v2','marker'])
         resource.client.get_paginator.assert_called_once_with('list_object_versions')
 
+    def test_local_training_staging_is_part_of_region_cleanup_and_only_for_its_own_runs(self):
+        own, foreign = self.run.id, self.other_run_id()
+        staged = {f'local-training/v1/{own}/tree/attempt/input/data.csv', f'local-training/v1/{own}/tree/attempt/snapshot.json'}
+        keep = {f'local-training/v1/{foreign}/tree/attempt/input/data.csv', 'training-exchange/v1/regions/keep/file'}
+        from collections import defaultdict
+        store = defaultdict(set, {'runtime': staged | keep})
+        deleted = []
+
+        class Pages:
+            def __init__(self, bucket): self.bucket = bucket
+            def paginate(self, Bucket, Prefix=''):
+                return [{'Contents': [{'Key': key} for key in sorted(store[Bucket]) if key.startswith(Prefix)]}]
+
+        client = Mock()
+        client.get_bucket_versioning.return_value = {}
+        client.get_paginator.side_effect = lambda operation: Pages(None) if operation == 'list_objects_v2' else Mock(
+            paginate=Mock(return_value=[{}]))
+        def delete_objects(Bucket, Delete):
+            for item in Delete['Objects']:
+                store[Bucket].discard(item['Key']); deleted.append(item['Key'])
+            return {}
+        client.delete_objects.side_effect = delete_objects
+        resource = object.__new__(CleanupResources)
+        resource.client, resource.runtime_bucket, resource.mlflow_bucket = client, 'runtime', 'tracking'
+        resource.settings = SimpleNamespace(dataset_bucket='traffic-datasets', training_dag_id='train')
+        resource.check_idle, resource.list_airflow = Mock(), Mock(return_value=[])
+        resource.airflow, resource._mlflow = Mock(return_value=None), Mock(return_value=[])
+        plan = resource.preflight(self.db, cleanup._inventory(self.db, self.region))
+        targets = [item for item in plan['objects'] if item['bucket'] == 'runtime']
+        self.assertIn({'bucket': 'runtime', 'prefix': f'local-training/v1/{own}/'}, targets)
+        self.assertFalse(any(str(foreign) in item['prefix'] for item in targets))
+        resource.clean('objects', plan, 'journal')
+        self.assertEqual(set(deleted), staged)
+        self.assertEqual(store['runtime'], keep)
+        resource.peer_ids = []
+        resource.peers = Mock(return_value=[])
+        resource.verify(plan, 'journal')
+
+    def other_run_id(self):
+        return self.db.scalar(select(TrainingRun.id).where(TrainingRun.region_id == self.other.id))
+
     def test_peer_replacement_stops_final_database_removal(self):
         resource = self.resource()
         resource.peer_ids = ['before']

@@ -147,6 +147,28 @@ và không có thao tác nào trên giao diện dọn được (không có chứ
   dataset/quality report, thư mục model legacy theo vùng.
 
 Chạy trong pod API: `kubectl exec -i <api-pod> -c api -- sh -c 'cd /app && PYTHONPATH=/app python -B -' < scripts/maintenance/unreferenced_run_data.py`
-(thêm `--json` để in bản JSON). Việc xóa thật là bước riêng, cần người dùng duyệt danh sách.
+(thêm `--json` để in bản JSON). Việc xóa thật là bước riêng, ở mục dưới.
 Kiểm tra: `tests/test_unreferenced_run_data.py` (kho và MLflow giả chỉ có thao tác liệt kê,
 nên test chứng minh công cụ không thể ghi).
+
+## Xóa file của lượt train không còn model
+
+`scripts/maintenance/purge_unreferenced_run_data.py` xóa file của **đúng các lượt train được chỉ
+định** (mỗi lượt phải ghi đủ UUID, lấy từ báo cáo ở trên; không có chế độ tự chọn). Mặc định là
+chạy thử: thực hiện mọi bước kiểm tra, in sẽ xóa những gì, không đổi gì. `--execute` mới xóa thật,
+từng lượt một:
+
+- Dùng lại cơ chế của xóa model: journal có thể tiếp tục khi gián đoạn, khóa DB chung, kiểm
+  sức khỏe đủ hai API và hai worker, cache của bốn pod bị xóa, file đã xóa không thể bị pod
+  còn bản local đẩy ngược lên kho (tombstone), MLflow run bị đánh dấu xóa rồi file bị xóa khỏi
+  MinIO, bước Verify đọc lại kho.
+- Từ chối (HTTP 409 `run_cleanup_conflict`, không đổi gì) khi lượt train còn model dùng, còn model
+  đang dùng nhắc tới file của nó, đang chạy hoặc execution chưa xong, hoặc có một thao tác xóa
+  khác đang dở. Một MLflow run không chứng minh được thuộc lượt train, thuộc vùng khác, đang chạy
+  hoặc đang được model dùng cũng làm cả lượt bị từ chối.
+- Bản ghi lượt train và lịch sử của nó được giữ; chỉ file bị xóa. Gọi lại sau khi xong là không
+  làm gì thêm.
+
+Chạy trong pod API (sau khi bản có công cụ đã được triển khai):
+`kubectl exec -i <api-pod> -c api -- sh -c 'cd /app && PYTHONPATH=/app python -B - --run <uuid> [--execute]' < scripts/maintenance/purge_unreferenced_run_data.py`.
+Kiểm tra: `tests/test_run_data_cleanup.py`.

@@ -13,8 +13,8 @@ import os
 import re
 import sys
 
-TERMINAL_RUN = {"completed", "failed", "cancelled"}
-TERMINAL_EXECUTION = {"completed", "failed", "cancelled"}
+from backend.app.services.run_data_cleanup import removal_blockers, run_locations
+
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 MIB = 1024 * 1024
 MAX_OBJECTS_PER_PREFIX = 20000
@@ -44,18 +44,6 @@ def child_directories(client, bucket, prefix):
     return names
 
 
-def run_locations(region_id, run_id):
-    """Every directory a training run is known to write to (all inside the runtime bucket)."""
-    return {
-        "serving": f"models/distributed-serving/v1/{region_id}/{run_id}/",
-        "exchange": f"training-exchange/v1/regions/{region_id}/runs/{run_id}/",
-        "training": f"models/distributed-training/v1/{run_id}/",
-        "local_staging": f"local-training/v1/{run_id}/",
-        "legacy_run": f"models/regions/{region_id}/training_runs/{run_id}/",
-        "legacy_tree_run": f"models/regions/regions/{region_id}/training_runs/{run_id}/",
-    }
-
-
 def mlflow_runs_by_training_run(mlflow_client):
     """MLflow runs grouped by the training run they say they belong to (search only)."""
     grouped, untagged, truncated = {}, [], False
@@ -76,21 +64,8 @@ def mlflow_runs_by_training_run(mlflow_client):
 def build_report(db, client, mlflow_client, *, runtime_bucket, mlflow_bucket):
     from sqlalchemy import select
 
-    from backend.app.db.models import AuditLog, ModelVersion, Region, TrainingRun
-    from backend.app.db.training_execution import TrainingExecution
+    from backend.app.db.models import Region, TrainingRun
 
-    models = list(db.scalars(select(ModelVersion)))
-    model_runs = {str(model.training_run_id) for model in models}
-    # Everything a live model says about where its files are, including the training
-    # configuration of its own run. A run id found here is still in use by that model.
-    configurations = {str(run.id): run.configuration_json for run in db.scalars(select(TrainingRun))}
-    references = [json.dumps([model.artifact_uri, model.mlflow_model_uri,
-                              configurations.get(str(model.training_run_id))], default=str).lower()
-                  for model in models]
-    live_models = {str(model.id) for model in models}
-    executions = {str(row.training_run_id): row.state for row in db.scalars(select(TrainingExecution))}
-    pending = {str(row.entity_id) for row in db.scalars(select(AuditLog).where(
-        AuditLog.action.in_(("region_cleanup_pending", "model_cleanup_pending"))))}
     regions = {str(region.id): region for region in db.scalars(select(Region))}
     runs = list(db.scalars(select(TrainingRun).order_by(TrainingRun.created_at)))
     tracked, untagged, truncated = mlflow_runs_by_training_run(mlflow_client)
@@ -111,22 +86,7 @@ def build_report(db, client, mlflow_client, *, runtime_bucket, mlflow_bucket):
                 areas.setdefault("mlflow", []).append({**item, "objects": objects, "bytes": size})
         if not areas:
             continue
-        blockers = []
-        if run_id in model_runs:
-            blockers.append("a registered model still uses this run")
-        recommended = str(run.recommended_model_version_id) if run.recommended_model_version_id else None
-        if recommended and recommended in live_models:
-            blockers.append("the run's recommended model still exists")
-        if run_id not in model_runs and any(run_id in text for text in references):
-            blockers.append("a live model's files or configuration point at this run")
-        if status not in TERMINAL_RUN:
-            blockers.append(f"the run is still {status}")
-        if executions.get(run_id, "completed") not in TERMINAL_EXECUTION:
-            blockers.append("the execution is not finished")
-        if region_id in pending or run_id in pending:
-            blockers.append("a deletion for this region or run is unfinished")
-        if region_id not in regions:
-            blockers.append("the region record is missing")
+        blockers = removal_blockers(db, run)
         total = sum(a["bytes"] for key, a in areas.items() if key != "mlflow")
         total += sum(m["bytes"] for m in areas.get("mlflow", []))
         report_runs.append({

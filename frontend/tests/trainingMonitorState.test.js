@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { modelStatus, progressLabel, freshness } from "../src/trainingMonitorState.js";
+import { modelStatus, progressLabel, freshness, kaggleQueueMinutes, stopWaitNotice } from "../src/trainingMonitorState.js";
 
 test("Local queue does not make an already finished tree model wait for CPU again", () => {
   const run = { backend: "local", state: "running", branches: { tree: { observation: { phase: "waiting_resources" } } } };
@@ -58,4 +58,25 @@ test("fresh heartbeat does not make stale ML progress look fresh", () => {
   assert.equal(freshness({}), "No ML progress received yet");
   assert.match(freshness({ last_ml_received_at: "2026-11-09T00:00:00Z", ml_age_seconds: 35 }, 60), /95s ago/);
   assert.equal(freshness({ stage: "model_cv_completed" }), "ML update time unavailable");
+});
+
+test("a notebook queued on Kaggle shows how long it has waited", () => {
+  const observation = { provider_state: "QUEUED", provider_observed_at: "2026-11-23T06:56:33+00:00" };
+  const run = { observed_at: "2026-11-23T07:21:40+00:00", branches: { lstm: { observation } } };
+  assert.equal(kaggleQueueMinutes(run, run.branches.lstm), 25);
+  assert.equal(modelStatus(run, { id: "lstm", stage: "queued" }), "Queued on Kaggle · 25 min");
+  assert.equal(kaggleQueueMinutes(run, { observation: { ...observation, provider_state: "RUNNING" } }), null);
+  assert.equal(kaggleQueueMinutes({ observed_at: "not a date" }, { observation }), null);
+});
+
+test("stop of a notebook still queued on Kaggle explains how to finish it", () => {
+  const attempt = "0a1b2c3d-1111-2222-3333-444455556666";
+  const run = { backend: "kaggle", state: "cancelling", cancel_requested: true, branches: {
+    tree: { attempt_id: "x", stop_confirmed: true, observation: { provider_state: "CANCEL_ACKNOWLEDGED" } },
+    lstm: { attempt_id: attempt, stop_confirmed: false, observation: { provider_state: "QUEUED", stop_waiting_since: "2026-11-23T07:14:48+00:00" } } } };
+  assert.deepEqual(stopWaitNotice(run), { branch: "lstm", notebook: "traffic-train-0a1b2c3d111122223333444455556666" });
+  assert.equal(stopWaitNotice({ ...run, state: "running" }), null);
+  assert.equal(stopWaitNotice({ ...run, backend: "local" }), null);
+  const running = { ...run, branches: { lstm: { ...run.branches.lstm, observation: { provider_state: "RUNNING", stop_waiting_since: "x" } } } };
+  assert.equal(stopWaitNotice(running), null);
 });

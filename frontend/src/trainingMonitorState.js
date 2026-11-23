@@ -40,6 +40,29 @@ export function progressLabel(model) {
   return parts.filter(Boolean).join(" · ");
 }
 
+// Minutes a branch has waited in Kaggle's queue, from confirmed observation times only.
+export function kaggleQueueMinutes(run, branch) {
+  const observation = branch?.observation;
+  if (observation?.provider_state !== "QUEUED") return null;
+  const since = Date.parse(observation.provider_observed_at);
+  const now = Date.parse(run?.observed_at);
+  if (!Number.isFinite(since) || !Number.isFinite(now) || now < since) return null;
+  return Math.floor((now - since) / 60000);
+}
+
+// A notebook that is still queued cannot read the stop signal until Kaggle starts it.
+// Kaggle offers no way for the system to cancel a queued session, so the person does.
+export function stopWaitNotice(run) {
+  if (run?.backend !== "kaggle" || run.state !== "cancelling") return null;
+  for (const [branch, item] of Object.entries(run.branches || {})) {
+    if (item.stop_confirmed || !item.attempt_id) continue;
+    if (item.observation?.provider_state === "QUEUED" && item.observation.stop_waiting_since) {
+      return { branch, notebook: "traffic-train-" + String(item.attempt_id).replace(/-/g, "") };
+    }
+  }
+  return null;
+}
+
 export function modelStatus(run, model) {
   const branch = run.branches?.[branchFor(model)] || {};
   if (model.failure_origin) return "This group failed · " + (branch.stop_confirmed ? "Stop confirmed" : "Checking stop");
@@ -51,7 +74,10 @@ export function modelStatus(run, model) {
   if (["reconnecting", "needs_attention", "waiting_resources"].includes(phase) && !model.ml_completed && !["failed", "cancelled", "cancelling"].includes(run.state)) return providerPhases[phase];
   if (model.ml_completed && providerPhases[phase]) return providerPhases[phase];
   if (!model.last_ml_received_at && ["queued", "waiting_cloud", "preparing"].includes(model.stage)) {
-    if (branch.observation?.provider_state === "QUEUED") return "Queued on Kaggle";
+    if (branch.observation?.provider_state === "QUEUED") {
+      const minutes = kaggleQueueMinutes(run, branch);
+      return minutes ? `Queued on Kaggle · ${minutes} min` : "Queued on Kaggle";
+    }
     return providerPhases[phase] || (branch.attempt_id ? "Waiting for model progress" : "Waiting to be scheduled");
   }
   return progressLabel(model);

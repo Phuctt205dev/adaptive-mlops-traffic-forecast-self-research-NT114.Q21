@@ -22,6 +22,20 @@ class KaggleRPCTests(unittest.TestCase):
         self.assertFalse(result["diagnostic"]["retryable"])
         self.assertNotIn("private", json.dumps(result))
 
+    def test_push_reports_only_the_names_of_the_provider_link_parameters(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "kernel-metadata.json").write_text(json.dumps({"id": "owner/slug"}))
+            response = SimpleNamespace(error="", version_number=3, invalid_dataset_sources=[],
+                                       url="https://www.kaggle.com/code/owner/slug?scriptVersionId=4455&secret=abc")
+            api = SimpleNamespace(kernels_push=lambda *args, **kwargs: response)
+            result = operation(api, "kernel_push", {"directory": directory, "no_run": False}, None)
+        self.assertEqual(result["url_query_keys"], ["scriptVersionId", "secret"])
+        self.assertNotIn("4455", json.dumps(result))
+        self.assertNotIn("abc", json.dumps(result))
+        self.assertNotIn("session_id", result)
+
     def test_unknown_provider_text_does_not_become_a_retry_instruction(self):
         response = SimpleNamespace(error="SECRET=value; arbitrary failure", version_number=None)
         api = SimpleNamespace(kernels_push=lambda *args, **kwargs: response)

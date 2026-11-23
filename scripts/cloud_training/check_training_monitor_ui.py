@@ -75,6 +75,12 @@ def main():
                 run["models"][4].update(blocked_by_branch="lstm", state="cancelled", stage="not_started")
                 for branch in run["branches"].values():
                     branch.update(stop_confirmed=state["scenario"] == "cleaned", cleanup_confirmed=state["scenario"] == "cleaned")
+            if state["scenario"] == "queued_stop":
+                run.update(state="cancelling", cancel_requested=True, error_code="admin_cancelled")
+                run["branches"]["lstm"].update(
+                    attempt_id="0a1b2c3d-1111-2222-3333-444455556666", stop_confirmed=False, cleanup_confirmed=False,
+                    observation={"phase": "provider_wait", "provider_state": "QUEUED",
+                                 "provider_observed_at": "2026-11-09T05:30:00Z", "stop_waiting_since": "2026-11-09T06:00:00Z"})
             body = {"items": [] if state["scenario"] == "completed" else [run]}
             if state["scenario"] == "unavailable":
                 status, body = 503, {"error": {"message": "Synthetic unavailable"}}
@@ -127,6 +133,11 @@ def main():
             state["scenario"] = "cleaned"
             expect(card.get_by_role("button", name="Dismiss", exact=True)).to_be_visible(timeout=8000)
             checks.append("dismiss offered only after run reaches failed terminal state")
+            state["scenario"] = "queued_stop"
+            notice = card.locator(".training-location-note")
+            expect(notice).to_contain_text("Stop was sent, but Kaggle still has this notebook in its queue.", timeout=8000)
+            expect(notice.locator("code")).to_have_text("traffic-train-0a1b2c3d111122223333444455556666")
+            checks.append("stop of a notebook still queued on Kaggle names the notebook to cancel on Kaggle")
             state["scenario"] = "completed"
             expect(card).to_have_count(0, timeout=8000)
             expect(page.locator(".training-monitor")).to_have_count(0)

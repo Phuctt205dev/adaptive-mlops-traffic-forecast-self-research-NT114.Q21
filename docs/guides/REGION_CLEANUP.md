@@ -46,6 +46,9 @@ dẫn file hoặc prefix S3. File không xác định được chủ sở hữu 
   để xử lý trường hợp dịch vụ lưu trữ trả thiếu kết quả khi lọc trên server.
 - Cây/thư mục model legacy, recurrent, distributed-serving, distributed-training,
   dữ liệu trung gian, SHAP, file upload cache và training-exchange đúng UUID.
+- Thư mục tạm của Local training `local-training/v1/<run>/` của từng lượt train thuộc vùng
+  (và của lượt train của model bị xóa riêng). Bình thường Local training tự dọn nó sau mỗi
+  attempt; đưa vào kế hoạch xóa để phần dư của attempt bị gián đoạn không bị bỏ sót.
 - Airflow: DAG run training thuộc vùng, kể cả run tìm thêm qua conf, và
   thư mục log dag_id=.../run_id=... tương ứng. Không xóa DAG hoặc lịch sử
   drift chạy chung nhiều vùng. Worker recurrent được mount PVC log đang ở
@@ -127,3 +130,23 @@ nên không thể chọn thư mục ghi kết quả hoặc vai trò model. Train
 dùng thư mục output riêng và vai trò `candidate`, hai ô này không điều khiển
 huấn luyện. Cấu hình đã lưu từ trước vẫn đọc được. Kiểm tra:
 `tests/test_training_configuration.py` (`SystemManagedFieldTests`).
+
+## Kiểm kê dữ liệu của lượt train không còn model (chỉ đọc)
+
+Xóa một model bằng bản cũ chỉ gỡ bản ghi, không xóa file; những file đó còn lại trong kho
+và không có thao tác nào trên giao diện dọn được (không có chức năng xóa riêng lượt train).
+`scripts/maintenance/unreferenced_run_data.py` **chỉ liệt kê**, không xóa hay ghi gì:
+
+- Với mỗi lượt train có file trong kho: dung lượng theo từng vị trí (serving, exchange,
+  training, local-training, thư mục legacy, MLflow), và kết luận **REMOVABLE** hoặc **KEEP**
+  kèm lý do (còn model dùng, lượt đang chạy, execution chưa xong, đang có thao tác xóa dở,
+  một model đang dùng nhắc tới file của lượt này).
+- Tách riêng các MLflow run không có tag lượt train: không chứng minh được chủ sở hữu nên
+  không bao giờ là ứng viên. Cũng liệt kê thư mục của lượt train không có trong DB nếu có.
+- Không bao giờ là ứng viên: model của mọi vùng và file chúng phục vụ, SHAP dùng chung,
+  dataset/quality report, thư mục model legacy theo vùng.
+
+Chạy trong pod API: `kubectl exec -i <api-pod> -c api -- sh -c 'cd /app && PYTHONPATH=/app python -B -' < scripts/maintenance/unreferenced_run_data.py`
+(thêm `--json` để in bản JSON). Việc xóa thật là bước riêng, cần người dùng duyệt danh sách.
+Kiểm tra: `tests/test_unreferenced_run_data.py` (kho và MLflow giả chỉ có thao tác liệt kê,
+nên test chứng minh công cụ không thể ghi).

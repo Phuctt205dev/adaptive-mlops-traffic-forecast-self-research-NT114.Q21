@@ -234,6 +234,9 @@ class CleanupResources:
             {'bucket': self.settings.dataset_bucket, 'prefix': prefix},
             *[{'bucket': self.runtime_bucket, 'prefix': p} for p in plan['local_prefixes']],
             {'bucket': self.runtime_bucket, 'prefix': f'training-exchange/v1/regions/{rid}/'},
+            # Local training stages a run's input and output here and normally removes it
+            # itself. Listing it keeps an interrupted attempt's leftovers part of the deletion.
+            *[{'bucket': self.runtime_bucket, 'prefix': f'local-training/v1/{run}/'} for run in plan['run_ids']],
             *[{'bucket': self.mlflow_bucket, 'prefix': exp['id'] + '/'} for exp in plan['mlflow']],
         ]
         for target in plan['objects']:

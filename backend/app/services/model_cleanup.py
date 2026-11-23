@@ -114,6 +114,8 @@ class ModelCleanupResources(CleanupResources):
             *[{'bucket': self.runtime_bucket, 'prefix': p} for p in plan['local_prefixes']],
             {'bucket': self.runtime_bucket, 'prefix':
              f"training-exchange/v1/regions/{plan['region_id']}/runs/{plan['run_ids'][0]}/"},
+            # Staging copy of an interrupted Local training attempt of this run, if any.
+            {'bucket': self.runtime_bucket, 'prefix': f"local-training/v1/{plan['run_ids'][0]}/"},
             *[{'bucket': self.mlflow_bucket, 'prefix': f'{experiment}/{identity}/'} for identity in tracked],
         ]}
         for target in plan['objects']:

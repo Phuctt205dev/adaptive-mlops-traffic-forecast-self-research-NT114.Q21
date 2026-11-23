@@ -104,6 +104,15 @@ có digest riêng, được dùng lại nếu đầu vào/check profile không �
 [thành phần và Local Job](COMPONENT_DELIVERY.md). Bootstrap Local và enable
 là các bước có review; mỗi push không chạy một lượt training thử.
 
+Job `prepare` và `tests` chạy song song. `prepare` dựng mã đã kiểm (`checked-source`), dữ liệu
+model mẫu offline và matrix role để các job image bắt đầu sớm; `tests` chạy toàn bộ regression
+rồi vẫn build release, đọc matrix và tạo fixtures như trước (nên PR vẫn bắt lỗi ở các bước này).
+Các job image build và kiểm offline ngay, nhưng bước `Hold publication` (`scripts/cicd/wait_for_job.py`)
+chặn mọi `docker push` cho tới khi job `tests` của đúng run/attempt thành công; thất bại, bị hủy,
+bị bỏ qua, không rõ hoặc quá 20 phút đều dừng job. `package` và `acceptance` vẫn đòi `tests` đạt.
+`prepare` không nằm trong danh sách job bắt buộc của cổng coverage để run cũ vẫn hợp lệ khi khôi
+phục; nếu nó lỗi thì mọi image bị bỏ qua và `acceptance` thất bại.
+
 ## 3. Build khác với deploy
 
 | Thành phần | Điều kiện build/cập nhật |

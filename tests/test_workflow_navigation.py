@@ -140,10 +140,14 @@ class WorkflowNavigationTests(unittest.TestCase):
         for identifier,body in jobs:
             label=re.search(r'^    name: (.+)$',body,re.M)
             name=label.group(1).strip('"\'') if label else identifier
+            if identifier=='prepare':
+                # Helper job: its result gates nothing by name. A failed prepare skips every image,
+                # which the coverage gate already rejects, and old runs without it must stay valid.
+                continue
             if identifier in {'image','executor-image'}:
                 from scripts.cicd import components
                 output='applications' if identifier=='image' else 'executors'
-                self.assertIn('fromJSON(needs.tests.outputs.'+output,body)
+                self.assertIn('fromJSON(needs.prepare.outputs.'+output,body)
                 roles=components.applications() if identifier=='image' else components.executors()
                 actual.update(name+' ('+role.strip()+')' for role in roles)
             else:actual.add(name)

@@ -19,7 +19,7 @@ from scripts.cicd.cd_state import GitHub
 from scripts.cicd import pipeline, ci_scope, ci_coverage
 
 SCHEMA = 'traffic-delivery-metrics/v1'
-CI_JOBS = {'scope', 'tests', 'frontend-build', 'package', 'current-runtime',
+CI_JOBS = {'scope', 'prepare', 'tests', 'frontend-build', 'package', 'current-runtime',
            'legacy-migration', 'acceptance'} | {'image ('+r+')' for r in ('api','tree','neural','sync')}
 SCENARIOS = ('auto','frontend-only','API-only','worker-DAG','runtime-manifest','no-op','mixed','unknown')
 

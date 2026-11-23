@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { stages as labels, modelStatus, progressLabel, freshness, stopWaitNotice } from "./trainingMonitorState";
+import { stages as labels, modelStatus, progressLabel, freshness, stopWaitNotice, queueWaitNotice } from "./trainingMonitorState";
 import AppDialog from "./AppDialog.jsx";
 
 
@@ -65,6 +65,7 @@ function RunCard({ run, timezone, onDismiss, snapshotAgeSeconds, capabilities })
     : phases.includes("input_reconciling") ? "input_reconciling"
       : phases.includes("reconnecting") ? "reconnecting" : null;
   const stopWait = stopWaitNotice(run);
+  const queueWait = queueWaitNotice(run);
   const cvCompleted = Number(run.cv_completed_models) || 0;
   const outputVerified = Number(run.output_verified_models) || 0;
 
@@ -115,6 +116,12 @@ function RunCard({ run, timezone, onDismiss, snapshotAgeSeconds, capabilities })
         {connection === "input_reconciling" ? "Checking whether Kaggle received the training data. If needed, only the upload is retried. No duplicate model training is started."
           : connection === "reconnecting" ? "Contact with Kaggle was interrupted. The last confirmed progress is shown; no duplicate training was submitted."
           : "Kaggle's outcome could not be confirmed. Stop this run and wait for stop confirmation before starting a replacement. No Local fallback has started."}
+      </div>}
+      {queueWait && !stopWait && <div className="training-location-note" role="status">
+        <strong>{queueWait.branch.toUpperCase()} has waited {queueWait.minutes} minutes in Kaggle's queue.</strong>{" "}
+        Kaggle does not say why or for how long, and this system cannot move it forward. Waiting is safe, but other training runs stay
+        blocked. To give up, press Stop, then open kaggle.com, go to Your Work, find the notebook named <code>{queueWait.notebook}</code> and
+        cancel its session. Next time you can choose CPU for LSTM and GRU in Advanced training settings.
       </div>}
       {stopWait && <div className="training-location-note" role="status">
         <strong>Stop was sent, but Kaggle still has this notebook in its queue.</strong>{" "}

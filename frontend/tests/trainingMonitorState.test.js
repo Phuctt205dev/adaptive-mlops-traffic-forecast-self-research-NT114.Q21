@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { modelStatus, progressLabel, freshness, kaggleQueueMinutes, stopWaitNotice } from "../src/trainingMonitorState.js";
+import { modelStatus, progressLabel, freshness, kaggleQueueMinutes, stopWaitNotice, queueWaitNotice, QUEUE_WARNING_MINUTES } from "../src/trainingMonitorState.js";
 
 test("Local queue does not make an already finished tree model wait for CPU again", () => {
   const run = { backend: "local", state: "running", branches: { tree: { observation: { phase: "waiting_resources" } } } };
@@ -79,4 +79,19 @@ test("stop of a notebook still queued on Kaggle explains how to finish it", () =
   assert.equal(stopWaitNotice({ ...run, backend: "local" }), null);
   const running = { ...run, branches: { lstm: { ...run.branches.lstm, observation: { provider_state: "RUNNING", stop_waiting_since: "x" } } } };
   assert.equal(stopWaitNotice(running), null);
+});
+
+test("a long Kaggle queue is flagged with the notebook to cancel, but only for a run that is still going", () => {
+  const attempt = "0a1b2c3d-1111-2222-3333-444455556666";
+  const queued = (at) => ({ attempt_id: attempt, observation: { provider_state: "QUEUED", provider_observed_at: at } });
+  const run = (at, extra = {}) => ({ backend: "kaggle", state: "running", observed_at: "2026-11-23T07:21:40+00:00",
+    branches: { tree: { attempt_id: "x", observation: { provider_state: "COMPLETE" } }, lstm: queued(at) }, ...extra });
+  assert.equal(QUEUE_WARNING_MINUTES, 15);
+  assert.deepEqual(queueWaitNotice(run("2026-11-23T07:06:00+00:00")),
+    { branch: "lstm", minutes: 15, notebook: "traffic-train-0a1b2c3d111122223333444455556666" });
+  assert.equal(queueWaitNotice(run("2026-11-23T07:07:00+00:00")), null);       // 14 minutes
+  assert.equal(queueWaitNotice(run("2026-11-23T06:56:33+00:00", { state: "cancelling" })), null); // Stop notice covers it
+  assert.equal(queueWaitNotice(run("2026-11-23T06:56:33+00:00", { state: "completed" })), null);
+  assert.equal(queueWaitNotice(run("2026-11-23T06:56:33+00:00", { backend: "local" })), null);
+  assert.equal(queueWaitNotice({ ...run("2026-11-23T06:56:33+00:00"), observed_at: "not a date" }), null);
 });

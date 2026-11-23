@@ -242,10 +242,11 @@ class KaggleExecutionTests(unittest.TestCase):
         self.transport.call = call
         with self.assertRaises(ProviderError):
             self.provider.control()
+        self.assertEqual(len(writes), 2)  # The original write and one identical retry, never a third.
         recovered = self.make(self.saved[-1])
         with self.assertRaises(ProviderError):
             recovered.control(cancel=True)
-        self.assertEqual(len(writes), 1)
+        self.assertEqual(len(writes), 2)  # A restart only reads back; it never writes again.
         self.assertTrue(recovered.ledger["control_pending"])
 
     def test_restart_reconciles_the_original_control_intent_before_a_new_write(self):
@@ -684,6 +685,124 @@ class KaggleExecutionTests(unittest.TestCase):
         self.provider.stream = FinishingStream([])
         self.provider.drain(lambda event: None)
         self.assertTrue(self.provider.ledger.get('child_completed_observed'))
+
+
+    # --- A lease renewal whose reply is lost must not strand the branch -------------------
+
+    def control_source(self, directory):
+        return (Path(directory) / "train.py").read_text(encoding="utf-8")
+
+    def test_a_control_write_that_shows_up_late_is_confirmed_by_reading_again_without_a_second_write(self):
+        self.provider.submit()
+        original, stale = self.transport.call, {"reads": 0}
+        before = {}
+        def call(operation, **values):
+            if operation == "kernel_push" and values["no_run"]:
+                before.update(original("kernel_get", reference=self.ledger["reference"]))
+                original(operation, **values)  # Committed on Kaggle...
+                stale["reads"] = 2             # ...but the next two reads still show the old notebook.
+                raise ProviderError("reply lost", operation=operation, category="response_timeout")
+            if operation == "kernel_get" and stale["reads"] > 0:
+                stale["reads"] -= 1
+                return dict(before)
+            return original(operation, **values)
+        self.transport.call = call
+        self.provider.control()
+        self.assertEqual(len(self.control_saves()), 1)
+        self.assertFalse(self.provider.ledger["control_pending"])
+        self.assertEqual(self.provider.ledger["confirmed_control_writes"], 1)
+
+    def test_a_control_write_that_never_reached_kaggle_is_repeated_once_with_identical_content(self):
+        self.provider.submit()
+        original, sources = self.transport.call, []
+        def call(operation, **values):
+            if operation == "kernel_push" and values["no_run"]:
+                sources.append(self.control_source(values["directory"]))
+                if len(sources) == 1:
+                    raise ProviderError("connection dropped before delivery", operation=operation, category="connection_error")
+            return original(operation, **values)
+        self.transport.call = call
+        self.provider.control()
+        self.assertEqual(len(sources), 2)
+        self.assertEqual(sources[0], sources[1])
+        self.assertFalse(self.provider.ledger["control_pending"])
+        self.assertEqual(self.provider.ledger["confirmed_control_writes"], 1)
+
+    def test_the_repeat_is_bounded_and_the_branch_keeps_its_pending_intent(self):
+        self.provider.submit()
+        original, writes = self.transport.call, []
+        def call(operation, **values):
+            if operation == "kernel_push" and values["no_run"]:
+                writes.append(values)
+                raise ProviderError("connection dropped", operation=operation, category="connection_error")
+            return original(operation, **values)
+        self.transport.call = call
+        with self.assertRaises(ProviderError):
+            self.provider.control()
+        self.assertEqual(len(writes), 2)
+        self.assertTrue(self.provider.ledger["control_pending"])
+        self.assertEqual(self.provider.ledger["pending_control"]["writes"], 2)
+
+    def test_an_error_that_is_not_a_transient_network_failure_is_never_repeated(self):
+        self.provider.submit()
+        original, writes = self.transport.call, []
+        def call(operation, **values):
+            if operation == "kernel_push" and values["no_run"]:
+                writes.append(values)
+                raise ProviderError("unexpected", operation=operation, category="provider_unknown_error")
+            return original(operation, **values)
+        self.transport.call = call
+        with self.assertRaises(ProviderError):
+            self.provider.control()
+        self.assertEqual(len(writes), 1)
+
+    def test_nothing_is_repeated_when_the_notebook_changed_in_a_way_this_write_does_not_explain(self):
+        from src.cloud_training.control import with_control
+        self.provider.submit()
+        original, writes = self.transport.call, []
+        def call(operation, **values):
+            if operation == "kernel_push" and values["no_run"]:
+                writes.append(values)
+                self.transport.version += 1  # Another version appeared with a different lease.
+                self.transport.source = with_control(self.transport.source, clock=5000)
+                raise ProviderError("reply lost", operation=operation, category="response_timeout")
+            return original(operation, **values)
+        self.transport.call = call
+        with self.assertRaises(ProviderError):
+            self.provider.control()
+        self.assertEqual(len(writes), 1)
+
+    def unconfirmed(self):
+        return ProviderError("not confirmed", operation="kernel_get", category="control_unconfirmed")
+
+    def test_an_unconfirmed_renewal_is_read_again_instead_of_abandoning_the_branch(self):
+        elapsed = self.queued_clock()
+        self.provider.submit()
+        self.provider.ledger.update(control_pending=True, pending_control={
+            "lease_until": elapsed[0] + 180, "cancel": False, "sha256": "x", "base_version": 1, "writes": 2})
+        calls = [0]
+        def control(**options):
+            calls[0] += 1
+            if calls[0] == 1:
+                raise self.unconfirmed()
+        self.provider.control = control
+        with self.assertRaises(TrainingCancelled):
+            self.provider.run(lambda _: None, lambda: elapsed[0] >= 1100)
+        self.assertGreaterEqual(calls[0], 2)
+        self.assertNotEqual(self.provider.ledger.get("phase"), "needs_attention")
+
+    def test_an_unconfirmed_renewal_still_needs_attention_once_its_lease_is_nearly_over(self):
+        from src.cloud_training.kaggle_execution import ProviderUncertain
+        elapsed = self.queued_clock()
+        self.provider.submit()
+        self.provider.ledger.update(control_pending=True, pending_control={
+            "lease_until": elapsed[0] + 20, "cancel": False, "sha256": "x", "base_version": 1, "writes": 2})
+        def control(**options):
+            raise self.unconfirmed()
+        self.provider.control = control
+        with self.assertRaises(ProviderUncertain):
+            self.provider.run(lambda _: None, lambda: False)
+        self.assertEqual(self.provider.ledger["phase"], "needs_attention")
 
 
 if __name__ == "__main__":

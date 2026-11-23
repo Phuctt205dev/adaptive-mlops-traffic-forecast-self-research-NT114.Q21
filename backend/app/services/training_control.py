@@ -24,7 +24,7 @@ from backend.app.services import training_execution as state
 from src.cloud_training.artifacts import read_bundle
 from src.cloud_training.kaggle_execution import KaggleExecution, ProviderUncertain, TrainingCancelled, initial_ledger
 from src.cloud_training.kaggle_transport import ProviderError, SDKTransport
-from src.cloud_training.package import configuration_digest, prepare_package
+from src.cloud_training.package import configuration_digest, kaggle_accelerator, prepare_package
 from src.cloud_training.process import ExecutionProcess, cleanup_execution, execution_directory
 from src.cloud_training.telemetry import operation_timing
 from src.local_training.execution import LocalExecution, initial_ledger as local_ledger
@@ -273,7 +273,7 @@ class WorkerController:
                 if not self.username or not self.training.get_settings().cloud_training_enabled:
                     raise ApplicationError("cloud_training_not_ready", "Cloud execution is not configured on this worker.", 503)
                 phase = 'prepare_notebook'
-                ledger = initial_ledger(snapshot, self.username)
+                ledger = initial_ledger(snapshot, self.username, kaggle_accelerator(configuration, branch))
                 ledger["telemetry"] = preparation["telemetry"]
                 ledger["workload"] = {"configuration_sha256": context["configuration_sha256"],
                     "dataset_sha256": snapshot["files"]["dataset.csv"]["sha256"],

@@ -27,6 +27,7 @@ from src.cloud_training.telemetry import operation_timing, source_timing
 
 TERMINAL = {"COMPLETE", "ERROR", "CANCEL_ACKNOWLEDGED"}
 TERMINAL_EVENT_WAIT_SECONDS = 90
+STOP_POLL_SECONDS = 15
 INPUT_PREPARATION_SECONDS = 600
 INPUT_ABSENCE_SECONDS = 15
 INPUT_UPLOAD_ATTEMPTS = 3
@@ -378,6 +379,11 @@ class KaggleExecution:
             self.save(expected_version=response["version"])
             if type(response.get("session_id")) is int and response["session_id"] > 0:
                 self.save(session_id=response["session_id"])
+            keys = response.get("url_query_keys")
+            if isinstance(keys, list) and all(type(key) is str for key in keys):
+                # Names only. Kaggle has never returned a session id here, and
+                # knowing which parameters it does return explains why.
+                self.save(submit_url_query_keys=keys[:8])
         # An uncertain response is recovered by read-back, never by a new push.
         remote = self.call("kernel_get", reference=self.ledger["reference"])
         self.verify_remote(remote)
@@ -412,6 +418,12 @@ class KaggleExecution:
                       confirmed_control_writes=self.ledger.get("confirmed_control_writes", 0) + 1)
             if not cancel or pending["cancel"]:
                 return
+        if (cancel and source_control(source)["cancel"] and not self.ledger.get("control_pending")
+                and base_version == self.ledger.get("control_version", self.ledger["version"])):
+            # The cancel signal is latched in the saved source and nothing newer
+            # exists. Saving it again only creates versions that Kaggle runs.
+            self.save(cancel_requested=True)
+            return
         control_clock = self.clock()
         controlled = with_control(source, cancel=cancel, clock=control_clock)
         directory = self.directory / "control"
@@ -680,12 +692,18 @@ class KaggleExecution:
             self.verify_remote(remote)
             self.save(version=remote["current_version_number"])
         if self.status() not in TERMINAL:
+            if self.ledger.get("stop_waiting_since") and self.clock() < self.ledger.get("stop_next_poll_at", 0):
+                return False  # The signal is written; the watcher sweeps every 2 seconds.
             if self.ledger.get("session_id") and not self.ledger.get("cancel_session_pending"):
                 self.save(cancel_session_pending=True)
                 self.call("cancel_session", reference=self.reference, session_id=self.ledger["session_id"])
             self.control(cancel=True)
             # The owning watcher retries until the exact original version is
             # terminal. Expiry is additional protection, never a fake stop ack.
+            # A notebook still queued on Kaggle reads the signal only when Kaggle
+            # starts it, so the wait can be long: remember since when for the UI.
+            self.save(stop_waiting_since=self.ledger.get("stop_waiting_since") or self.timestamp(),
+                      stop_next_poll_at=self.clock() + STOP_POLL_SECONDS)
             return False
         return True
 

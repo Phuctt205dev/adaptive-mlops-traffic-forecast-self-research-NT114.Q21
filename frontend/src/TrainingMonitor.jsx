@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { stages as labels, modelStatus, progressLabel, freshness } from "./trainingMonitorState";
+import { stages as labels, modelStatus, progressLabel, freshness, stopWaitNotice } from "./trainingMonitorState";
 import AppDialog from "./AppDialog.jsx";
 
 
@@ -64,6 +64,7 @@ function RunCard({ run, timezone, onDismiss, snapshotAgeSeconds, capabilities })
   const connection = phases.includes("needs_attention") ? "needs_attention"
     : phases.includes("input_reconciling") ? "input_reconciling"
       : phases.includes("reconnecting") ? "reconnecting" : null;
+  const stopWait = stopWaitNotice(run);
   const cvCompleted = Number(run.cv_completed_models) || 0;
   const outputVerified = Number(run.output_verified_models) || 0;
 
@@ -114,6 +115,12 @@ function RunCard({ run, timezone, onDismiss, snapshotAgeSeconds, capabilities })
         {connection === "input_reconciling" ? "Checking whether Kaggle received the training data. If needed, only the upload is retried. No duplicate model training is started."
           : connection === "reconnecting" ? "Contact with Kaggle was interrupted. The last confirmed progress is shown; no duplicate training was submitted."
           : "Kaggle's outcome could not be confirmed. Stop this run and wait for stop confirmation before starting a replacement. No Local fallback has started."}
+      </div>}
+      {stopWait && <div className="training-location-note" role="status">
+        <strong>Stop was sent, but Kaggle still has this notebook in its queue.</strong>{" "}
+        It can only stop itself once Kaggle starts it, and Kaggle does not let this system cancel a queued notebook. To finish now,
+        open kaggle.com, go to Your Work, find the notebook named <code>{stopWait.notebook}</code> and cancel its session.
+        The system notices the cancellation by itself and then removes the temporary files.
       </div>}
       {run.error_code === "admin_cancelled" && <p role="status">{run.state === "cancelled"
         ? "Cancelled by the administrator. Training has stopped and cleanup is complete."

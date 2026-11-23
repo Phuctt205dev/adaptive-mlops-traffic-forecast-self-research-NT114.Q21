@@ -33,6 +33,7 @@ class FakeTransport:
         self.resources = {"dataset": False, "notebook": False}
         self.events = []
         self.outputs = {}
+        self.url_query_keys = None
     def call(self, operation, **values):
         self.calls.append((operation, values))
         if operation == "dataset_create":
@@ -49,7 +50,7 @@ class FakeTransport:
             if self.lost_response:
                 self.lost_response = False
                 raise ProviderError("Response lost after provider accepted the write.")
-            return {"version": self.version}
+            return {"version": self.version, **({"url_query_keys": self.url_query_keys} if self.url_query_keys is not None else {})}
         if operation == "kernel_get":
             return {"source": self.source, "ref": self.metadata["id"], "current_version_number": self.version,
                     "is_private": True, "enable_gpu": self.metadata["enable_gpu"], "enable_internet": True,
@@ -320,6 +321,66 @@ class KaggleExecutionTests(unittest.TestCase):
         self.assertFalse(self.provider.ledger["control_pending"])
         self.assertEqual(self.provider.ledger["confirmed_control_writes"], 1)
         self.assertEqual(self.provider.ledger["version"], 1)
+
+    def control_saves(self):
+        return [values for op, values in self.transport.calls
+                if op == "kernel_push" and Path(values["directory"]).name == "control"]
+
+    def test_stop_of_a_queued_notebook_writes_the_cancel_signal_once_and_waits(self):
+        # Kaggle gives no session id, so a queued notebook can only stop itself
+        # when it starts and reads the signal. Writing it again changes nothing
+        # on Kaggle: the 23/11 run made 76 Quick Saves that each ran and failed.
+        now = [1_000_000.0]
+        self.provider.clock = lambda: now[0]
+        self.provider.submit()
+        self.transport.state = "QUEUED"
+        for _ in range(60):
+            self.assertFalse(self.provider.stop())
+            now[0] += 10
+        self.assertEqual(len(self.control_saves()), 1)
+        self.assertEqual(self.transport.version, 2)
+        self.assertTrue(self.provider.ledger["cancel_requested"])
+        self.assertFalse(self.provider.ledger["remote_stopped"])
+        self.assertFalse(any(op == "cancel_session" for op, _ in self.transport.calls))
+
+    def test_waiting_stop_rereads_the_notebook_at_a_gentle_interval_but_sees_the_end_at_once(self):
+        now = [1_000_000.0]
+        self.provider.clock = lambda: now[0]
+        self.provider.submit()
+        self.transport.state = "QUEUED"
+        self.assertFalse(self.provider.stop())
+        reads = lambda: sum(op == "kernel_get" for op, _ in self.transport.calls)
+        first = reads()
+        for _ in range(5):  # the watcher sweeps every 2 seconds
+            now[0] += 2
+            self.assertFalse(self.provider.stop())
+        self.assertEqual(reads(), first)
+        now[0] += 30
+        self.assertFalse(self.provider.stop())
+        self.assertGreater(reads(), first)
+        self.transport.state = "CANCEL_ACKNOWLEDGED"
+        now[0] += 1  # inside the interval: the terminal state is still seen at once
+        self.assertTrue(self.provider.stop())
+
+    def test_stop_records_when_the_provider_started_waiting_once(self):
+        from src.cloud_training.telemetry import timing_summary
+        now = [1_000_000.0]
+        self.provider.clock = lambda: now[0]
+        self.provider.submit()
+        self.transport.state = "QUEUED"
+        self.provider.stop()
+        since = self.provider.ledger["stop_waiting_since"]
+        self.assertTrue(since)
+        now[0] += 120
+        self.provider.stop()
+        self.assertEqual(self.provider.ledger["stop_waiting_since"], since)
+        self.assertEqual(timing_summary(self.provider.ledger)["stop_waiting_since"], since)
+
+    def test_submit_records_only_the_names_of_the_provider_link_parameters(self):
+        self.transport.url_query_keys = ["scriptVersionId"]
+        self.provider.submit()
+        self.assertEqual(self.provider.ledger["submit_url_query_keys"], ["scriptVersionId"])
+        self.assertNotIn("session_id", self.provider.ledger)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

@@ -181,7 +181,12 @@ def operation(api, name, request, stdout):
         from src.cloud_training.kaggle_probe_client import KaggleProbeClient
         metadata = json.loads((Path(request["directory"]) / "kernel-metadata.json").read_text())
         session_id = KaggleProbeClient.response_session_id(response, metadata["id"])
-        return {"version": version, **({"session_id": session_id} if session_id is not None else {})}
+        # Names of the link parameters only, never values or the link itself.
+        from urllib.parse import parse_qs, urlparse
+        names = sorted(key for key in parse_qs(urlparse(getattr(response, "url", "") or "").query)
+                       if key.isascii() and key.isalnum() and len(key) <= 40)[:8]
+        return {"version": version, "url_query_keys": names,
+                **({"session_id": session_id} if session_id is not None else {})}
     if name == "cancel_session":
         from kagglesdk.kernels.types.kernels_api_service import ApiCancelKernelSessionRequest
         info = kernel(api, request["reference"])

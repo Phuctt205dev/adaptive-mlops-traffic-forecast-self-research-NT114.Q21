@@ -100,8 +100,13 @@ def rejection_diagnostic(response):
             if any(phrase in message for phrase in phrases):
                 reason = category
                 break
-    return {"reason": reason, "invalid_sources": invalid,
-            "retryable": reason in {"rate_limit", "temporarily_unavailable"}}
+    from src.cloud_training.telemetry import HINT_WORDS
+    result = {"reason": reason, "invalid_sources": invalid,
+              "retryable": reason in {"rate_limit", "temporarily_unavailable"}}
+    hint = sorted(set(re.findall(r"[a-z]+", message)) & HINT_WORDS)[:8]
+    if hint:
+        result["hint"] = hint
+    return result
 
 
 def operation(api, name, request, stdout):

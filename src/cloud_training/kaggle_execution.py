@@ -35,6 +35,8 @@ CONTROL_READBACK_POLLS = 3
 CONTROL_READBACK_SECONDS = 2
 CONTROL_REREAD_SECONDS = 5
 CONTROL_GIVE_UP_MARGIN = 30
+CONTROL_REJECTION_LIMIT = 4
+CONTROL_REJECTION_MARGIN = 45
 
 
 class TrainingCancelled(ProviderError):
@@ -429,7 +431,7 @@ class KaggleExecution:
                     or source != controlled or base_version <= pending["base_version"]):
                 raise ProviderError("Pending control update is not confirmed.", operation="kernel_get",
                                     category="control_unconfirmed")
-            self.save(control_pending=False, pending_control=None, control_version=base_version,
+            self.save(control_pending=False, pending_control=None, control_version=base_version, control_rejections=0,
                       lease_until=pending["lease_until"], last_control_confirmed_at=self.timestamp(),
                       confirmed_control_writes=self.ledger.get("confirmed_control_writes", 0) + 1)
             if not cancel or pending["cancel"]:
@@ -487,7 +489,7 @@ class KaggleExecution:
                 if committed():
                     break
             if committed():
-                self.save(control_pending=False, pending_control=None, control_version=version,
+                self.save(control_pending=False, pending_control=None, control_version=version, control_rejections=0,
                           lease_until=pending["lease_until"], last_control_confirmed_at=self.timestamp(),
                           confirmed_control_writes=self.ledger.get("confirmed_control_writes", 0) + 1)
                 return
@@ -506,19 +508,27 @@ class KaggleExecution:
             if error:
                 if error.category == "control_rejected" and version == base_version and actual == source:
                     self.save(control_pending=False, pending_control=None)
+                    # Kaggle sometimes refuses one Quick Save and accepts the next seconds later. A refused
+                    # lease renewal changed nothing, so while the current lease still has time it is simply
+                    # asked again. A refused stop signal is never tolerated.
+                    rejections = self.ledger.get("control_rejections", 0) + 1
+                    self.save(control_rejections=rejections)
+                    if (not cancel and rejections < CONTROL_REJECTION_LIMIT
+                            and source_control(source)["lease_until"] - control_clock > CONTROL_REJECTION_MARGIN):
+                        return "deferred"
                 raise error
             raise ProviderError("The cooperative control write was not confirmed.",
                                 operation="kernel_get", category="control_unconfirmed")
 
     def renew_lease(self, cancelled):
-        """True once the lease is written or confirmed.
+        """True once the lease is written or confirmed; False when it will simply be asked again.
 
         An unconfirmed lease is only read again (never rewritten) while it still
-        has time, so one lost reply no longer strands the branch.
+        has time, and a refused renewal is asked again within seconds, so one lost
+        reply or one refusal no longer ends the branch.
         """
         try:
-            self.reconnect(self.control, cancelled)
-            return True
+            return self.reconnect(self.control, cancelled) != "deferred"
         except ProviderError as error:
             pending = self.ledger.get("pending_control") if self.ledger.get("control_pending") else None
             if (error.category == "control_unconfirmed" and pending
@@ -674,7 +684,7 @@ class KaggleExecution:
                     if self.renew_lease(cancelled):
                         renewal = min(self.clock() + 45, self.ledger.get("lease_until", self.clock() + 180) - 90)
                     else:
-                        renewal = self.clock() + CONTROL_REREAD_SECONDS
+                        renewal = self.clock() + CONTROL_REREAD_SECONDS + random.random() * 3
                     self.drain(progress)
                     if renewal <= self.clock():
                         continue

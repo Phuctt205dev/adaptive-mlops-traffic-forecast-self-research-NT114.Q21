@@ -44,6 +44,25 @@ class KaggleRPCTests(unittest.TestCase):
         self.assertNotIn("SECRET", json.dumps(result))
         self.assertFalse(rejection_summary({"reason": "authentication", "retryable": True})["retryable"])
 
+    def test_a_refusal_keeps_only_allow_listed_words_as_its_hint(self):
+        text = "Cannot save: a session is already running for traffic-train-0a1b2c3d (owner secretuser). Rate limit exceeded, try again later."
+        response = SimpleNamespace(error=text, version_number=None)
+        api = SimpleNamespace(kernels_push=lambda *args, **kwargs: response)
+        result = operation(api, "kernel_push", {"directory": "synthetic", "no_run": True}, None)
+        hint = result["diagnostic"]["hint"]
+        self.assertTrue({"already", "running", "session", "rate", "limit", "exceeded", "again", "later"}.issuperset(hint))
+        self.assertIn("running", hint)
+        blob = json.dumps(result)
+        for secret in ("secretuser", "traffic-train", "0a1b2c3d", "Cannot save"):
+            self.assertNotIn(secret, blob)
+
+    def test_the_hint_is_validated_before_it_is_stored(self):
+        kept = rejection_summary({"reason": "provider_rejected", "hint": ["running", "limit"]})
+        self.assertEqual(kept["hint"], ["limit", "running"])
+        for bad in (["secretuser"], "running", ["running"] * 20, [1], ["running", "x" * 500]):
+            with self.subTest(bad=bad):
+                self.assertNotIn("hint", rejection_summary({"reason": "provider_rejected", "hint": bad}))
+
     def test_status_read_retries_a_transient_rpc_failure_without_submitting_a_fit(self):
         failure = subprocess.CompletedProcess([], 2, json.dumps({"ok": False, "error_type": "ConnectTimeout"}))
         success = subprocess.CompletedProcess([], 0, json.dumps({"ok": True, "result": {"state": "RUNNING"}}))

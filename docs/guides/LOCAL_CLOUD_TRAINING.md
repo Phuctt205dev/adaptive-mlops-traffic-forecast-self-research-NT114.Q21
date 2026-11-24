@@ -101,7 +101,13 @@ notebook again three times, since a write can commit late. Only if the notebook 
 exactly as before and the error was a transient network failure does it repeat the
 same write once, with identical content; any other change stops the repeat. An
 unconfirmed renewal is read again every few seconds until its lease is nearly over,
-instead of ending the branch at once. Download
+instead of ending the branch at once. Kaggle also refuses an occasional Quick Save and
+accepts the next one seconds later (seen 24/11, each time on the first renewal). A refused
+**renewal** changed nothing, so while the current lease has more than 45 seconds left it is
+asked again after about 5 seconds; four refusals in a row, or a nearly expired lease, end the
+branch as before. A refused **stop signal** is never tolerated. The refusal text itself is never
+kept: only words from a fixed allow-list (for example `running`, `limit`, `quota`) are stored as
+`diagnostic.hint` in the provider journal, so the reason can be recognised later. Download
 retry cleans only attempt-owned partial output and downloads the same version;
 it does not retrain. Native session cancellation is used at most once when the
 original SaveKernel response explicitly linked a session ID for this notebook;

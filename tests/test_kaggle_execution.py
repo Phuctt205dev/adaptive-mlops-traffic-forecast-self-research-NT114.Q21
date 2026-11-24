@@ -199,7 +199,7 @@ class KaggleExecutionTests(unittest.TestCase):
             return original(operation, **values)
         self.transport.call = call
         with self.assertRaises(ProviderError) as caught:
-            self.provider.control()
+            self.provider.control(cancel=True)  # A refused stop signal is fatal; a refused renewal is retried.
         self.assertEqual(caught.exception.category, "control_rejected")
         self.assertEqual(len(writes), 1)
         self.assertNotIn("SECRET", json.dumps(self.provider.ledger))
@@ -803,6 +803,82 @@ class KaggleExecutionTests(unittest.TestCase):
         with self.assertRaises(ProviderUncertain):
             self.provider.run(lambda _: None, lambda: False)
         self.assertEqual(self.provider.ledger["phase"], "needs_attention")
+
+
+    # --- Kaggle refuses a lease renewal now and then; that must not end the run ----------
+
+    def refuse_control_writes(self, count=None):
+        """Every Quick Save is refused (the first `count` of them if given); the notebook is left untouched."""
+        original, state = self.transport.call, {"refused": 0}
+        def call(operation, **values):
+            if operation == "kernel_push" and values["no_run"] and (count is None or state["refused"] < count):
+                state["refused"] += 1
+                return {"rejected": True, "diagnostic": {"reason": "provider_rejected"}}
+            return original(operation, **values)
+        self.transport.call = call
+        return state
+
+    def test_a_refused_renewal_is_tried_again_instead_of_failing_while_the_lease_has_time(self):
+        self.provider.submit()
+        self.refuse_control_writes(count=1)
+        self.assertEqual(self.provider.control(), "deferred")
+        self.assertFalse(self.provider.ledger["control_pending"])
+        self.assertEqual(self.provider.ledger["control_rejections"], 1)
+        self.assertEqual(self.provider.ledger["last_failure"]["category"], "control_rejected")
+        self.assertEqual(self.provider.ledger["version"], 1)
+        self.assertIsNone(self.provider.control())  # The next attempt is accepted.
+        self.assertEqual(self.provider.ledger["control_rejections"], 0)
+        self.assertEqual(self.provider.ledger["confirmed_control_writes"], 1)
+
+    def test_a_refusal_is_only_tolerated_a_few_times_in_a_row(self):
+        self.provider.submit()
+        refused = self.refuse_control_writes()
+        results = []
+        for _ in range(3):
+            results.append(self.provider.control())
+        self.assertEqual(results, ["deferred"] * 3)
+        with self.assertRaises(ProviderError) as caught:
+            self.provider.control()
+        self.assertEqual(caught.exception.category, "control_rejected")
+        self.assertEqual(refused["refused"], 4)
+
+    def test_a_refusal_is_not_tolerated_when_the_lease_is_nearly_over(self):
+        now = [1000.0]
+        self.provider.clock = lambda: now[0]
+        self.provider.submit()
+        now[0] += 150  # Written with a 180 s lease: 30 s left, less than the margin.
+        self.refuse_control_writes()
+        with self.assertRaises(ProviderError) as caught:
+            self.provider.control()
+        self.assertEqual(caught.exception.category, "control_rejected")
+
+    def test_a_refused_stop_signal_is_never_tolerated(self):
+        self.provider.submit()
+        refused = self.refuse_control_writes()
+        with self.assertRaises(ProviderError) as caught:
+            self.provider.control(cancel=True)
+        self.assertEqual(caught.exception.category, "control_rejected")
+        self.assertEqual(refused["refused"], 1)
+
+    def test_run_goes_on_after_a_refused_renewal_and_asks_again_within_seconds(self):
+        elapsed = self.queued_clock()
+        self.provider.submit()
+        self.refuse_control_writes(count=1)
+        with self.assertRaises(TrainingCancelled):
+            self.provider.run(lambda _: None, lambda: elapsed[0] >= 1060)
+        self.assertNotEqual(self.provider.ledger.get("phase"), "needs_attention")
+        self.assertGreaterEqual(self.provider.ledger["confirmed_control_writes"], 1)
+        self.assertEqual(self.provider.ledger["control_rejections"], 0)
+        self.assertGreater(self.provider.ledger["lease_until"], 1060)
+
+    def test_run_still_fails_when_every_renewal_is_refused(self):
+        elapsed = self.queued_clock()
+        self.provider.submit()
+        self.refuse_control_writes()
+        with self.assertRaises(ProviderError) as caught:
+            self.provider.run(lambda _: None, lambda: elapsed[0] >= 5000)
+        self.assertEqual(caught.exception.category, "control_rejected")
+        self.assertLess(elapsed[0], 1120)  # Failed well before the 180 s lease ran out.
 
 
 if __name__ == "__main__":

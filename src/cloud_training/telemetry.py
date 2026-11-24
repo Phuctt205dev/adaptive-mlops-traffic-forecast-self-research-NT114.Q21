@@ -8,6 +8,15 @@ TIME_FIELDS = {"source_time", "source_clock", "source_elapsed_seconds"}
 RELAY_FIELDS = {"supervisor_relay_time", "worker_stream_time"}
 
 
+# Words that may describe WHY Kaggle refused a write. Only these ever leave the SDK process:
+# the refusal text itself can name notebooks, accounts or links and is never kept.
+HINT_WORDS = frozenset({
+    "running", "queued", "already", "version", "concurrent", "limit", "exceeded", "rate", "many", "requests",
+    "session", "active", "busy", "conflict", "wait", "again", "later", "permission", "denied", "quota", "gpu",
+    "internet", "disabled", "unique", "saving", "progress", "pending", "maximum", "reached", "locked",
+    "processing", "allowed", "title", "slug"})
+
+
 def rejection_summary(value):
     fallback = {"reason": "provider_rejected", "invalid_sources": [], "retryable": False}
     if not isinstance(value, dict):
@@ -22,8 +31,12 @@ def rejection_summary(value):
         return fallback
     if invalid:
         reason = "invalid_sources"
-    return {"reason": reason, "invalid_sources": sorted(set(invalid)),
-            "retryable": reason in {"rate_limit", "temporarily_unavailable"} and value.get("retryable") is True}
+    summary = {"reason": reason, "invalid_sources": sorted(set(invalid)),
+               "retryable": reason in {"rate_limit", "temporarily_unavailable"} and value.get("retryable") is True}
+    hint = value.get("hint")
+    if isinstance(hint, list) and 0 < len(hint) <= 8 and all(isinstance(word, str) and word in HINT_WORDS for word in hint):
+        summary["hint"] = sorted(set(hint))
+    return summary
 
 
 def source_timing(event):

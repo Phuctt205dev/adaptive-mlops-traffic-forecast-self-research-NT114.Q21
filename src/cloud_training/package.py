@@ -24,8 +24,9 @@ def configuration_digest(configuration):
 def kaggle_accelerator(configuration, branch):
     """Hardware a Kaggle notebook asks for. Tree work never needs a GPU.
 
-    Only LSTM/GRU follow the run's `neural_accelerator`; a run saved before that
-    setting existed has none, and keeps asking for a GPU as it always did.
+    Only LSTM/GRU follow the run's `neural_accelerator`. New requests default to cpu
+    in the API schema; a configuration saved before that setting existed has none and
+    keeps asking for the GPU it was created for, so no attempt changes hardware.
     """
     if branch == "tree":
         return "cpu"

@@ -53,10 +53,10 @@ export default function TrainingConfiguration({ value, onChange }) {
             {numberField("recurrent_batch_size", "Batch size")}
             <label htmlFor={`${prefix}-neural-accelerator`}>
               Kaggle hardware
-              <select id={`${prefix}-neural-accelerator`} value={value.neural_accelerator ?? "gpu"}
+              <select id={`${prefix}-neural-accelerator`} value={value.neural_accelerator ?? "cpu"}
                 onChange={(event) => update("neural_accelerator", event.target.value)}>
-                <option value="gpu">GPU (faster, may wait in Kaggle's queue)</option>
-                <option value="cpu">CPU (slower, starts right away)</option>
+                <option value="cpu">CPU (default · starts right away)</option>
+                <option value="gpu">GPU (may wait in Kaggle's queue)</option>
               </select>
             </label>
           </div>

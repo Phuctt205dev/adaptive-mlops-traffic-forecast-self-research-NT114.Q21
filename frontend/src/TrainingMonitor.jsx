@@ -121,7 +121,7 @@ function RunCard({ run, timezone, onDismiss, snapshotAgeSeconds, capabilities })
         <strong>{queueWait.branch.toUpperCase()} has waited {queueWait.minutes} minutes in Kaggle's queue.</strong>{" "}
         Kaggle does not say why or for how long, and this system cannot move it forward. Waiting is safe, but other training runs stay
         blocked. To give up, press Stop, then open kaggle.com, go to Your Work, find the notebook named <code>{queueWait.notebook}</code> and
-        cancel its session. Next time you can choose CPU for LSTM and GRU in Advanced training settings.
+        cancel its session.{queueWait.branch !== "tree" && " LSTM and GRU can run on CPU instead (Advanced training settings → Kaggle hardware), which never waits for a GPU."}
       </div>}
       {stopWait && <div className="training-location-note" role="status">
         <strong>Stop was sent, but Kaggle still has this notebook in its queue.</strong>{" "}

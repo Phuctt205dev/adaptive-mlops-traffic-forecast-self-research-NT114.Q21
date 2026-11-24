@@ -98,24 +98,27 @@ def main():
             tab("Datasets")
             page.get_by_role("button", name="Advanced", exact=True).click()
             select = page.get_by_label("Kaggle hardware")
-            expect(select).to_have_value("gpu")
+            expect(select).to_have_value("cpu")
             expect(page.locator(".training-config-advanced")).to_contain_text("Local training always uses the CPU")
-            train_from_modal("Kaggle GPU")
-            assert state["submitted"][-1]["neural_accelerator"] == "gpu"
-            cases.append("untouched form still asks for GPU")
-
-            page.reload()
-            page.get_by_role("button", name="Advanced", exact=True).click()
-            select.select_option("cpu")
             train_from_modal("Kaggle CPU")
             assert state["submitted"][-1]["neural_accelerator"] == "cpu"
             assert state["submitted"][-1]["training_backend"] == "kaggle"
             assert len(state["submitted"][-1]["selected_models"]) == 5
-            cases.append("choosing CPU is shown before starting and reaches the request")
+            cases.append("untouched form asks for CPU")
 
+            page.reload()
+            page.get_by_role("button", name="Advanced", exact=True).click()
+            select.select_option("gpu")
+            train_from_modal("Kaggle GPU")
+            assert state["submitted"][-1]["neural_accelerator"] == "gpu"
+            cases.append("choosing GPU is shown before starting and reaches the request")
+
+            page.reload()
+            page.get_by_role("button", name="Advanced", exact=True).click()
+            select.select_option("gpu")
             page.get_by_role("button", name="Expand training configuration").click()
             dialog = page.get_by_role("dialog")
-            expect(dialog.get_by_label("Kaggle hardware")).to_have_value("cpu")
+            expect(dialog.get_by_label("Kaggle hardware")).to_have_value("gpu")
             dialog.get_by_role("button", name="Done", exact=True).click()
             cases.append("the choice survives the expanded view")
 
@@ -148,7 +151,7 @@ def main():
                 if shown:
                     expect(card).to_contain_text(f"LSTM has waited {waited} minutes in Kaggle's queue")
                     expect(card).to_contain_text("traffic-train-0a1b2c3d111122223333444455556666")
-                    expect(card).to_contain_text("choose CPU for LSTM and GRU")
+                    expect(card).to_contain_text("LSTM and GRU can run on CPU instead")
                 else:
                     expect(card).to_contain_text("Queued on Kaggle")
                     expect(card).not_to_contain_text("has waited")

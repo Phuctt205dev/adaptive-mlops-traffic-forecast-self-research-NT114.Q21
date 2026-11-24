@@ -26,8 +26,8 @@ export function normalizeTrainingConfiguration(form) {
     }
     result[key] = value;
   }
-  // A plan from an older server has no hardware setting; that has always meant GPU.
-  result.neural_accelerator = form.neural_accelerator ?? "gpu";
+  // CPU is the default; a draft without the setting follows it.
+  result.neural_accelerator = form.neural_accelerator ?? "cpu";
   if (!["gpu", "cpu"].includes(result.neural_accelerator)) {
     throw new Error("Choose GPU or CPU for LSTM and GRU on Kaggle.");
   }

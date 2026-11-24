@@ -44,12 +44,15 @@ The tree controller runs its three algorithms sequentially; independent neural
 branches can overlap with tree work when resources permit. Each Job uses the
 same pure ML entrypoint, chronological CV, holdout ratio, random seed, neural
 parameters and SHAP policy as Kaggle. Local neural execution uses TensorFlow CPU;
-On Kaggle, LSTM/GRU use a GPU by default. Advanced → "Kaggle hardware" (request field
-`neural_accelerator`, `gpu` or `cpu`) lets an admin ask for a CPU notebook instead: it never
-waits for a GPU, and the notebook may use up to four cores instead of one. The choice is part
-of the stored, hashed run configuration. Tree work is always CPU, Local ignores the field, a run
-saved before the field existed keeps asking for a GPU, and automatic retrain keeps the hardware
-of the run it follows. A GPU request still fails on a machine without a GPU; a CPU request does not need one.
+On Kaggle, LSTM/GRU use a **CPU** notebook by default (since 24/11): it never waits for a GPU
+and may use up to four cores instead of one. Advanced → "Kaggle hardware" (request field
+`neural_accelerator`, `cpu` or `gpu`) lets an admin ask for a GPU instead, which can wait in
+Kaggle's queue. The choice is part of the stored, hashed run configuration. Tree work is always
+CPU and Local ignores the field. A configuration saved before the field existed keeps asking for
+the GPU it was created for; a retry or a replay of such an old request is validated like a new
+one and so gets the default. Automatic retrain keeps an explicit GPU choice of the run it follows
+and otherwise uses CPU. A GPU request still fails on a machine without a GPU; a CPU request does
+not need one.
 
 Local admission holds PostgreSQL advisory transaction lock `73918046701` while
 checking capacity and reserving one node. Existing Pending Jobs also reserve

@@ -205,7 +205,7 @@ def _training_configuration(training_run: TrainingRun, current_end_at: pd.Timest
         "recurrent_sequence_length": int(previous.get("recurrent_sequence_length") or 72),
         "recurrent_epochs": int(previous.get("recurrent_epochs") or 3),
         "recurrent_batch_size": int(previous.get("recurrent_batch_size") or 32),
-        "neural_accelerator": "cpu" if previous.get("neural_accelerator") == "cpu" else "gpu",
+        "neural_accelerator": "gpu" if previous.get("neural_accelerator") == "gpu" else "cpu",
         "final_test_ratio": float(previous.get("final_test_ratio") or 0.15),
         "trigger_source": "feature_drift",
         "drift_current_end": str(current_end_at),

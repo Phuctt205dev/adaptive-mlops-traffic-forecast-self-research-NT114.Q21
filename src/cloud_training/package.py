@@ -21,6 +21,20 @@ def configuration_digest(configuration):
                                      ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
 
+def kaggle_accelerator(configuration, branch):
+    """Hardware a Kaggle notebook asks for. Tree work never needs a GPU.
+
+    Only LSTM/GRU follow the run's `neural_accelerator`; a run saved before that
+    setting existed has none, and keeps asking for a GPU as it always did.
+    """
+    if branch == "tree":
+        return "cpu"
+    value = configuration.get("neural_accelerator", "gpu")
+    if value not in {"gpu", "cpu"}:
+        raise ValueError("Neural accelerator must be gpu or cpu.")
+    return value
+
+
 def validate_context(context):
     if not isinstance(context, dict) or set(context) != CONTEXT_KEYS:
         raise ValueError("Invalid execution context fields.")

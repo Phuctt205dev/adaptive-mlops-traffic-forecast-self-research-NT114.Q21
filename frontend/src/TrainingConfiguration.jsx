@@ -51,7 +51,16 @@ export default function TrainingConfiguration({ value, onChange }) {
             {numberField("recurrent_sequence_length", "Sequence length (hours)")}
             {numberField("recurrent_epochs", "Epoch limit per CV fold")}
             {numberField("recurrent_batch_size", "Batch size")}
+            <label htmlFor={`${prefix}-neural-accelerator`}>
+              Kaggle hardware
+              <select id={`${prefix}-neural-accelerator`} value={value.neural_accelerator ?? "gpu"}
+                onChange={(event) => update("neural_accelerator", event.target.value)}>
+                <option value="gpu">GPU (faster, may wait in Kaggle's queue)</option>
+                <option value="cpu">CPU (slower, starts right away)</option>
+              </select>
+            </label>
           </div>
+          <p className="training-config-hint">Applies to Kaggle only. Local training always uses the CPU, and tree models never need a GPU.</p>
           <p className="training-config-hint">Each CV fold can stop before this limit. Final training uses the median of the best epoch counts from CV.</p>
         </fieldset>
         <fieldset className="training-config-managed">

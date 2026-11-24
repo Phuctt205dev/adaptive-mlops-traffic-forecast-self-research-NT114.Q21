@@ -31,6 +31,10 @@ STOP_POLL_SECONDS = 15
 INPUT_PREPARATION_SECONDS = 600
 INPUT_ABSENCE_SECONDS = 15
 INPUT_UPLOAD_ATTEMPTS = 3
+CONTROL_READBACK_POLLS = 3
+CONTROL_READBACK_SECONDS = 2
+CONTROL_REREAD_SECONDS = 5
+CONTROL_GIVE_UP_MARGIN = 30
 
 
 class TrainingCancelled(ProviderError):
@@ -47,13 +51,17 @@ def transient(error):
         or error.http_status in {408, 429, 500, 502, 503, 504})
 
 
-def initial_ledger(snapshot, username):
+def initial_ledger(snapshot, username, accelerator=None):
     if not re.fullmatch(r"[a-zA-Z0-9_-]{3,50}", username):
         raise ValueError("Invalid Kaggle username.")
+    if accelerator is None:
+        accelerator = "cpu" if snapshot["context"]["branch"] == "tree" else "gpu"
+    if accelerator not in {"gpu", "cpu"}:
+        raise ValueError("Invalid Kaggle accelerator.")
     suffix = snapshot["context"]["attempt_id"].replace("-", "")
     reference, dataset_reference = username + "/traffic-train-" + suffix, username + "/traffic-input-" + suffix
     supervisor_configuration = source_configuration(render_notebook(snapshot, reference, dataset_reference))
-    return {"backend": "kaggle", "snapshot": copy.deepcopy(snapshot),
+    return {"backend": "kaggle", "snapshot": copy.deepcopy(snapshot), "accelerator": accelerator,
             "supervisor_configuration": supervisor_configuration,
             "reference": username + "/traffic-train-" + suffix,
             "dataset_reference": username + "/traffic-input-" + suffix,
@@ -220,12 +228,20 @@ class KaggleExecution:
             raise ProviderError("No exact notebook execution version was confirmed.")
         return self.ledger["reference"] + "/" + str(version)
 
+    def uses_gpu(self):
+        # An attempt journaled before the hardware choice existed has no entry
+        # and keeps what it was created with: GPU for LSTM/GRU, CPU for trees.
+        accelerator = self.ledger.get("accelerator")
+        if accelerator is None:
+            return self.ledger["snapshot"]["context"]["branch"] != "tree"
+        return accelerator == "gpu"
+
     def metadata(self):
         context = self.ledger["snapshot"]["context"]
         ref = self.ledger["reference"]
         return {"id": ref, "title": ref.split("/")[1], "code_file": "train.py",
                 "language": "python", "kernel_type": "script", "is_private": True,
-                "enable_gpu": context["branch"] != "tree", "enable_tpu": False, "enable_internet": True,
+                "enable_gpu": self.uses_gpu(), "enable_tpu": False, "enable_internet": True,
                 "dataset_sources": [self.ledger["dataset_reference"] + "/1"],
                 "competition_sources": [], "kernel_sources": [], "model_sources": []}
 
@@ -237,7 +253,7 @@ class KaggleExecution:
             render_notebook(snapshot, self.ledger["reference"], self.ledger["dataset_reference"], clock=self.clock()))
         sources = remote["dataset_data_sources"] or []
         if (config != expected or remote["ref"] != self.ledger["reference"] or remote["is_private"] is not True
-                or remote["enable_gpu"] is not (snapshot["context"]["branch"] != "tree")
+                or remote["enable_gpu"] is not self.uses_gpu()
                 or remote["enable_internet"] is not True or len(sources) != 1
                 or sources[0] not in {self.ledger["dataset_reference"], self.ledger["dataset_reference"] + "/1"}
                 or any(remote[key] for key in ("kernel_data_sources", "competition_data_sources", "model_data_sources"))):
@@ -456,17 +472,33 @@ class KaggleExecution:
             actual = self.verify_remote(remote)
             version = remote["current_version_number"]
             expected = response.get("version") if response and not response.get("rejected") else None
-            if (type(version) is int and version > base_version and actual == controlled
-                    and (expected is None or expected == version)):
+
+            def committed():
+                return (type(version) is int and version > base_version and actual == controlled
+                        and (expected is None or expected == version))
+            ambiguous = error is None or transient(error)
+            for _ in range(CONTROL_READBACK_POLLS if ambiguous and not committed() else 0):
+                # A reply that was lost or a read that lags can hide a write that
+                # did commit. Read again, never write again, before deciding.
+                self.sleep(CONTROL_READBACK_SECONDS)
+                remote = self.call("kernel_get", reference=self.ledger["reference"])
+                actual = self.verify_remote(remote)
+                version = remote["current_version_number"]
+                if committed():
+                    break
+            if committed():
                 self.save(control_pending=False, pending_control=None, control_version=version,
                           lease_until=pending["lease_until"], last_control_confirmed_at=self.timestamp(),
                           confirmed_control_writes=self.ledger.get("confirmed_control_writes", 0) + 1)
                 return
-            # Only an explicit transient refusal AND unchanged exact source/
-            # version permit one retry. A timeout may still commit: never retry it.
-            retryable = (error is not None and error.category == "control_rejected"
-                         and (error.diagnostic or {}).get("retryable") is True
-                         and version == base_version and actual == source
+            # One identical repeat is allowed only after reading back an exactly
+            # unchanged notebook: an explicit transient refusal, or a transient
+            # network failure that never produced a newer version. Nothing else
+            # writes this private source, so the repeat cannot overwrite anything.
+            refused = (error is not None and error.category == "control_rejected"
+                       and (error.diagnostic or {}).get("retryable") is True)
+            lost = error is not None and error.category != "control_rejected" and transient(error)
+            retryable = ((refused or lost) and version == base_version and actual == source
                          and self.clock() < pending["lease_until"] - 75)
             if attempt == 0 and retryable:
                 self.sleep(.5)
@@ -477,6 +509,25 @@ class KaggleExecution:
                 raise error
             raise ProviderError("The cooperative control write was not confirmed.",
                                 operation="kernel_get", category="control_unconfirmed")
+
+    def renew_lease(self, cancelled):
+        """True once the lease is written or confirmed.
+
+        An unconfirmed lease is only read again (never rewritten) while it still
+        has time, so one lost reply no longer strands the branch.
+        """
+        try:
+            self.reconnect(self.control, cancelled)
+            return True
+        except ProviderError as error:
+            pending = self.ledger.get("pending_control") if self.ledger.get("control_pending") else None
+            if (error.category == "control_unconfirmed" and pending
+                    and self.clock() < pending["lease_until"] - CONTROL_GIVE_UP_MARGIN):
+                if (self.ledger.get("last_failure") or {}).get("category") != "control_unconfirmed":
+                    self.save(last_failure={"operation": error.operation, "category": error.category,
+                                            "http_status": error.http_status})
+                return False
+            raise
 
     def status(self):
         state = self.call("status", reference=self.reference)["state"]
@@ -620,8 +671,10 @@ class KaggleExecution:
                 if self.clock() >= renewal:
                     # Do not Quick Save an execution already observed terminal.
                     # Schedule from the actual lease written, not from reply time.
-                    self.reconnect(self.control, cancelled)
-                    renewal = min(self.clock() + 45, self.ledger.get("lease_until", self.clock() + 180) - 90)
+                    if self.renew_lease(cancelled):
+                        renewal = min(self.clock() + 45, self.ledger.get("lease_until", self.clock() + 180) - 90)
+                    else:
+                        renewal = self.clock() + CONTROL_REREAD_SECONDS
                     self.drain(progress)
                     if renewal <= self.clock():
                         continue

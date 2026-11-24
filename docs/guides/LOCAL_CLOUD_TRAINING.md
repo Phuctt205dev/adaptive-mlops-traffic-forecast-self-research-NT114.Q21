@@ -44,7 +44,12 @@ The tree controller runs its three algorithms sequentially; independent neural
 branches can overlap with tree work when resources permit. Each Job uses the
 same pure ML entrypoint, chronological CV, holdout ratio, random seed, neural
 parameters and SHAP policy as Kaggle. Local neural execution uses TensorFlow CPU;
-Kaggle neural execution still requires a GPU.
+On Kaggle, LSTM/GRU use a GPU by default. Advanced → "Kaggle hardware" (request field
+`neural_accelerator`, `gpu` or `cpu`) lets an admin ask for a CPU notebook instead: it never
+waits for a GPU, and the notebook may use up to four cores instead of one. The choice is part
+of the stored, hashed run configuration. Tree work is always CPU, Local ignores the field, a run
+saved before the field existed keeps asking for a GPU, and automatic retrain keeps the hardware
+of the run it follows. A GPU request still fails on a machine without a GPU; a CPU request does not need one.
 
 Local admission holds PostgreSQL advisory transaction lock `73918046701` while
 checking capacity and reserving one node. Existing Pending Jobs also reserve
@@ -90,12 +95,22 @@ Restart recovery uses the persisted Job identities; it never silently refits a
 lost Job. Existing run/execution state remains visible to the delivery guard.
 
 Kaggle status/control read-back reconnects with bounded backoff and jitter.
-Ambiguous submit/control writes are reconciled rather than repeated. Download
+Ambiguous submit/control writes are reconciled rather than repeated. For a lease
+renewal (Quick Save, never a new run) whose reply was lost, the worker first reads the
+notebook again three times, since a write can commit late. Only if the notebook is
+exactly as before and the error was a transient network failure does it repeat the
+same write once, with identical content; any other change stops the repeat. An
+unconfirmed renewal is read again every few seconds until its lease is nearly over,
+instead of ending the branch at once. Download
 retry cleans only attempt-owned partial output and downloads the same version;
 it does not retrain. Native session cancellation is used at most once when the
 original SaveKernel response explicitly linked a session ID for this notebook;
 otherwise cooperative cancellation remains the fallback. Neither response to
 Cancel nor lease expiry is treated as proof of stop.
+
+Training Monitor labels a notebook queued on Kaggle with its wait. After 15 minutes it
+adds the notebook name to cancel on kaggle.com and points to the CPU option; Kaggle gives
+no reason or position, and the system cannot cancel a queued session itself.
 
 When the outcome remains unknown, the worker keeps the original attempt and
 execution fence in Needs attention. Airflow timeout does not convert that

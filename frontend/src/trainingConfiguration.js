@@ -26,6 +26,11 @@ export function normalizeTrainingConfiguration(form) {
     }
     result[key] = value;
   }
+  // A plan from an older server has no hardware setting; that has always meant GPU.
+  result.neural_accelerator = form.neural_accelerator ?? "gpu";
+  if (!["gpu", "cpu"].includes(result.neural_accelerator)) {
+    throw new Error("Choose GPU or CPU for LSTM and GRU on Kaggle.");
+  }
   const ratio = Number(form.final_test_ratio);
   if (!Number.isFinite(ratio) || ratio <= 0 || ratio >= 0.5) {
     throw new Error("Final test ratio must be greater than 0 and less than 0.5.");

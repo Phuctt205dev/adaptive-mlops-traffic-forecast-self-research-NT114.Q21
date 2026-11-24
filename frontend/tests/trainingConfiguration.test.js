@@ -7,6 +7,7 @@ const form = {
   cv_splits: "4", random_state: "0", recurrent_sequence_length: "48",
   recurrent_epochs: "7", recurrent_batch_size: "64", final_test_ratio: "0.25",
   artifact_root: "models/regions", model_role: "candidate", training_backend: "kaggle",
+  neural_accelerator: "gpu",
 };
 
 test("nondefault settings and dates survive conversion, including random seed zero", () => {
@@ -31,5 +32,15 @@ test("invalid settings fail instead of silently falling back to defaults", () =>
   };
   for (const [key, values] of Object.entries(invalid)) {
     for (const value of values) assert.throws(() => normalizeTrainingConfiguration({ ...form, [key]: value }), `${key}=${value}`);
+  }
+});
+
+test("LSTM and GRU hardware is GPU or CPU and anything else fails", () => {
+  assert.equal(normalizeTrainingConfiguration({ ...form, neural_accelerator: "cpu" }).neural_accelerator, "cpu");
+  assert.equal(normalizeTrainingConfiguration(form).neural_accelerator, "gpu");
+  const { neural_accelerator: _omitted, ...older } = form;
+  assert.equal(normalizeTrainingConfiguration(older).neural_accelerator, "gpu");
+  for (const value of ["", "tpu", "GPU"]) {
+    assert.throws(() => normalizeTrainingConfiguration({ ...form, neural_accelerator: value }), /GPU or CPU/, String(value));
   }
 });

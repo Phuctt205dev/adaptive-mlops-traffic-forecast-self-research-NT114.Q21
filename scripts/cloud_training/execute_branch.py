@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT))
 
 from src.cloud_training.artifacts import write_bundle
 from src.cloud_training.probe import canonical, sha256_file
-from src.cloud_training.package import configuration_digest
+from src.cloud_training.package import configuration_digest, kaggle_accelerator
 from src.training_progress import reporting, report, set_fold
 from src.cloud_training.errors import FAILURE_PREFIX, safe_failure
 
@@ -65,6 +65,16 @@ def prepare_runtime(job):
             importlib.invalidate_caches()
 
 
+def use_cpu_cores():
+    """A CPU notebook may use the cores Kaggle gave it (the supervisor starts every child with one thread)."""
+    cores = max(1, min(os.cpu_count() or 1, 4))
+    for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS", "TF_INTRA_OP_THREADS"):
+        os.environ[name] = str(cores)
+    os.environ["TF_NUM_INTRAOP_THREADS"] = str(cores)
+    os.environ["TF_INTER_OP_THREADS"] = str(2 if cores > 1 else 1)
+    os.environ["TF_NUM_INTEROP_THREADS"] = os.environ["TF_INTER_OP_THREADS"]
+
+
 def run(job, dataset, output):
     import time
     from datetime import UTC, datetime
@@ -93,9 +103,12 @@ def run(job, dataset, output):
             raise ValueError("A Local Job must identify one selected model in this branch.")
         selected = [model]
     if config.get("training_backend") == "kaggle" and branch in {"lstm", "gru"} and branch in selected:
-        import tensorflow as tf
-        if not tf.config.list_physical_devices("GPU"):
-            raise RuntimeError("The selected cloud GPU execution has no usable GPU.")
+        if kaggle_accelerator(config, branch) == "gpu":
+            import tensorflow as tf
+            if not tf.config.list_physical_devices("GPU"):
+                raise RuntimeError("The selected cloud GPU execution has no usable GPU.")
+        else:
+            use_cpu_cores()
 
     def progress(event):
         print(PREFIX + json.dumps({"context": context, "event": event}, allow_nan=False), flush=True)

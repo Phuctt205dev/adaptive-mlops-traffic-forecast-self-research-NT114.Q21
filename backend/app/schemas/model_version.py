@@ -88,8 +88,9 @@ class TrainingRunCreate(BaseModel):
     recurrent_sequence_length: int = Field(default=72, ge=1)
     recurrent_epochs: int = Field(default=3, ge=1)
     recurrent_batch_size: int = Field(default=32, ge=1)
-    # Hardware Kaggle gives LSTM/GRU. Local training is always CPU and ignores it.
-    neural_accelerator: Literal["gpu", "cpu"] = "gpu"
+    # Hardware Kaggle gives LSTM/GRU. CPU never waits in Kaggle's GPU queue (the default since
+    # 24/11); GPU stays selectable. Local training is always CPU and ignores it.
+    neural_accelerator: Literal["gpu", "cpu"] = "cpu"
     final_test_ratio: float = Field(default=0.15, gt=0, lt=0.5)
     trigger_source: str | None = None
     shap: dict = Field(default_factory=dict)

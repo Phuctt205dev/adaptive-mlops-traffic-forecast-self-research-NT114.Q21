@@ -38,8 +38,8 @@ test("invalid settings fail instead of silently falling back to defaults", () =>
 test("LSTM and GRU hardware is GPU or CPU and anything else fails", () => {
   assert.equal(normalizeTrainingConfiguration({ ...form, neural_accelerator: "cpu" }).neural_accelerator, "cpu");
   assert.equal(normalizeTrainingConfiguration(form).neural_accelerator, "gpu");
-  const { neural_accelerator: _omitted, ...older } = form;
-  assert.equal(normalizeTrainingConfiguration(older).neural_accelerator, "gpu");
+  const { neural_accelerator: _omitted, ...withoutChoice } = form;
+  assert.equal(normalizeTrainingConfiguration(withoutChoice).neural_accelerator, "cpu");
   for (const value of ["", "tpu", "GPU"]) {
     assert.throws(() => normalizeTrainingConfiguration({ ...form, neural_accelerator: value }), /GPU or CPU/, String(value));
   }

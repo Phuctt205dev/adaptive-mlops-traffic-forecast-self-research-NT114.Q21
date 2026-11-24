@@ -871,7 +871,7 @@ function DatasetManager({ selectedRegion, datasets, datasetsLoading = false, ref
     recurrent_sequence_length: 72,
     recurrent_epochs: 3,
     recurrent_batch_size: 32,
-    neural_accelerator: "gpu",
+    neural_accelerator: "cpu",
     final_test_ratio: 0.15,
   });
 
@@ -1259,7 +1259,7 @@ function TrainModelModal({
           </div>
           {backend !== "local" && <div>
             <span>LSTM/GRU hardware</span>
-            <strong>{trainForm.neural_accelerator === "cpu" ? "Kaggle CPU" : "Kaggle GPU"}</strong>
+            <strong>{trainForm.neural_accelerator === "gpu" ? "Kaggle GPU" : "Kaggle CPU"}</strong>
           </div>}
         </div>
 

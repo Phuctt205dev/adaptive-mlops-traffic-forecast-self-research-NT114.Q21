@@ -32,8 +32,11 @@ def request(**overrides):
 
 
 class ConfigurationTests(unittest.TestCase):
-    def test_gpu_stays_the_default_for_every_new_request(self):
-        self.assertEqual(request().model_dump(mode="json")["neural_accelerator"], "gpu")
+    def test_cpu_is_the_default_for_every_new_request(self):
+        self.assertEqual(request().model_dump(mode="json")["neural_accelerator"], "cpu")
+
+    def test_gpu_is_still_accepted_when_it_is_chosen(self):
+        self.assertEqual(request(neural_accelerator="gpu").neural_accelerator, "gpu")
 
     def test_cpu_is_accepted_and_anything_else_is_refused(self):
         self.assertEqual(request(neural_accelerator="cpu").neural_accelerator, "cpu")
@@ -47,11 +50,11 @@ class ConfigurationTests(unittest.TestCase):
         again = TrainingRunCreate.model_validate(stored).model_dump(mode="json")
         incoming = TrainingRunCreate.model_validate(request().model_dump(mode="json")).model_dump(mode="json")
         self.assertEqual(again, incoming)
-        self.assertEqual(again["neural_accelerator"], "gpu")
+        self.assertEqual(again["neural_accelerator"], "cpu")
 
-    def test_automatic_retrain_keeps_the_hardware_of_the_run_it_follows(self):
+    def test_automatic_retrain_keeps_an_explicit_choice_and_otherwise_uses_cpu(self):
         import pandas as pd
-        for previous, expected in (({}, "gpu"), ({"neural_accelerator": "cpu"}, "cpu"), ({"neural_accelerator": "gpu"}, "gpu")):
+        for previous, expected in (({}, "cpu"), ({"neural_accelerator": "cpu"}, "cpu"), ({"neural_accelerator": "gpu"}, "gpu")):
             with self.subTest(previous=previous):
                 run = SimpleNamespace(configuration_json={"selected_models": ["lstm", "gru"], **previous})
                 config = drift_monitoring._training_configuration(run, pd.Timestamp("2026-06-01"))
@@ -66,6 +69,12 @@ class AcceleratorChoiceTests(unittest.TestCase):
             self.assertEqual(kaggle_accelerator({}, branch), "gpu")
             self.assertEqual(kaggle_accelerator({"neural_accelerator": "gpu"}, branch), "gpu")
             self.assertEqual(kaggle_accelerator({"neural_accelerator": "cpu"}, branch), "cpu")
+
+    def test_a_configuration_stored_before_the_setting_existed_keeps_the_gpu_it_ran_on(self):
+        # The default for NEW requests is cpu, but an attempt already built from a
+        # configuration without the field must not change hardware under its feet.
+        for branch in ("lstm", "gru"):
+            self.assertEqual(kaggle_accelerator({}, branch), "gpu")
 
     def test_an_unknown_value_never_silently_becomes_gpu_or_cpu(self):
         with self.assertRaises(ValueError):

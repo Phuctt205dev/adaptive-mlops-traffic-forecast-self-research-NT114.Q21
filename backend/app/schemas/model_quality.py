@@ -11,11 +11,27 @@ class QualityPoint(BaseModel):
     prediction: float | None
     absolute_error: float | None
     label_source: Literal["observed", "synthetic", "unknown", "missing"]
+    # Added fields keep defaults so the older response shape stays valid.
+    percent_error: float | None = None
+    low_traffic: bool | None = None
+
+
+class QualityBaseline(BaseModel):
+    method: Literal["same_hour_last_week"]
+    lag_hours: int
+    paired_points: int
+    mae: float | None
+    model_mae: float | None
+    relative_change_percent: float | None
 
 
 class QualityMetrics(BaseModel):
     mae: float | None
     rmse: float | None
+    wape_percent: float | None = None
+    actual_mean: float | None = None
+    low_traffic_below: float | None = None
+    baseline: QualityBaseline | None = None
 
 
 class QualityCoverage(BaseModel):

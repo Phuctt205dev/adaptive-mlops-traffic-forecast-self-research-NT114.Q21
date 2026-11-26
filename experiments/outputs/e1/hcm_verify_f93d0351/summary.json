@@ -1,0 +1,386 @@
+{
+  "name": "hcm_verify_f93d0351",
+  "data_path": "data\\synthetic\\TrafficVolumeData_HCM_2015_2030_synthetic.csv",
+  "config": {
+    "train_start_date": "2024-01-01",
+    "train_end_date": "2026-01-01",
+    "cv_splits": 3,
+    "random_state": 42,
+    "selected_models": [
+      "random_forest_lag",
+      "xgboost_lag",
+      "lightgbm_lag",
+      "lstm",
+      "gru"
+    ],
+    "recurrent_sequence_length": 72,
+    "recurrent_epochs": 3,
+    "recurrent_batch_size": 32,
+    "final_test_ratio": 0.15,
+    "model_role": "candidate",
+    "shap": {
+      "enabled": false
+    }
+  },
+  "versions": {
+    "python": "3.11.9",
+    "numpy": "2.4.4",
+    "pandas": "3.0.2",
+    "scikit-learn": "1.8.0",
+    "xgboost": "3.2.0",
+    "lightgbm": "4.7.0",
+    "tensorflow": "2.21.0"
+  },
+  "seconds": {
+    "system_trees": 35.0,
+    "lstm": 88.3,
+    "gru": 123.5,
+    "lag_trees": 74.6
+  },
+  "models": {
+    "RandomForest": {
+      "path": "system: src.pipeline.run_pipeline (legacy_sklearn, weather + calendar features)",
+      "cv_MAE_mean": 341.5757,
+      "cv_MAE_std": 14.7775,
+      "cv_RMSE_mean": 547.7458,
+      "pipeline_test_MAE": 306.9402,
+      "test_MAE": 306.9402,
+      "test_RMSE": 485.4917,
+      "selected_by_pipeline": true,
+      "input_features": [
+        "is_holiday",
+        "air_pollution_index",
+        "humidity",
+        "wind_speed",
+        "wind_direction",
+        "visibility_in_miles",
+        "dew_point",
+        "temperature",
+        "rain_p_h",
+        "snow_p_h",
+        "clouds_all",
+        "hour",
+        "day",
+        "month",
+        "hour_sin",
+        "hour_cos",
+        "is_weekend",
+        "weather_type_Clouds",
+        "weather_type_Drizzle",
+        "weather_type_Fog",
+        "weather_type_Haze",
+        "weather_type_Mist",
+        "weather_type_Rain",
+        "weather_type_Thunderstorm"
+      ],
+      "development": [
+        "2024-01-01 00:00:00",
+        "2025-09-13 07:00:00",
+        14912
+      ],
+      "final_test": [
+        "2025-09-13 08:00:00",
+        "2025-12-31 23:00:00",
+        2632
+      ]
+    },
+    "XGBoost": {
+      "path": "system: src.pipeline.run_pipeline (legacy_sklearn, weather + calendar features)",
+      "cv_MAE_mean": 350.1634,
+      "cv_MAE_std": 18.9903,
+      "cv_RMSE_mean": 547.7004,
+      "pipeline_test_MAE": null,
+      "test_MAE": 305.582,
+      "test_RMSE": 479.2864,
+      "selected_by_pipeline": false,
+      "input_features": [
+        "is_holiday",
+        "air_pollution_index",
+        "humidity",
+        "wind_speed",
+        "wind_direction",
+        "visibility_in_miles",
+        "dew_point",
+        "temperature",
+        "rain_p_h",
+        "snow_p_h",
+        "clouds_all",
+        "hour",
+        "day",
+        "month",
+        "hour_sin",
+        "hour_cos",
+        "is_weekend",
+        "weather_type_Clouds",
+        "weather_type_Drizzle",
+        "weather_type_Fog",
+        "weather_type_Haze",
+        "weather_type_Mist",
+        "weather_type_Rain",
+        "weather_type_Thunderstorm"
+      ],
+      "development": [
+        "2024-01-01 00:00:00",
+        "2025-09-13 07:00:00",
+        14912
+      ],
+      "final_test": [
+        "2025-09-13 08:00:00",
+        "2025-12-31 23:00:00",
+        2632
+      ]
+    },
+    "LightGBM": {
+      "path": "system: src.pipeline.run_pipeline (legacy_sklearn, weather + calendar features)",
+      "cv_MAE_mean": 346.1207,
+      "cv_MAE_std": 20.3861,
+      "cv_RMSE_mean": 545.702,
+      "pipeline_test_MAE": null,
+      "test_MAE": 307.7463,
+      "test_RMSE": 471.9811,
+      "selected_by_pipeline": false,
+      "input_features": [
+        "is_holiday",
+        "air_pollution_index",
+        "humidity",
+        "wind_speed",
+        "wind_direction",
+        "visibility_in_miles",
+        "dew_point",
+        "temperature",
+        "rain_p_h",
+        "snow_p_h",
+        "clouds_all",
+        "hour",
+        "day",
+        "month",
+        "hour_sin",
+        "hour_cos",
+        "is_weekend",
+        "weather_type_Clouds",
+        "weather_type_Drizzle",
+        "weather_type_Fog",
+        "weather_type_Haze",
+        "weather_type_Mist",
+        "weather_type_Rain",
+        "weather_type_Thunderstorm"
+      ],
+      "development": [
+        "2024-01-01 00:00:00",
+        "2025-09-13 07:00:00",
+        14912
+      ],
+      "final_test": [
+        "2025-09-13 08:00:00",
+        "2025-12-31 23:00:00",
+        2632
+      ]
+    },
+    "_pipeline_seconds": 25.8,
+    "LSTM": {
+      "path": "system: train_region_recurrent_candidate",
+      "cv_MAE_mean": 512.67,
+      "cv_MAE_std": 170.5577,
+      "cv_RMSE_mean": 689.9019,
+      "test_MAE": 319.7594,
+      "test_RMSE": 453.5013,
+      "folds": [
+        {
+          "MAE": 751.799,
+          "RMSE": 956.9213,
+          "MAPE": 273.6005,
+          "WAPE": 20.2422,
+          "R2": 0.809786
+        },
+        {
+          "MAE": 420.4523,
+          "RMSE": 591.1928,
+          "MAPE": 19.6653,
+          "WAPE": 11.7864,
+          "R2": 0.927534
+        },
+        {
+          "MAE": 365.7586,
+          "RMSE": 521.5917,
+          "MAPE": 3.410677401093365e+17,
+          "WAPE": 9.8421,
+          "R2": 0.945741
+        }
+      ],
+      "development": {
+        "rows": 14912,
+        "start": "2024-01-01T00:00:00",
+        "end": "2025-09-13T07:00:00"
+      },
+      "final_test": {
+        "rows": 2632,
+        "start": "2025-09-13T08:00:00",
+        "end": "2025-12-31T23:00:00"
+      }
+    },
+    "GRU": {
+      "path": "system: train_region_recurrent_candidate",
+      "cv_MAE_mean": 458.643,
+      "cv_MAE_std": 113.2101,
+      "cv_RMSE_mean": 611.8341,
+      "test_MAE": 328.4709,
+      "test_RMSE": 479.3708,
+      "folds": [
+        {
+          "MAE": 615.947,
+          "RMSE": 784.9531,
+          "MAPE": 234.7887,
+          "WAPE": 16.5844,
+          "R2": 0.87201
+        },
+        {
+          "MAE": 405.8056,
+          "RMSE": 553.6361,
+          "MAPE": 20.7026,
+          "WAPE": 11.3758,
+          "R2": 0.936449
+        },
+        {
+          "MAE": 354.1765,
+          "RMSE": 496.913,
+          "MAPE": 2.9793217064209734e+17,
+          "WAPE": 9.5304,
+          "R2": 0.950754
+        }
+      ],
+      "development": {
+        "rows": 14912,
+        "start": "2024-01-01T00:00:00",
+        "end": "2025-09-13T07:00:00"
+      },
+      "final_test": {
+        "rows": 2632,
+        "start": "2025-09-13T08:00:00",
+        "end": "2025-12-31T23:00:00"
+      }
+    },
+    "RandomForest (lag)": {
+      "path": "not used by the website: train_region_tree_lag_candidates (lag/rolling features)",
+      "cv_MAE_mean": 254.9407,
+      "cv_MAE_std": 6.7443,
+      "cv_RMSE_mean": 410.4865,
+      "test_MAE": 229.3453,
+      "test_RMSE": 377.8966,
+      "folds": [
+        {
+          "MAE": 258.3952,
+          "RMSE": 397.8472,
+          "MAPE": 153.4263,
+          "WAPE": 6.9573,
+          "R2": 0.967121
+        },
+        {
+          "MAE": 260.9126,
+          "RMSE": 421.1146,
+          "MAPE": 9.2821,
+          "WAPE": 7.3141,
+          "R2": 0.963232
+        },
+        {
+          "MAE": 245.5142,
+          "RMSE": 412.4977,
+          "MAPE": 4.4870735429009645e+17,
+          "WAPE": 6.6065,
+          "R2": 0.966065
+        }
+      ],
+      "development": {
+        "rows": 14912,
+        "start": "2024-01-01T00:00:00",
+        "end": "2025-09-13T07:00:00"
+      },
+      "final_test": {
+        "rows": 2632,
+        "start": "2025-09-13T08:00:00",
+        "end": "2025-12-31T23:00:00"
+      }
+    },
+    "XGBoost (lag)": {
+      "path": "not used by the website: train_region_tree_lag_candidates (lag/rolling features)",
+      "cv_MAE_mean": 242.597,
+      "cv_MAE_std": 5.9301,
+      "cv_RMSE_mean": 379.6725,
+      "test_MAE": 224.2528,
+      "test_RMSE": 367.0485,
+      "folds": [
+        {
+          "MAE": 242.9725,
+          "RMSE": 363.2801,
+          "MAPE": 140.0446,
+          "WAPE": 6.5421,
+          "R2": 0.972586
+        },
+        {
+          "MAE": 249.6648,
+          "RMSE": 395.4702,
+          "MAPE": 9.2417,
+          "WAPE": 6.9987,
+          "R2": 0.967573
+        },
+        {
+          "MAE": 235.1537,
+          "RMSE": 380.2672,
+          "MAPE": 3.864574190135326e+17,
+          "WAPE": 6.3277,
+          "R2": 0.97116
+        }
+      ],
+      "development": {
+        "rows": 14912,
+        "start": "2024-01-01T00:00:00",
+        "end": "2025-09-13T07:00:00"
+      },
+      "final_test": {
+        "rows": 2632,
+        "start": "2025-09-13T08:00:00",
+        "end": "2025-12-31T23:00:00"
+      }
+    },
+    "LightGBM (lag)": {
+      "path": "not used by the website: train_region_tree_lag_candidates (lag/rolling features)",
+      "cv_MAE_mean": 245.2723,
+      "cv_MAE_std": 7.3684,
+      "cv_RMSE_mean": 379.0992,
+      "test_MAE": 229.015,
+      "test_RMSE": 372.6074,
+      "folds": [
+        {
+          "MAE": 250.4713,
+          "RMSE": 371.7562,
+          "MAPE": 141.1435,
+          "WAPE": 6.744,
+          "R2": 0.971292
+        },
+        {
+          "MAE": 250.4939,
+          "RMSE": 393.7947,
+          "MAPE": 9.379,
+          "WAPE": 7.022,
+          "R2": 0.967848
+        },
+        {
+          "MAE": 234.8518,
+          "RMSE": 371.7466,
+          "MAPE": 3.211314771053422e+17,
+          "WAPE": 6.3196,
+          "R2": 0.972438
+        }
+      ],
+      "development": {
+        "rows": 14912,
+        "start": "2024-01-01T00:00:00",
+        "end": "2025-09-13T07:00:00"
+      },
+      "final_test": {
+        "rows": 2632,
+        "start": "2025-09-13T08:00:00",
+        "end": "2025-12-31T23:00:00"
+      }
+    }
+  }
+}

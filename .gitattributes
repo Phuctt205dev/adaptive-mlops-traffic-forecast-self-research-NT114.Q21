@@ -3,3 +3,7 @@
 *.py text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
+*.csv text eol=lf
+data/**/*.json text eol=lf
+experiments/**/*.ipynb text eol=lf
+experiments/**/*.json text eol=lf

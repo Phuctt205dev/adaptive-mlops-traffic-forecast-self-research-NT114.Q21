@@ -22,6 +22,10 @@ from src.time_series_inference import InsufficientHistoryError
 MAX_HOURS = 336
 RECENT_HOURS = (24, 168, 336)
 CACHE_SECONDS = 60
+# A "low traffic" hour has fewer than a quarter of the window's mean actual
+# vehicles; its percent error looks large even when the vehicle error is small.
+LOW_TRAFFIC_SHARE = 0.25
+BASELINE_LAG_HOURS = 168  # Naive comparison: the same wall-clock hour one week earlier.
 _reports = OrderedDict()
 _evaluation_lock = threading.Lock()
 
@@ -121,6 +125,54 @@ def _predict_points(model_version, training_run, dataset, rows):
             for when, value in zip(rows["date_time"], values)}
 
 
+def _mean(values):
+    return math.fsum(values) / len(values) if values else None
+
+
+def _error_share(points, frame, timeline):
+    """Add percent views of the same pairs used by MAE/RMSE. Mutates points.
+
+    WAPE = total |error| / total actual traffic. Per-hour percent is relative
+    to that hour's actual value, so it is undefined when actual traffic is 0.
+    """
+    paired = [point for point in points if point["absolute_error"] is not None]
+    actual_total = math.fsum(point["reference"] for point in paired)
+    actual_mean = _mean([point["reference"] for point in paired])
+    low_below = actual_mean * LOW_TRAFFIC_SHARE if actual_mean is not None else None
+    for point in points:
+        reference, error = point["reference"], point["absolute_error"]
+        point["percent_error"] = error / reference * 100 if error is not None and reference > 0 else None
+        point["low_traffic"] = (reference < low_below
+                                if reference is not None and low_below is not None else None)
+
+    # Training rows are allowed here: last week's value is known before the forecast hour.
+    last_week = dict(zip(frame["date_time"], frame["traffic_volume"]))
+    lag = pd.Timedelta(hours=BASELINE_LAG_HOURS)
+    model_errors, baseline_errors = [], []
+    for when, point in zip(timeline, points):
+        if point["absolute_error"] is None:
+            continue
+        past = _number(last_week.get(when - lag))
+        if past is None or past < 0:
+            continue
+        model_errors.append(point["absolute_error"])
+        baseline_errors.append(abs(point["reference"] - past))
+    baseline_mae, model_mae = _mean(baseline_errors), _mean(model_errors)
+    return {
+        "wape_percent": math.fsum(point["absolute_error"] for point in paired) / actual_total * 100
+                        if actual_total > 0 else None,
+        "actual_mean": actual_mean,
+        "low_traffic_below": low_below,
+        "baseline": {
+            "method": "same_hour_last_week", "lag_hours": BASELINE_LAG_HOURS,
+            "paired_points": len(baseline_errors), "mae": baseline_mae, "model_mae": model_mae,
+            # Negative means the model has a smaller error than last week's value.
+            "relative_change_percent": (model_mae - baseline_mae) / baseline_mae * 100
+                                       if baseline_mae else None,
+        },
+    }
+
+
 def _recent_start(timezone, now, hours):
     return _local_time(now, timezone).floor("h") - pd.Timedelta(hours=hours)
 
@@ -188,7 +240,8 @@ def _build_report(region, model, training, dataset, frame, mode, start_at, hours
                        "prediction": value, "absolute_error": error, "label_source": source})
 
     errors = [point["absolute_error"] for point in points if point["absolute_error"] is not None]
-    warnings = ["Predictions are recalculated with the active model and historical dataset inputs."]
+    error_share = _error_share(points, frame, timeline)
+    warnings =["Predictions are recalculated with the active model and historical dataset inputs."]
     if mode == "reference":
         warnings.append("MAE/RMSE compare predictions with traffic_volume in the dataset at the same hour.")
     if mode == "observed" and counts["unknown"]:
@@ -229,7 +282,8 @@ def _build_report(region, model, training, dataset, frame, mode, start_at, hours
         "available_end_at": as_iso(production.date_time.max()) if not production.empty else None,
         "training_end_at": as_iso(training_end),
         "metrics": {"mae": math.fsum(error / len(errors) for error in errors) if errors else None,
-                    "rmse": math.hypot(*(error / math.sqrt(len(errors)) for error in errors)) if errors else None},
+                    "rmse": math.hypot(*(error / math.sqrt(len(errors)) for error in errors)) if errors else None,
+                    **error_share},
         "coverage": {"requested_points": len(timeline), "dataset_points": len(rows),
                      "predicted_points": sum(point["prediction"] is not None for point in points),
                      "paired_points": len(errors), "observed_labels": counts["observed"],

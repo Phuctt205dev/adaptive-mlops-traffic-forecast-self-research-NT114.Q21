@@ -1,0 +1,713 @@
+{
+ "I-94 Minneapolis": {
+  "dataset_type": "thật",
+  "model": "RandomForest",
+  "test_start": "2018-01-19 16:00:00",
+  "test_end": "2018-09-30 23:00:00",
+  "whole_test": {
+   "paired_hours": 6086,
+   "mae": 225.814753532698,
+   "rmse": 373.4543928105288,
+   "wape_percent": 6.757209611924318,
+   "actual_mean": 3341.834373973053,
+   "low_traffic_below": 835.4585934932633,
+   "baseline": {
+    "method": "same_hour_last_week",
+    "lag_hours": 168,
+    "paired_points": 6067,
+    "mae": 322.2052085050272,
+    "model_mae": 226.20821493324542,
+    "relative_change_percent": -29.793743563982144
+   },
+   "low_traffic_hours": 1084,
+   "low_traffic_share_of_error_percent": 5.901352184664733,
+   "median_percent_error_low": 9.249113389334042,
+   "median_percent_error_normal": 4.617056750750881
+  },
+  "weekly": {
+   "weeks": 36,
+   "mae_min_median_max": [
+    151.7757142857143,
+    194.04136904761904,
+    558.5814880952381
+   ],
+   "wape_min_median_max": [
+    4.497446869306166,
+    5.745966558365694,
+    18.981269885576395
+   ],
+   "weeks_worse_than_last_week": 8,
+   "weeks_with_baseline": 36,
+   "change_min_median_max": [
+    -74.65176433935656,
+    -14.279500834688129,
+    47.36810445325247
+   ]
+  },
+  "weeks": [
+   {
+    "start": "2018-01-19 16:00:00",
+    "paired_hours": 168,
+    "mae": 387.3548214285714,
+    "wape_percent": 12.865954127841803,
+    "relative_change_percent": -16.409453778811912
+   },
+   {
+    "start": "2018-01-26 16:00:00",
+    "paired_hours": 167,
+    "mae": 265.5325149700599,
+    "wape_percent": 7.728897309243528,
+    "relative_change_percent": -49.04636438847268
+   },
+   {
+    "start": "2018-02-02 16:00:00",
+    "paired_hours": 168,
+    "mae": 235.9030357142857,
+    "wape_percent": 7.299020393279222,
+    "relative_change_percent": -32.487458678390084
+   },
+   {
+    "start": "2018-02-09 16:00:00",
+    "paired_hours": 168,
+    "mae": 249.04630952380953,
+    "wape_percent": 7.258155058877408,
+    "relative_change_percent": -26.698470540829383
+   },
+   {
+    "start": "2018-02-16 16:00:00",
+    "paired_hours": 168,
+    "mae": 227.83529761904762,
+    "wape_percent": 7.315854257574108,
+    "relative_change_percent": -42.34711030109503
+   },
+   {
+    "start": "2018-02-23 16:00:00",
+    "paired_hours": 168,
+    "mae": 222.81660714285715,
+    "wape_percent": 6.779594128353965,
+    "relative_change_percent": -48.9259537193691
+   },
+   {
+    "start": "2018-03-02 16:00:00",
+    "paired_hours": 168,
+    "mae": 318.6054761904762,
+    "wape_percent": 9.882668773956265,
+    "relative_change_percent": -25.94568270175292
+   },
+   {
+    "start": "2018-03-09 16:00:00",
+    "paired_hours": 164,
+    "mae": 174.39682926829266,
+    "wape_percent": 4.94738499061589,
+    "relative_change_percent": -56.009166974283254
+   },
+   {
+    "start": "2018-03-16 16:00:00",
+    "paired_hours": 168,
+    "mae": 184.05678571428572,
+    "wape_percent": 5.2809759413314845,
+    "relative_change_percent": 6.616710092061844
+   },
+   {
+    "start": "2018-03-23 16:00:00",
+    "paired_hours": 161,
+    "mae": 208.63770186335407,
+    "wape_percent": 5.80675257054744,
+    "relative_change_percent": -3.2610373527632888
+   },
+   {
+    "start": "2018-03-30 16:00:00",
+    "paired_hours": 168,
+    "mae": 296.341369047619,
+    "wape_percent": 9.36045341992107,
+    "relative_change_percent": -34.06819490379337
+   },
+   {
+    "start": "2018-04-06 16:00:00",
+    "paired_hours": 168,
+    "mae": 182.95630952380955,
+    "wape_percent": 5.299698260254841,
+    "relative_change_percent": -58.806325805803105
+   },
+   {
+    "start": "2018-04-13 16:00:00",
+    "paired_hours": 168,
+    "mae": 558.5814880952381,
+    "wape_percent": 18.981269885576395,
+    "relative_change_percent": -15.464791143060467
+   },
+   {
+    "start": "2018-04-20 16:00:00",
+    "paired_hours": 168,
+    "mae": 184.03422619047618,
+    "wape_percent": 5.164190447556769,
+    "relative_change_percent": -74.65176433935656
+   },
+   {
+    "start": "2018-04-27 16:00:00",
+    "paired_hours": 168,
+    "mae": 188.11363095238093,
+    "wape_percent": 5.319113949190597,
+    "relative_change_percent": 47.36810445325247
+   },
+   {
+    "start": "2018-05-04 16:00:00",
+    "paired_hours": 167,
+    "mae": 181.1062874251497,
+    "wape_percent": 5.224890690133521,
+    "relative_change_percent": -1.3221859706362211
+   },
+   {
+    "start": "2018-05-11 16:00:00",
+    "paired_hours": 168,
+    "mae": 180.18839285714284,
+    "wape_percent": 5.206109062641883,
+    "relative_change_percent": -12.670337653280662
+   },
+   {
+    "start": "2018-05-18 16:00:00",
+    "paired_hours": 168,
+    "mae": 209.34482142857144,
+    "wape_percent": 6.247001273559519,
+    "relative_change_percent": -0.9437262357414452
+   },
+   {
+    "start": "2018-05-25 16:00:00",
+    "paired_hours": 168,
+    "mae": 261.83767857142857,
+    "wape_percent": 8.340107614952334,
+    "relative_change_percent": -36.41317451827867
+   },
+   {
+    "start": "2018-06-01 16:00:00",
+    "paired_hours": 167,
+    "mae": 180.96443113772455,
+    "wape_percent": 5.146156269422994,
+    "relative_change_percent": -59.321245894578155
+   },
+   {
+    "start": "2018-06-08 16:00:00",
+    "paired_hours": 168,
+    "mae": 181.18607142857144,
+    "wape_percent": 5.373546468007732,
+    "relative_change_percent": -10.682049160954863
+   },
+   {
+    "start": "2018-06-15 16:00:00",
+    "paired_hours": 168,
+    "mae": 194.93613095238095,
+    "wape_percent": 5.797192856991128,
+    "relative_change_percent": 2.6526345484750666
+   },
+   {
+    "start": "2018-06-22 16:00:00",
+    "paired_hours": 168,
+    "mae": 176.91535714285712,
+    "wape_percent": 5.1117359943038165,
+    "relative_change_percent": -13.094210526315791
+   },
+   {
+    "start": "2018-06-29 16:00:00",
+    "paired_hours": 168,
+    "mae": 334.6825595238095,
+    "wape_percent": 11.274580261197546,
+    "relative_change_percent": -41.802169480297685
+   },
+   {
+    "start": "2018-07-06 16:00:00",
+    "paired_hours": 168,
+    "mae": 163.58958333333334,
+    "wape_percent": 4.925304257908198,
+    "relative_change_percent": -69.74831586826348
+   },
+   {
+    "start": "2018-07-13 16:00:00",
+    "paired_hours": 168,
+    "mae": 206.01916666666665,
+    "wape_percent": 6.155195808710157,
+    "relative_change_percent": 46.78210347752329
+   },
+   {
+    "start": "2018-07-20 16:00:00",
+    "paired_hours": 168,
+    "mae": 165.37113095238092,
+    "wape_percent": 4.829571233626825,
+    "relative_change_percent": 25.825860507246368
+   },
+   {
+    "start": "2018-07-27 16:00:00",
+    "paired_hours": 168,
+    "mae": 156.6307738095238,
+    "wape_percent": 4.715004748338082,
+    "relative_change_percent": -6.04502445817119
+   },
+   {
+    "start": "2018-08-03 16:00:00",
+    "paired_hours": 165,
+    "mae": 184.98296969696972,
+    "wape_percent": 5.5604178394262185,
+    "relative_change_percent": 18.426997245179084
+   },
+   {
+    "start": "2018-08-10 16:00:00",
+    "paired_hours": 168,
+    "mae": 151.7757142857143,
+    "wape_percent": 4.497446869306166,
+    "relative_change_percent": -5.3348424897275875
+   },
+   {
+    "start": "2018-08-17 16:00:00",
+    "paired_hours": 167,
+    "mae": 283.6834131736527,
+    "wape_percent": 8.157282302318816,
+    "relative_change_percent": 42.88554107853782
+   },
+   {
+    "start": "2018-08-24 16:00:00",
+    "paired_hours": 168,
+    "mae": 243.0965476190476,
+    "wape_percent": 7.018679141196022,
+    "relative_change_percent": 15.711588615489273
+   },
+   {
+    "start": "2018-08-31 16:00:00",
+    "paired_hours": 168,
+    "mae": 229.7263095238095,
+    "wape_percent": 7.197744854493505,
+    "relative_change_percent": -38.06823178265963
+   },
+   {
+    "start": "2018-09-07 16:00:00",
+    "paired_hours": 168,
+    "mae": 193.14660714285714,
+    "wape_percent": 5.69474025974026,
+    "relative_change_percent": -47.6144942042556
+   },
+   {
+    "start": "2018-09-14 16:00:00",
+    "paired_hours": 168,
+    "mae": 183.97559523809525,
+    "wape_percent": 5.535994469002773,
+    "relative_change_percent": -5.526653625137541
+   },
+   {
+    "start": "2018-09-21 16:00:00",
+    "paired_hours": 168,
+    "mae": 183.06958333333336,
+    "wape_percent": 5.408506754546702,
+    "relative_change_percent": -3.7260063857759818
+   }
+  ]
+ },
+ "Glasgow GD1351_R": {
+  "dataset_type": "thật",
+  "model": "LSTM",
+  "test_start": "2023-02-17 00:00:00",
+  "test_end": "2023-09-30 23:00:00",
+  "whole_test": {
+   "paired_hours": 5021,
+   "mae": 27.80960850726947,
+   "rmse": 35.44957218847664,
+   "wape_percent": 11.167266967991049,
+   "actual_mean": 249.0278828918542,
+   "low_traffic_below": 62.25697072296355,
+   "baseline": {
+    "method": "same_hour_last_week",
+    "lag_hours": 168,
+    "paired_points": 4783,
+    "mae": 19.890654401003555,
+    "model_mae": 27.877661896299397,
+    "relative_change_percent": 40.15457377255958
+   },
+   "low_traffic_hours": 24,
+   "low_traffic_share_of_error_percent": 0.9294847635920341,
+   "median_percent_error_low": 93.30315858815874,
+   "median_percent_error_normal": 9.327888446215143
+  },
+  "weekly": {
+   "weeks": 30,
+   "mae_min_median_max": [
+    24.519643035714285,
+    27.905839226190473,
+    31.289210961538462
+   ],
+   "wape_min_median_max": [
+    10.210815553327791,
+    11.30638064823432,
+    12.137330769609049
+   ],
+   "weeks_worse_than_last_week": 27,
+   "weeks_with_baseline": 30,
+   "change_min_median_max": [
+    -25.7061687450671,
+    44.08498472156579,
+    114.82531295399517
+   ]
+  },
+  "weeks": [
+   {
+    "start": "2023-02-17 00:00:00",
+    "paired_hours": 168,
+    "mae": 26.224351773809524,
+    "wape_percent": 10.719182253473152,
+    "relative_change_percent": 34.11540633181127
+   },
+   {
+    "start": "2023-02-24 00:00:00",
+    "paired_hours": 168,
+    "mae": 27.345328392857144,
+    "wape_percent": 10.696442687839067,
+    "relative_change_percent": 38.37395090361448
+   },
+   {
+    "start": "2023-03-03 00:00:00",
+    "paired_hours": 168,
+    "mae": 28.92383455952381,
+    "wape_percent": 11.740043986470162,
+    "relative_change_percent": 44.490163722866505
+   },
+   {
+    "start": "2023-03-10 00:00:00",
+    "paired_hours": 168,
+    "mae": 28.16486369047619,
+    "wape_percent": 11.571770848618245,
+    "relative_change_percent": 40.23998518079432
+   },
+   {
+    "start": "2023-03-17 00:00:00",
+    "paired_hours": 168,
+    "mae": 26.178928738095237,
+    "wape_percent": 10.628211082380803,
+    "relative_change_percent": 61.51524157179582
+   },
+   {
+    "start": "2023-03-24 00:00:00",
+    "paired_hours": 168,
+    "mae": 27.632766130952383,
+    "wape_percent": 11.126754973395332,
+    "relative_change_percent": -20.358471264367807
+   },
+   {
+    "start": "2023-03-31 00:00:00",
+    "paired_hours": 168,
+    "mae": 29.382454904761904,
+    "wape_percent": 12.137330769609049,
+    "relative_change_percent": 27.354293704850363
+   },
+   {
+    "start": "2023-04-07 00:00:00",
+    "paired_hours": 168,
+    "mae": 26.84647868452381,
+    "wape_percent": 11.687505620627107,
+    "relative_change_percent": 37.088401793313096
+   },
+   {
+    "start": "2023-04-14 00:00:00",
+    "paired_hours": 168,
+    "mae": 27.07259361309524,
+    "wape_percent": 11.676711065184463,
+    "relative_change_percent": -18.651480468610263
+   },
+   {
+    "start": "2023-04-21 00:00:00",
+    "paired_hours": 133,
+    "mae": 28.309859909774435,
+    "wape_percent": 11.37663575054387,
+    "relative_change_percent": -25.7061687450671
+   },
+   {
+    "start": "2023-04-28 00:00:00",
+    "paired_hours": 168,
+    "mae": 28.870996607142857,
+    "wape_percent": 11.278519776770143,
+    "relative_change_percent": 2.8174144364385008
+   },
+   {
+    "start": "2023-05-05 00:00:00",
+    "paired_hours": 168,
+    "mae": 29.037847619047618,
+    "wape_percent": 11.602155682926249,
+    "relative_change_percent": 75.98695526695526
+   },
+   {
+    "start": "2023-05-12 00:00:00",
+    "paired_hours": 156,
+    "mae": 31.289210961538462,
+    "wape_percent": 11.86003719992225,
+    "relative_change_percent": 35.85073504035627
+   },
+   {
+    "start": "2023-05-19 00:00:00",
+    "paired_hours": 168,
+    "mae": 29.30965972619048,
+    "wape_percent": 11.619290277974422,
+    "relative_change_percent": 59.90009604278078
+   },
+   {
+    "start": "2023-05-26 00:00:00",
+    "paired_hours": 168,
+    "mae": 28.350657827380953,
+    "wape_percent": 11.264895615051678,
+    "relative_change_percent": 48.33106555590162
+   },
+   {
+    "start": "2023-06-02 00:00:00",
+    "paired_hours": 168,
+    "mae": 26.535296863095237,
+    "wape_percent": 10.665669481063235,
+    "relative_change_percent": 26.358556490929697
+   },
+   {
+    "start": "2023-06-09 00:00:00",
+    "paired_hours": 168,
+    "mae": 29.341295529761904,
+    "wape_percent": 11.700302988369334,
+    "relative_change_percent": 105.47468315964986
+   },
+   {
+    "start": "2023-06-16 00:00:00",
+    "paired_hours": 154,
+    "mae": 29.694802798701296,
+    "wape_percent": 11.371660692793553,
+    "relative_change_percent": 100.83441506368025
+   },
+   {
+    "start": "2023-06-23 00:00:00",
+    "paired_hours": 168,
+    "mae": 28.857754017857143,
+    "wape_percent": 11.714637368611816,
+    "relative_change_percent": 60.33034644128112
+   },
+   {
+    "start": "2023-06-30 00:00:00",
+    "paired_hours": 168,
+    "mae": 24.519643035714285,
+    "wape_percent": 10.289503996602885,
+    "relative_change_percent": 43.67980572026507
+   },
+   {
+    "start": "2023-07-07 00:00:00",
+    "paired_hours": 133,
+    "mae": 26.683565187969926,
+    "wape_percent": 11.466975249604188,
+    "relative_change_percent": 114.82531295399517
+   },
+   {
+    "start": "2023-07-28 00:00:00",
+    "paired_hours": 168,
+    "mae": 26.80414363095238,
+    "wape_percent": 10.632797643503105,
+    "relative_change_percent": 11.575132094943234
+   },
+   {
+    "start": "2023-08-04 00:00:00",
+    "paired_hours": 168,
+    "mae": 29.74705413095238,
+    "wape_percent": 11.297371132109594,
+    "relative_change_percent": 75.53583048823322
+   },
+   {
+    "start": "2023-08-11 00:00:00",
+    "paired_hours": 160,
+    "mae": 26.10012090625,
+    "wape_percent": 10.210815553327791,
+    "relative_change_percent": 38.600044639893774
+   },
+   {
+    "start": "2023-08-18 00:00:00",
+    "paired_hours": 168,
+    "mae": 27.64681476190476,
+    "wape_percent": 10.86776376994712,
+    "relative_change_percent": 94.1777689578714
+   },
+   {
+    "start": "2023-08-25 00:00:00",
+    "paired_hours": 167,
+    "mae": 27.163814610778445,
+    "wape_percent": 10.773403567102857,
+    "relative_change_percent": 95.61694868477791
+   },
+   {
+    "start": "2023-09-01 00:00:00",
+    "paired_hours": 168,
+    "mae": 28.596029910714286,
+    "wape_percent": 11.426441406621635,
+    "relative_change_percent": 79.86423621013131
+   },
+   {
+    "start": "2023-09-08 00:00:00",
+    "paired_hours": 168,
+    "mae": 28.603689851190474,
+    "wape_percent": 11.315390164359048,
+    "relative_change_percent": 81.33659981132077
+   },
+   {
+    "start": "2023-09-15 00:00:00",
+    "paired_hours": 168,
+    "mae": 27.467701482142857,
+    "wape_percent": 11.162491168359944,
+    "relative_change_percent": 82.97279337827122
+   },
+   {
+    "start": "2023-09-22 00:00:00",
+    "paired_hours": 168,
+    "mae": 25.356477916666666,
+    "wape_percent": 10.631381591754224,
+    "relative_change_percent": 34.508629302178726
+   }
+  ]
+ },
+ "Hồ Chí Minh": {
+  "dataset_type": "synthetic",
+  "model": "RandomForest",
+  "test_start": "2025-09-13 08:00:00",
+  "test_end": "2025-12-31 23:00:00",
+  "whole_test": {
+   "paired_hours": 2632,
+   "mae": 306.94018617021277,
+   "rmse": 485.4916746079585,
+   "wape_percent": 8.465383020205637,
+   "actual_mean": 3625.827507598784,
+   "low_traffic_below": 906.456876899696,
+   "baseline": {
+    "method": "same_hour_last_week",
+    "lag_hours": 168,
+    "paired_points": 2632,
+    "mae": 389.79331306990883,
+    "model_mae": 306.94018617021277,
+    "relative_change_percent": -21.255656298248628
+   },
+   "low_traffic_hours": 502,
+   "low_traffic_share_of_error_percent": 3.968634325344098,
+   "median_percent_error_low": 8.34279381248821,
+   "median_percent_error_normal": 6.354418367636287
+  },
+  "weekly": {
+   "weeks": 15,
+   "mae_min_median_max": [
+    173.09738095238095,
+    299.72529761904764,
+    408.61095238095237
+   ],
+   "wape_min_median_max": [
+    4.734626493391468,
+    8.05224894349248,
+    12.49970683884877
+   ],
+   "weeks_worse_than_last_week": 1,
+   "weeks_with_baseline": 15,
+   "change_min_median_max": [
+    -50.041607056136705,
+    -24.483904723286816,
+    31.104289097447573
+   ]
+  },
+  "weeks": [
+   {
+    "start": "2025-09-13 08:00:00",
+    "paired_hours": 168,
+    "mae": 335.9470238095238,
+    "wape_percent": 8.687094902330191,
+    "relative_change_percent": -20.333267460900014
+   },
+   {
+    "start": "2025-09-20 08:00:00",
+    "paired_hours": 168,
+    "mae": 299.72529761904764,
+    "wape_percent": 7.663438680436972,
+    "relative_change_percent": -1.7389989267245596
+   },
+   {
+    "start": "2025-09-27 08:00:00",
+    "paired_hours": 168,
+    "mae": 307.11380952380955,
+    "wape_percent": 8.070198598843476,
+    "relative_change_percent": -19.89703622052133
+   },
+   {
+    "start": "2025-10-04 08:00:00",
+    "paired_hours": 168,
+    "mae": 357.68125000000003,
+    "wape_percent": 9.603347482276533,
+    "relative_change_percent": -25.570756177618126
+   },
+   {
+    "start": "2025-10-11 08:00:00",
+    "paired_hours": 168,
+    "mae": 264.2243452380952,
+    "wape_percent": 6.950539496532536,
+    "relative_change_percent": -18.35177589346479
+   },
+   {
+    "start": "2025-10-18 08:00:00",
+    "paired_hours": 168,
+    "mae": 355.88571428571424,
+    "wape_percent": 9.169709750393006,
+    "relative_change_percent": 31.104289097447573
+   },
+   {
+    "start": "2025-10-25 08:00:00",
+    "paired_hours": 168,
+    "mae": 297.15857142857146,
+    "wape_percent": 8.0113359544251,
+    "relative_change_percent": -28.205019055152075
+   },
+   {
+    "start": "2025-11-01 08:00:00",
+    "paired_hours": 168,
+    "mae": 343.6476785714285,
+    "wape_percent": 10.19123028446853,
+    "relative_change_percent": -24.483904723286816
+   },
+   {
+    "start": "2025-11-08 08:00:00",
+    "paired_hours": 168,
+    "mae": 226.56428571428572,
+    "wape_percent": 6.368424575023425,
+    "relative_change_percent": -50.041607056136705
+   },
+   {
+    "start": "2025-11-15 08:00:00",
+    "paired_hours": 168,
+    "mae": 273.5129166666667,
+    "wape_percent": 7.661707278845096,
+    "relative_change_percent": -28.55117240950366
+   },
+   {
+    "start": "2025-11-22 08:00:00",
+    "paired_hours": 168,
+    "mae": 173.09738095238095,
+    "wape_percent": 4.734626493391468,
+    "relative_change_percent": -37.9022848601324
+   },
+   {
+    "start": "2025-11-29 08:00:00",
+    "paired_hours": 168,
+    "mae": 344.3066071428571,
+    "wape_percent": 9.724425757405095,
+    "relative_change_percent": -5.68941679030864
+   },
+   {
+    "start": "2025-12-06 08:00:00",
+    "paired_hours": 168,
+    "mae": 275.41773809523806,
+    "wape_percent": 7.912583986442463,
+    "relative_change_percent": -36.46824110943292
+   },
+   {
+    "start": "2025-12-13 08:00:00",
+    "paired_hours": 168,
+    "mae": 408.61095238095237,
+    "wape_percent": 12.49970683884877,
+    "relative_change_percent": -4.849067849469817
+   },
+   {
+    "start": "2025-12-20 08:00:00",
+    "paired_hours": 168,
+    "mae": 279.7979166666667,
+    "wape_percent": 8.05224894349248,
+    "relative_change_percent": -35.98260857722636
+   }
+  ]
+ }
+}

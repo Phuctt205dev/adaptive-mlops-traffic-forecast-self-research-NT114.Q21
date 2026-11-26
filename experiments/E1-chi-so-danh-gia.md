@@ -121,7 +121,7 @@ RMSE nghiêng hẳn về giờ cao điểm, MAPE về giờ đêm (rất ít xe)
 | Việc | Chỉ số | Đánh đổi |
 | --- | --- | --- |
 | **Chọn model khi train** | Giữ **MAE** (trung bình kiểm tra chéo); RMSE làm chỉ số phụ để thấy lần sai nặng | MAE ít nhạy với vài giờ sai rất lớn |
-| **Hiển thị ở Model Quality** | **WAPE** — "sai khoảng x% lưu lượng" — là số chính; **MAE** (xe/giờ) là số phụ; **"so với cách đoán cùng giờ tuần trước: tốt hơn / kém hơn y%"**; từng giờ hiện "sai n xe (p%)" và đánh dấu "giờ ít xe" | WAPE ít bị giờ đêm ảnh hưởng; % từng giờ cao ở giờ ít xe (I‑94: trung vị 12,3% so với 4,5%, nhưng chỉ góp 6,6% tổng xe sai) |
+| **Hiển thị ở Model Quality** | **WAPE** — "sai khoảng x% lưu lượng" — là số chính; **MAE** (xe/giờ) là số phụ; **"so với cách đoán cùng giờ tuần trước: tốt hơn / kém hơn y%"**; từng giờ hiện "sai n xe (p%)" và đánh dấu "giờ ít xe" | WAPE ít bị giờ đêm ảnh hưởng; % từng giờ cao ở giờ ít xe (I‑94, LightGBM: trung vị 12,3% so với 4,5%, nhưng chỉ góp 6,6% tổng xe sai; với RandomForest, model hệ thống chọn: 9,2% / 4,6% / 5,9%, xem E2) |
 | **Theo dõi để retrain** | Họ \|e\| (MAE hoặc WAPE theo cửa sổ trượt, so với lúc vừa train) | Kiểm định ở **E3** |
 
 Minh họa trên model mà hệ thống sẽ chọn (theo CV MAE) ở mỗi dataset:

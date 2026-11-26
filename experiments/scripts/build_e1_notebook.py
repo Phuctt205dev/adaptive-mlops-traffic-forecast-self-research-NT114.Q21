@@ -709,7 +709,7 @@ md("""**Đọc kết quả.**
 - Đây là bằng chứng cụ thể cho thay đổi ở giai đoạn 4."""),
 md("""### Hiển thị từng giờ ("Difference" dưới biểu đồ)
 
-Ở I‑94, các giờ ít xe (dưới 25% lưu lượng trung bình, 17,8% số giờ) có **% sai trung vị 12,3%** so với **4,5%** ở giờ thường, nhưng chỉ góp **6,6%** tổng số xe đoán sai; số giờ sai trên 50% chỉ 1,6%. Đề xuất cho từng giờ: hiện **"sai 120 xe (12%)"**, và với giờ ít xe thêm nhãn nhỏ **"giờ ít xe"** để người xem hiểu vì sao % cao; giờ thực tế 0 xe chỉ hiện số xe (không chia cho 0)."""),
+Ở I‑94, các giờ ít xe (dưới 25% lưu lượng trung bình, 17,8% số giờ) với model LightGBM có **% sai trung vị 12,3%** so với **4,5%** ở giờ thường, nhưng chỉ góp **6,6%** tổng số xe đoán sai; số giờ sai trên 50% chỉ 1,6%. Với RandomForest (model hệ thống chọn) là 9,2% / 4,6% / 5,9% (kiểm lại ở E2). Đề xuất cho từng giờ: hiện **"sai 120 xe (12%)"**, và với giờ ít xe thêm nhãn nhỏ **"giờ ít xe"** để người xem hiểu vì sao % cao; giờ thực tế 0 xe chỉ hiện số xe (không chia cho 0)."""),
 md("""---
 ## Tóm tắt giai đoạn 3
 

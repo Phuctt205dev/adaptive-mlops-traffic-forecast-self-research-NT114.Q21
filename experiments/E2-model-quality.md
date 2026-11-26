@@ -1,6 +1,6 @@
 # E2 — Tab Model Quality nên hiển thị sai số thế nào?
 
-> **Cập nhật:** 26/11/2026 · **Trạng thái:** đã chạy, đã kiểm (test tự động + chạy lại backend thật trên số liệu E1); chờ phát hành và người dùng xác nhận
+> **Cập nhật:** 26/11/2026 · **Trạng thái:** đã chạy, đã kiểm; **đã phát hành** 26/11 (PR #33, run CI/CD 120, commit `d566a09`), kiểm sau CD đạt; chờ người dùng xác nhận
 > **Kết luận ngắn:** Tab Model Quality trước đây chỉ hiện **"Average difference" = số xe lệch trung bình (MAE)**. Con số này không cho biết lệch thế là nhiều hay ít: ở Glasgow nó nhỏ nhất (28 xe/giờ) dù model ở đó sai nhiều nhất và **kém hơn cả cách đoán "cùng giờ tuần trước" 40%**. Bản mới hiện **"Average error" = sai bao nhiêu % lưu lượng (WAPE)**, kèm số xe, kèm **"so với cùng giờ tuần trước: tốt hơn / kém hơn N%"**, và từng giờ hiện `số xe (x%)` với nhãn **Low traffic** cho giờ ít xe. Chạy lại bằng đúng hàm backend trên 3 bộ dữ liệu cho cùng số với E1.
 
 ## 1. Vì sao cần thực nghiệm này
@@ -91,6 +91,17 @@ Dự đoán là kết quả **final test** của E1 (`outputs/e1/<bộ>/<model>_
 | `npm run build` | đạt |
 | `check_model_quality_ui.py` | 6/6 ca đạt |
 | Bước dựng gói của CI (`release.py Build`, `components.py`, `role_checks.py fixtures`) chạy ở máy | đạt |
+
+### 4.6 Trên hệ thống thật sau phát hành (26/11, chỉ đọc)
+
+Gọi đúng hàm của tab (`get_model_quality`, 7 ngày gần nhất) trong pod API sau CD; không ghi DB, không train. Hai vùng đang dùng dataset **synthetic**, nên đây là kiểm chức năng chạy đúng, không phải kết luận về giao thông thật.
+
+| Vùng | Model active | Giờ so được | Average error | Số xe lệch TB | So với cùng giờ tuần trước | Giờ ít xe |
+| --- | --- | --- | --- | --- | --- | --- |
+| Hồ Chí Minh | model_v1 · RandomForest | 168 / 168 | 8,6% | 311 xe/giờ | tốt hơn 7,0% (tuần trước lệch 335) | 31 |
+| Hà Nội | model_v1 · RandomForest | 89 / 89 | 13,1% | 491 xe/giờ | tốt hơn 9,4% (tuần trước lệch 542) | 20 |
+
+Hai pod API trả health 200, có trường mới (`wape_percent`, `baseline`…), log 15 phút không có dòng lỗi; bundle GitHub Pages (`index-3Tj8twek.js`, trùng bản build ở máy) có các nhãn mới.
 
 ## 5. Kết luận và đề xuất
 

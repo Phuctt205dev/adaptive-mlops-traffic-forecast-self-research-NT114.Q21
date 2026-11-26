@@ -416,6 +416,102 @@ class QualityRouteTests(unittest.TestCase):
                 self.assertEqual(service.call_args.kwargs["hours"], hours)
             self.assertEqual(self.client.get(self.url + "?hours=337").status_code, 422)
             self.assertEqual(self.client.get(self.url + "?mode=accuracy").status_code, 422)
+            body = response.json()
+            self.assertAlmostEqual(body["metrics"]["wape_percent"], 10)
+            self.assertEqual(body["metrics"]["baseline"]["method"], "same_hour_last_week")
+            self.assertEqual([point["percent_error"] for point in body["points"]][:2], [10, 10])
+            self.assertEqual(body["points"][0]["low_traffic"], False)
+
+
+def with_last_week(frame, values):
+    """Prepend rows exactly 168 wall-clock hours earlier (inside the training period)."""
+    past = frame.iloc[:len(values)].copy()
+    past["date_time"] = (pd.to_datetime(past["date_time"]) - pd.Timedelta(hours=168)).dt.strftime("%Y-%m-%d %H:%M:%S")
+    past["traffic_volume"] = values
+    return pd.concat([past, frame], ignore_index=True)
+
+
+class ErrorShareAndBaselineTests(unittest.TestCase):
+    """Actual [1000, 2000, 4000, 3000], predicted [1100, 1800, 3500, 3200], |e| [100, 200, 500, 200]."""
+
+    def setUp(self):
+        self.region, self.model, self.training, self.dataset, self.frame = fixture()
+        quality._reports.clear()
+
+    def report(self, frame, mode="reference"):
+        with patch.object(quality, "_predict_points", return_value=fake_predictions(self.frame)):
+            return quality._build_report(self.region, self.model, self.training, self.dataset,
+                                         frame, mode, None, 4)
+
+    def test_wape_is_total_error_over_total_actual_traffic(self):
+        metrics = self.report(self.frame)["metrics"]
+        self.assertAlmostEqual(metrics["wape_percent"], 1000 / 10000 * 100)
+        self.assertAlmostEqual(metrics["actual_mean"], 2500)
+        self.assertAlmostEqual(metrics["low_traffic_below"], 625)
+        self.assertEqual(metrics["mae"], 250)  # old field is unchanged
+
+    def test_each_hour_has_error_as_percent_of_actual(self):
+        points = self.report(self.frame)["points"]
+        for point, expected in zip(points, [10, 10, 12.5, 100 * 200 / 3000]):
+            self.assertAlmostEqual(point["percent_error"], expected)
+        self.assertEqual([point["low_traffic"] for point in points], [False] * 4)
+
+    def test_low_traffic_hour_is_below_a_quarter_of_the_window_mean(self):
+        frame = self.frame.copy()
+        frame["traffic_volume"] = [100, 2000, 4000, 3000]  # mean 2275, threshold 568.75
+        points = self.report(frame)["points"]
+        self.assertEqual([point["low_traffic"] for point in points], [True, False, False, False])
+        self.assertAlmostEqual(points[0]["percent_error"], 1000)  # |1100 - 100| / 100
+
+    def test_zero_actual_has_no_percent_and_zero_total_has_no_wape(self):
+        frame = self.frame.copy()
+        frame["traffic_volume"] = [0, np.nan, np.inf, -1]
+        report = self.report(frame)
+        self.assertIsNone(report["points"][0]["percent_error"])
+        self.assertIsNone(report["metrics"]["wape_percent"])
+        self.assertIsNone(report["points"][1]["low_traffic"])  # no actual value
+        ModelQualityReport.model_validate(report)
+
+    def test_same_hour_last_week_baseline_uses_identical_hours(self):
+        baseline = self.report(with_last_week(self.frame, [1200, 1500, 3000, 3000]))["metrics"]["baseline"]
+        self.assertEqual(baseline["method"], "same_hour_last_week")
+        self.assertEqual(baseline["lag_hours"], 168)
+        self.assertEqual(baseline["paired_points"], 4)
+        self.assertAlmostEqual(baseline["mae"], (200 + 500 + 1000 + 0) / 4)
+        self.assertAlmostEqual(baseline["model_mae"], 250)
+        self.assertAlmostEqual(baseline["relative_change_percent"], (250 - 425) / 425 * 100)
+
+    def test_baseline_compares_model_only_where_last_week_exists(self):
+        frame = with_last_week(self.frame, [1200.0, 1500.0, np.nan, -5.0])  # last-week values for hours 3 and 4 are unusable
+        baseline = self.report(frame)["metrics"]["baseline"]
+        self.assertEqual(baseline["paired_points"], 2)
+        self.assertAlmostEqual(baseline["mae"], 350)
+        self.assertAlmostEqual(baseline["model_mae"], 150)
+        self.assertAlmostEqual(baseline["relative_change_percent"], (150 - 350) / 350 * 100)
+
+    def test_worse_than_last_week_is_a_positive_change(self):
+        baseline = self.report(with_last_week(self.frame, [1000, 2000, 4100, 3000]))["metrics"]["baseline"]
+        self.assertAlmostEqual(baseline["mae"], 25)
+        self.assertAlmostEqual(baseline["relative_change_percent"], (250 - 25) / 25 * 100)
+
+    def test_without_last_week_or_perfect_baseline_change_is_unknown(self):
+        report = self.report(self.frame)
+        baseline = report["metrics"]["baseline"]
+        self.assertEqual(baseline["paired_points"], 0)
+        self.assertIsNone(baseline["mae"])
+        self.assertIsNone(baseline["relative_change_percent"])
+        perfect = self.report(with_last_week(self.frame, [1000, 2000, 4000, 3000]))["metrics"]["baseline"]
+        self.assertEqual(perfect["mae"], 0)
+        self.assertIsNone(perfect["relative_change_percent"])
+        ModelQualityReport.model_validate(report)
+
+    def test_observed_mode_baseline_uses_only_observed_pairs(self):
+        frame = with_last_week(self.frame, [1200, 1500, 3000, 3000])
+        frame["target_observed"] = [True] * 4 + [True, False, False, False]
+        baseline = self.report(frame, mode="observed")["metrics"]["baseline"]
+        self.assertEqual(baseline["paired_points"], 1)
+        self.assertAlmostEqual(baseline["mae"], 200)
+        self.assertAlmostEqual(baseline["model_mae"], 100)
 
 
 if __name__ == "__main__":

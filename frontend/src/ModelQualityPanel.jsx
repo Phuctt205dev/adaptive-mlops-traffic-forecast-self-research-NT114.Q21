@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import {
+  baselineComparison, differenceText, hasErrorShare, numberText, percentText,
+} from "./modelQualityText";
 
-
-const numberText = (value) => value == null ? "—" : Number(value).toLocaleString("en", { maximumFractionDigits: 2 });
 
 function timeText(value, timezone, short = false) {
   return new Intl.DateTimeFormat("en-GB", {
@@ -113,7 +114,10 @@ export function QualityChart({ report }) {
         <div className="quality-selected-hour"><span>Hour</span><strong>{timeText(current.forecast_for, report.timezone)}</strong></div>
         <div><span>Actual</span><strong>{numberText(current.reference)}</strong></div>
         <div><span>Predicted</span><strong>{numberText(current.prediction)}</strong></div>
-        <div><span>Difference</span><strong>{numberText(current.absolute_error)}</strong></div>
+        <div className="quality-difference"><span>Difference</span><strong>{numberText(current.absolute_error)}</strong>
+          {current.percent_error != null && <span className="quality-difference-share">{percentText(current.percent_error)} of actual</span>}
+          {current.low_traffic && <span className="quality-tag">Low traffic</span>}
+        </div>
       </div>}
     </div>
   );
@@ -191,6 +195,8 @@ export default function ModelQualityPanel({ region, enabled }) {
 
   const visibleReport = report?.region_id === region?.id
     && report?.active_model_version_id === region?.active_model_version_id && report?.selected_hours === hours ? report : null;
+  const metrics = visibleReport?.metrics;
+  const comparison = baselineComparison(metrics);
 
   return (
     <section className="card quality-panel">
@@ -217,7 +223,15 @@ export default function ModelQualityPanel({ region, enabled }) {
       {loading && !visibleReport && <p role="status">Loading traffic data…</p>}
       {visibleReport && <>
         <div className="quality-metrics">
-          <div><span>Average difference</span><strong>{numberText(visibleReport.metrics.mae)}<span className="quality-metric-unit">vehicles/hour</span></strong></div>
+          {hasErrorShare(metrics)
+            ? <div><span>Average error</span>
+              <strong>{percentText(metrics.wape_percent)}<span className="quality-metric-unit">of actual traffic</span></strong>
+              <p className="quality-metric-note">{numberText(metrics.mae)} vehicles/hour on average</p></div>
+            : <div><span>Average difference</span><strong>{numberText(metrics.mae)}<span className="quality-metric-unit">vehicles/hour</span></strong></div>}
+          {comparison && <div className={comparison.worse ? "quality-metric-worse" : undefined}>
+            <span>Compared with same hour last week</span>
+            <strong>{comparison.text}</strong>
+            <p className="quality-metric-note">Last week's traffic as a guess is off by {numberText(comparison.baselineMae)} vehicles/hour</p></div>}
           <div><span>Hours compared</span><strong>{visibleReport.coverage.paired_points} / {visibleReport.coverage.requested_points}</strong></div>
         </div>
         {visibleReport.coverage.dataset_points === 0
@@ -229,14 +243,20 @@ export default function ModelQualityPanel({ region, enabled }) {
             <div><dt>Model</dt><dd>{visibleReport.model_version} · {visibleReport.model_variant}</dd></div>
             <div><dt>Dataset</dt><dd>{visibleReport.dataset_filename}</dd></div>
             <div><dt>Time zone</dt><dd>{visibleReport.timezone}</dd></div>
-            <div><dt>RMSE</dt><dd>{numberText(visibleReport.metrics.rmse)} vehicles/hour</dd></div>
+            <div><dt>RMSE</dt><dd>{numberText(metrics.rmse)} vehicles/hour</dd></div>
+            {hasErrorShare(metrics) && <>
+              <div><dt>Average error</dt><dd>Total difference ÷ total actual traffic (WAPE). It is an error share, not an accuracy score.</dd></div>
+              <div><dt>Average actual traffic</dt><dd>{numberText(metrics.actual_mean)} vehicles/hour</dd></div>
+              <div><dt>Low traffic</dt><dd>Below {numberText(metrics.low_traffic_below)} vehicles/hour (a quarter of the average). Percent errors look large in these hours.</dd></div>
+            </>}
+            {comparison && <div><dt>Same hour last week</dt><dd>Model off by {numberText(metrics.baseline.model_mae)}, last week's traffic off by {numberText(metrics.baseline.mae)} vehicles/hour on the same {comparison.hours} hours</dd></div>}
           </dl>
           <div className="table-wrap quality-hour-table"><table>
             <thead><tr><th>Hour</th><th>Actual</th><th>Predicted</th><th>Difference</th></tr></thead>
             <tbody>{visibleReport.points.map((point) => <tr key={point.forecast_for}>
               <td>{timeText(point.forecast_for, visibleReport.timezone)}</td><td>{numberText(point.reference)}</td>
               <td>{numberText(point.prediction)}</td>
-              <td>{numberText(point.absolute_error)}</td>
+              <td>{differenceText(point)}{point.low_traffic && <span className="quality-tag">Low traffic</span>}</td>
             </tr>)}</tbody>
           </table></div>
         </details>

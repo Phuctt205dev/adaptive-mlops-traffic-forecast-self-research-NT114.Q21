@@ -8,7 +8,12 @@ nguồn nhãn hay ngày bắt đầu. Tab tự tải khi mở và làm mới và
 ## Giao diện chính
 
 - **Traffic comparison**, thanh chọn thời gian và khoảng giờ thực sự được đánh giá.
-- **Average difference**: sai số tuyệt đối trung bình (MAE), tính bằng xe/giờ.
+- **Average error**: sai số theo phần trăm lưu lượng (WAPE = tổng số xe đoán
+  lệch ÷ tổng số xe thực tế), dòng dưới ghi MAE bằng xe/giờ. Backend cũ chưa
+  có WAPE thì thẻ này quay về **Average difference** (chỉ MAE) như trước.
+- **Compared with same hour last week**: so model với cách đoán ngây thơ
+  "lấy đúng giờ đó tuần trước" trên cùng các giờ: `N% better` hoặc
+  `N% worse` (nền vàng cảnh báo). Không có dữ liệu tuần trước thì ẩn thẻ.
 - **Hours compared**: số giờ đối chiếu trong khoảng đủ điều kiện; ví dụ
   72/72 nếu mới có 3 ngày sau train dù đang chọn 7 hoặc 14 ngày.
 - Đường xanh **Actual traffic**: cột `traffic_volume` trong dataset.
@@ -17,21 +22,46 @@ nguồn nhãn hay ngày bắt đầu. Tab tự tải khi mở và làm mới và
 Không hiện các đoạn hướng dẫn, ghi chú nhỏ hoặc metadata kỹ thuật trên
 phần chính. Chữ nội dung từ 16px; biểu đồ tự co theo màn hình và vẫn giữ
 đủ khoảng thời gian trên điện thoại. Thanh dưới biểu đồ hiển thị giờ, Actual, Predicted
-và Difference (sai số tuyệt đối). Mặc định xem giờ cuối cùng; trỏ chuột
+và Difference (sai số tuyệt đối, dòng dưới là `x% of actual`; giờ ít xe có
+nhãn **Low traffic**). Mặc định xem giờ cuối cùng; trỏ chuột
 hoặc phím trái/phải đổi giờ. Chú giải màu và đơn vị vẫn được giữ để đọc
 được biểu đồ. Giữ cách tính MAE/RMSE và đối chiếu traffic_volume.
 
-**View details** mặc định đóng: tên model, tên dataset, múi giờ, RMSE và
-bảng theo giờ. Không đưa log, chính sách kỹ thuật hoặc cảnh báo nguồn nhãn
+**View details** mặc định đóng: tên model, tên dataset, múi giờ, RMSE,
+cách tính Average error, lưu lượng trung bình, ngưỡng giờ ít xe, sai số
+của model và của cách đoán tuần trước, và bảng theo giờ (cột Difference
+ghi `120 (12%)`). Không đưa log, chính sách kỹ thuật hoặc cảnh báo nguồn nhãn
 vào luồng sử dụng chính. Trường hợp thiếu dữ liệu/lỗi vẫn thông báo rõ.
 
 ## Cách đọc sai số
 
 Ví dụ dataset ghi 5.000 xe/giờ, model dự báo 4.800: chênh lệch có dấu là
--200, sai số tuyệt đối là 200 xe/giờ. Average difference là trung bình
+-200, sai số tuyệt đối là 200 xe/giờ (4% của giờ đó). MAE là trung bình
 sai số tuyệt đối; không phải trung bình chênh lệch có dấu. RMSE trong
-View details cho sai số lớn trọng số cao hơn. Cả hai càng thấp càng tốt,
-dùng cùng các cặp hợp lệ. Không tự đổi thành phần trăm chính xác.
+View details cho sai số lớn trọng số cao hơn.
+
+Chỉ số xe tuyệt đối dễ gây hiểu nhầm: vùng ít xe có MAE nhỏ dù sai nhiều
+(ghi chú của GVHD). Vì vậy số chính là **WAPE**, "sai khoảng x% lưu lượng",
+và luôn kèm so sánh với cách đoán cùng giờ tuần trước. Lý do chọn và số đo
+ở [E1](../../experiments/E1-chi-so-danh-gia.md) và
+[E2](../../experiments/E2-model-quality.md).
+
+| Trường | Cách tính (trên các cặp hợp lệ của khoảng) |
+| --- | --- |
+| `metrics.wape_percent` | tổng \|actual − predicted\| ÷ tổng actual × 100; tổng actual = 0 thì null |
+| `metrics.actual_mean` | lưu lượng thực tế trung bình |
+| `metrics.low_traffic_below` | 25% của `actual_mean` |
+| `metrics.baseline` | `method=same_hour_last_week`, `lag_hours=168`; `mae` của cách đoán tuần trước và `model_mae` của model, cùng `paired_points` giờ có cả hai; `relative_change_percent` = (model_mae − mae) ÷ mae × 100, âm là model tốt hơn, null khi không có giờ nào hoặc mae = 0 |
+| `points[].percent_error` | \|actual − predicted\| ÷ actual × 100; actual = 0 thì null |
+| `points[].low_traffic` | actual < `low_traffic_below`; không có actual thì null |
+
+WAPE là **phần trăm sai**, không phải "độ chính xác"; không hiển thị
+`100% − WAPE`. Không dùng MAPE (trung bình % từng giờ) làm số chính vì
+giờ gần 0 xe làm nó "nổ". % từng giờ ở giờ ít xe thường cao dù số xe lệch
+nhỏ, nên giờ đó có nhãn Low traffic. Cách đoán tuần trước được lấy từ
+`traffic_volume` của dataset đúng 168 giờ (cùng giờ đồng hồ) trước giờ cần
+dự báo, kể cả khi giờ đó thuộc tập train, vì giá trị đó đã biết lúc dự báo.
+Giá trị tuần trước thiếu, âm hoặc NaN thì giờ đó không vào phép so.
 
 Khoảng đánh giá kết thúc ở đầu giờ hiện tại, chỉ gồm giờ đã hoàn tất.
 Giờ bắt đầu là mốc muộn hơn giữa đầu khoảng đã chọn và train_end_date
@@ -96,7 +126,9 @@ lệ thì metrics null và UI hiện dấu gạch ngang.
 
 Mặc định `window=recent`, `mode=reference`, `hours=168`, không có `start_at`.
 Response có `reference_source=dataset_traffic_volume`, model/dataset ID,
-timezone, khoảng giờ, coverage, warnings và từng cặp reference/prediction.
+timezone, khoảng giờ, metrics (MAE, RMSE và các trường phần trăm/baseline ở
+trên), coverage, warnings và từng cặp reference/prediction. Các trường mới
+chỉ được thêm, trường cũ giữ nguyên; frontend chịu được backend cũ.
 `window_end_at` là cận kết thúc không bao gồm; `end_at` là giờ điểm cuối.
 Recent nhận hours trong 24/168/336, không nhận mốc bắt đầu hoặc mode observed.
 `model_version_id` giúp phát hiện model active đã đổi trong lúc yêu cầu.
@@ -122,10 +154,13 @@ activate, sửa dữ liệu hoặc trigger DAG để tạo báo cáo.
 
 ## Kiểm tra và triển khai
 
-Chạy `python -B -m unittest tests.test_model_quality`; frontend build bằng
-`npm run build`. Kiểm giao diện desktop/mobile, chữ dễ đọc, không có ghi
+Chạy `python -B -m unittest tests.test_model_quality`; trong `frontend/`
+chạy `npm test` (gồm `tests/modelQualityText.test.js`) và `npm run build`;
+sau build chạy `python frontend/tests/check_model_quality_ui.py` (API
+synthetic: backend mới/cũ, tốt hơn/kém hơn tuần trước, Low traffic, giờ 0
+xe, 1440/390/320 px). Kiểm giao diện desktop/mobile, chữ dễ đọc, không có ghi
 chú nhỏ, details đóng mặc định, số hiển thị đúng, hai đường, khoảng trống,
-phím điều hướng, cả ba khoảng, cắt tại train_end_date và trường hợp0 giờ.
+phím điều hướng, cả ba khoảng, cắt tại train_end_date và trường hợp 0 giờ.
 Kiểm refresh đầu giờ với đồng hồ client bị lệch; tab ẩn không tự tải.
 
 Lần cập nhật khoảng thời gian cần cả backend/frontend. Gói mới được chuẩn

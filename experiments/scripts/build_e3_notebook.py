@@ -25,7 +25,7 @@ md("""# E3 — Khi nào nên retrain? Tín hiệu nào phát hiện drift tốt 
 | **5.2** | Dựng "đáp án": lúc nào retrain thật sự có lợi | Xong |
 | **5.3** | Tính 5 tín hiệu trên cùng dòng thời gian | Xong |
 | **5.4** | Chấm: độ trễ, báo nhầm, bỏ sót; drift giả lập | Xong |
-| **5.5** | Chọn tín hiệu, ngưỡng; lợi ích khi retrain; báo cáo | Chưa |"""),
+| **5.5** | Chọn tín hiệu, ngưỡng; lợi ích khi retrain; báo cáo | Xong |"""),
 code("""from pathlib import Path
 import sys
 
@@ -635,6 +635,144 @@ md("""### Tóm tắt bước 5.4
 1. **Một con số chưa đủ**: phải đặt "bắt đúng" cạnh "báo nhầm" (và độ trễ); một tín hiệu bắt đúng 100% có thể vô dụng nếu báo nhầm cũng 100%.
 2. **Dò ngưỡng trước khi so**: so ở ngưỡng tốt nhất của mỗi tín hiệu mới công bằng; và nếu dò hết mà vẫn kém (A) thì lỗi nằm ở *thứ được đo*, không ở ngưỡng.
 3. **Giả lập có kiểm soát** bổ sung cho dữ liệu thật: biết chắc ngày bắt đầu nên đo được độ trễ rõ ràng, và kiểm được cả loại drift chậm."""),
+md("""---
+## Bước 5.5 — Chọn cách retrain và đo lợi ích khi dùng thật
+
+**Đang làm gì.** Hai việc:
+1. **Kết hợp B với C** có tốt hơn B đứng riêng không? (B còn sót ≈ 30% lúc cần retrain mà C bắt được.)
+2. **Mô phỏng dùng thật.** Bước 5.4 chấm tín hiệu khi model **không bao giờ** được thay. Thực tế thì khi tín hiệu báo, ta retrain và **dùng model mới**; kỳ tham chiếu cũng dời theo. Ở mỗi tình huống, chạy từng ngày một năm với 8 chính sách, rồi đo **WAPE cả năm** và **số lần retrain** (chi phí).
+
+| Chính sách | Retrain khi |
+| --- | --- |
+| Không retrain | không bao giờ (model M0 cả năm) |
+| A. Cách hiện tại | tín hiệu thời tiết báo (≥ 2/13 cột) |
+| B > 1,0 / B > 0,5 | PSI số xe vượt ngưỡng |
+| Định kỳ 4 / 2 / 1 tuần | đủ 28 / 14 / 7 ngày kể từ lần trước |
+| Định kỳ 4 tuần + B > 1,0 | đủ 28 ngày **hoặc** PSI số xe > 1,0 |
+
+Mọi chính sách đều theo luật của hệ thống: nghỉ ít nhất **72 giờ** giữa hai lần, retrain trên **24 tháng gần nhất**, tín hiệu chỉ tính khi kỳ hiện tại đủ **168 giờ** sau mốc train. Giả định model mới **được dùng ngay** (thực tế hệ thống tạo *candidate*, cần Activate).
+
+> **Đoán trước:**
+> 1. Chính sách nào cho sai số cả năm thấp nhất?
+> 2. Cách hiện tại (luôn báo) sẽ đứng ở đâu?"""),
+code("""RULES = {"B > 1,0": lambda d: d.B_value > 1.0,
+         "B > 0,5": lambda d: d.B_value > 0.5,
+         "B > 1,0 hoặc C > 3": lambda d: (d.B_value > 1.0) | (d.C_value > 3),
+         "B > 1,0 hoặc C > 2": lambda d: (d.B_value > 1.0) | (d.C_value > 2),
+         "B > 1,0 hoặc C > 1,5": lambda d: (d.B_value > 1.0) | (d.C_value > 1.5),
+         "B > 0,2 và C > 1,3": lambda d: (d.B_value > 0.2) & (d.C_value > 1.3),
+         "B > 1,0 hoặc (B > 0,2 và C > 1,5)": lambda d: (d.B_value > 1.0) | ((d.B_value > 0.2) & (d.C_value > 1.5))}
+rows = []
+for rule, f in RULES.items():
+    tp = fp = fn = tn = 0
+    for name in REAL:
+        truth = truths[name]
+        alarm = f(sigs[name].reindex(truth.index)).fillna(False).astype(bool)
+        need = truth.needs_retrain
+        tp += int((alarm & need).sum()); fp += int((alarm & ~need).sum())
+        fn += int((~alarm & need).sum()); tn += int((~alarm & ~need).sum())
+    rows.append({"Quy tắc": rule, "Bắt đúng (%)": 100 * tp / (tp + fn), "Báo nhầm (%)": 100 * fp / (fp + tn),
+                 "Điểm J": tp / (tp + fn) - fp / (fp + tn)})
+pd.DataFrame(rows).set_index("Quy tắc").round(2)"""),
+md("""**Đọc kết quả.** Không quy tắc kết hợp nào vượt **B > 1,0 đứng riêng** (J 0,64): thêm C bắt thêm được vài thời điểm nhưng báo nhầm tăng nhanh hơn. Giữ **một tín hiệu đơn giản** là đủ."""),
+code("""COOLDOWN = pd.Timedelta(hours=S.drift_retrain_cooldown_hours)
+POLICIES = {"Không retrain": ("never",), "A. Cách hiện tại": ("A",), "B > 1,0": ("psi", 1.0), "B > 0,5": ("psi", 0.5),
+            "Định kỳ 4 tuần": ("every", 28), "Định kỳ 4 tuần + B > 1,0": ("every+psi", 28, 1.0),
+            "Định kỳ 2 tuần": ("every", 14), "Định kỳ 1 tuần": ("every", 7)}
+
+def simulate(name, policy):
+    df, data_start, m0_end, eval_end = SCENARIOS[name]
+    raw = RAW[name] if name in RAW else RAW[name.split(" ")[0]]
+    data_start, m0_end, eval_end = map(pd.Timestamp, (data_start, m0_end, eval_end))
+    kind = policy[0]
+
+    def retrain(day):
+        model, cols, _ = fit(df, max(data_start, day - pd.DateOffset(months=WINDOW_MONTHS)), day)
+        ref = raw[(raw.date_time >= day - pd.Timedelta(days=S.drift_reference_days)) & (raw.date_time < day)]
+        return {"model": model, "cols": cols, "train_end": day, "ref": ref}
+
+    def psi_fires(state, day, threshold):
+        current = raw[(raw.date_time > day - pd.Timedelta(days=7)) & (raw.date_time <= day) & (raw.date_time >= state["train_end"])]
+        if min(len(current), len(state["ref"])) < S.drift_min_window_rows:
+            return False
+        return _numeric_psi(state["ref"].traffic_volume, current.traffic_volume) > threshold
+
+    state, last, retrains, errors = retrain(m0_end), m0_end, [], []
+    for day in pd.date_range(m0_end, eval_end - pd.Timedelta(days=1), freq="D"):
+        if day > m0_end and day - last >= COOLDOWN and kind != "never":
+            age = (day - last).days
+            if kind == "A":
+                fire = check(raw, state["train_end"], day)["status"] == "drift"
+            elif kind == "psi":
+                fire = psi_fires(state, day, policy[1])
+            elif kind == "every":
+                fire = age >= policy[1]
+            else:
+                fire = age >= policy[1] or psi_fires(state, day, policy[2])
+            if fire:
+                state, last = retrain(day), day
+                retrains.append(day)
+        part = df[(df.date_time >= day) & (df.date_time < day + pd.Timedelta(days=1))]
+        if len(part):
+            errors.append(np.abs(part.traffic_volume.to_numpy() - predict(state["model"], state["cols"], part)))
+    e = np.concatenate(errors)
+    actual = df[(df.date_time >= m0_end) & (df.date_time < eval_end)].traffic_volume.sum()
+    return {"WAPE (%)": 100 * e.sum() / actual, "MAE": e.mean(), "Số lần retrain": len(retrains),
+            "Lần retrain đầu": retrains[0].date() if retrains else None}
+
+rows = []
+for name in REAL:
+    for policy_name, policy in POLICIES.items():
+        rows.append({"Tình huống": name, "Chính sách": policy_name, **simulate(name, policy)})
+    print("xong:", name, flush=True)
+policies = pd.DataFrame(rows)
+policies.round(3).to_csv(OUT_E3 / "policies.csv", index=False, lineterminator="\\n")
+never = policies[policies["Chính sách"] == "Không retrain"].set_index("Tình huống")["WAPE (%)"]
+policies["Giảm so với không retrain (%)"] = 100 * (1 - policies["WAPE (%)"] / policies["Tình huống"].map(never))
+policies.pivot_table(index="Chính sách", columns="Tình huống", values=["WAPE (%)", "Số lần retrain"], sort=False).round(1)"""),
+code("""summary = policies.groupby("Chính sách", sort=False).agg(
+    retrains=("Số lần retrain", "mean"), gain=("Giảm so với không retrain (%)", "mean"))
+covid = policies[policies["Tình huống"] == "Glasgow COVID"].set_index("Chính sách")
+fig, axes = plt.subplots(1, 2, figsize=(11, 4.6), sharex=True)
+# Vị trí nhãn (dx, dy, căn lề) đặt riêng cho từng điểm để không chồng nhau.
+OFFSETS = [{"B > 1,0": (8, -14, "left"), "B > 0,5": (8, 2, "left"), "Định kỳ 4 tuần": (8, -12, "left"),
+            "A. Cách hiện tại": (-8, -14, "right"), "Định kỳ 1 tuần": (-8, 8, "right")},
+           {"B > 1,0": (-8, 6, "right"), "B > 0,5": (8, -14, "left"), "Định kỳ 4 tuần": (8, 4, "left"),
+            "A. Cách hiện tại": (-8, -14, "right"), "Định kỳ 1 tuần": (-8, 8, "right")}]
+for ax, offsets, (x, y, title) in zip(axes, OFFSETS, [(summary.retrains, summary.gain, "Trung bình 5 tình huống"),
+                                     (covid["Số lần retrain"], covid["Giảm so với không retrain (%)"], "Glasgow năm COVID")]):
+    ax.plot(x, y, "o", color=BLUE, ms=8)
+    for label in x.index:
+        dx, dy, ha = offsets.get(label, (8, 4, "left"))
+        ax.annotate(label, (x[label], y[label]), xytext=(dx, dy), textcoords="offset points", fontsize=8.5,
+                    color=INK, ha=ha)
+    ax.set_xlim(-3, 58)
+    ax.set_title(title, loc="left", fontsize=10, color=INK)
+    ax.set_xlabel("Số lần retrain trong năm (chi phí)", color=INK)
+    ax.spines[["top", "right"]].set_visible(False); ax.grid(color="#eeeeee", lw=0.6); ax.tick_params(colors=MUTED)
+axes[0].set_ylabel("WAPE cả năm giảm so với\\nkhông retrain (%)", color=INK)
+fig.suptitle("Chi phí và lợi ích của 8 chính sách retrain (góc trên trái là tốt nhất)", x=0.01, ha="left", fontsize=11, color=INK)
+fig.tight_layout(); fig.savefig(FIG / "E3-7-retrain-policies.png", dpi=150); plt.show()
+summary.round(1)"""),
+md("""**Đọc kết quả.**
+- **Sai số giảm đều theo số lần retrain**, ở mọi tình huống: retrain hằng tuần (52 lần) thấp nhất, rồi 2 tuần (26), rồi 4 tuần (13). Model của nhánh cây chỉ dùng thời tiết + lịch, **không nhớ số xe những giờ trước**, nên cứ học lại dữ liệu mới nhất là có lợi — kể cả khi không có drift.
+- **Cách hiện tại (A)** đứng gần "định kỳ 1 tuần" (40–45 lần/năm) — không phải vì nó phát hiện đúng, mà vì nó **luôn báo** nên thành một chiếc **đồng hồ retrain mỗi tuần một cách vô tình** (kỳ hiện tại cần 7 ngày sau mốc train mới tính được). Nó cũng bỏ qua những ngày thiếu dữ liệu, và trên hệ thống thật model mới chỉ là *candidate* nên lợi ích này không tự có.
+- **B đứng riêng** retrain rất ít ở nơi ổn định (0–2 lần) nên không có phần lợi đều đặn đó; nhưng ở **Glasgow năm COVID** nó retrain đúng lúc (24/03, ngay sau phong tỏa) và với 10 lần đã giảm sai số gần bằng định kỳ 4 tuần (13 lần).
+- **Định kỳ 4 tuần + B** giữ chi phí của "4 tuần" ở nơi ổn định (13 lần) và thêm 4 lần phản ứng nhanh trong năm COVID (17 lần) — sai số COVID thấp hơn "4 tuần" thuần.
+- Chênh lệch ở nơi ổn định **nhỏ**: I‑94 từ ≈ 8,3% (không retrain) xuống ≈ 7,8% (hằng tuần); Glasgow ổn định 18,9% → 15,7%. Ở biến cố lớn (COVID) chênh lệch **lớn**: 34,4% → 23,8–27,2%."""),
+md("""---
+## Kết luận giai đoạn 5 — Khi nào nên retrain?
+
+1. **Cách phát hiện drift hiện tại không dùng được để quyết định retrain**: so 7 ngày thời tiết với 30 ngày tham chiếu thì gần như luôn "drift" (≈ 98% kể cả khi chắc chắn không có drift), điểm J = 0, không phản ứng với thay đổi giao thông.
+2. **Tín hiệu tốt nhất để phát hiện biến cố là PSI trên chính số xe** (`traffic_volume`), ngưỡng **1,0**: bắt đúng 69%, báo nhầm 5%, phát hiện giảm đột ngột 30% sau 5 ngày, báo đúng ngày ở COVID. Không cần model, dùng chung công thức PSI hệ thống đã có. Kết hợp với tín hiệu sai số model không tốt hơn.
+3. **Trả lời "khi nào nên retrain"**: với model hiện tại (thời tiết + lịch, không dùng số xe giờ trước), retrain **càng đều càng tốt** — nên **retrain định kỳ** theo chi phí chấp nhận được (4 tuần ≈ 13 lần/năm; 2 tuần ≈ 26), **cộng thêm PSI số xe > 1,0 để retrain ngay khi có biến cố**. Tín hiệu thời tiết chỉ nên để **tham khảo**, không làm điều kiện retrain.
+
+Đề xuất thay đổi hệ thống và giới hạn: xem báo cáo [`../E3-drift-retrain.md`](../E3-drift-retrain.md).
+
+**Bài học về phương pháp (bước 5.5)**
+1. **Chấm tín hiệu chưa đủ — phải mô phỏng cả vòng quyết định** (báo → retrain → dùng model mới). Ở 5.4, A là tệ nhất; khi mô phỏng dùng thật, A lại cho sai số thấp — vì một lý do *không liên quan* đến phát hiện drift.
+2. **Luôn đặt lợi ích cạnh chi phí** (số lần retrain): một chính sách "tốt hơn" có thể chỉ vì tốn hơn.
+3. Kết quả trái với dự đoán là **thông tin quý**: nó cho thấy giá trị của retrain ở hệ thống này đến chủ yếu từ **dữ liệu mới**, không từ **phát hiện drift**."""),
 ]
 
 nb = nbformat.v4.new_notebook(cells=cells, metadata={

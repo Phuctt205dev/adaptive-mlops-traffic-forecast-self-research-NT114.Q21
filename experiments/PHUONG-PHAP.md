@@ -94,3 +94,9 @@
 - **Dò ngưỡng trước khi so**; dò hết mà vẫn kém thì lỗi ở *thứ được đo*, không ở ngưỡng.
 - **Giả lập có kiểm soát** (giảm 30% đột ngột/dần từ ngày biết trước) bổ sung cho dữ liệu thật: đo được độ trễ rõ ràng.
 - Đọc lại câu chữ sau khi có số: ba câu viết trước khi chạy (khoảng báo nhầm, độ trễ drift dần, bảng tóm tắt) phải sửa theo số thật.
+
+**5.5 — quyết định bằng mô phỏng cả vòng**
+- **Chấm tín hiệu chưa đủ, phải mô phỏng cả vòng** báo → retrain → dùng model mới: ở 5.4 cách hiện tại tệ nhất, nhưng khi mô phỏng nó lại cho sai số thấp — vì luôn báo nên thành retrain hằng tuần, không vì phát hiện đúng.
+- **Đặt lợi ích cạnh chi phí** (số lần retrain); chính sách "tốt hơn" có thể chỉ vì tốn hơn.
+- Kết quả trái dự đoán là thông tin quý: giá trị của retrain ở hệ thống này đến chủ yếu từ **dữ liệu mới**, không từ **phát hiện drift**.
+- Khi chạy việc lâu ở chế độ nền, **luôn bật theo dõi tiến độ** cho người dùng (lần dựng notebook 5.5 đầu tiên quên bật, người dùng không biết đã xong chưa).

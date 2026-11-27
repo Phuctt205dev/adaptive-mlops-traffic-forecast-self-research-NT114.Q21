@@ -13,6 +13,7 @@ where the request came from (`source`):
 """
 import logging
 import os
+import re
 
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, start_http_server
 from prometheus_client import PlatformCollector, ProcessCollector
@@ -53,12 +54,38 @@ def method_label(method: str) -> str:
     return method if method in METHODS else "OTHER"
 
 
-def route_label(scope, app=None) -> str:
-    """The matched route template, e.g. /api/v1/regions/{region_id}/forecast-dashboard.
+_TEMPLATES = {}   # id(app) -> [(compiled regex, full template)], built once from the app's OpenAPI paths
 
-    A middleware can answer before routing (PredictionGate replies 503 when the pod is busy), so the
-    template is then looked up from the app's routes; nothing matching gives "unmatched".
+
+def _templates(app):
+    key = id(app)
+    if key not in _TEMPLATES:
+        compiled = []
+        try:
+            for template in app.openapi().get("paths", {}):
+                pattern = re.sub(r"\{[^}/]+:path\}", ".+", re.escape(template).replace(r"\{", "{").replace(r"\}", "}"))
+                pattern = re.sub(r"\{[^}/]+\}", "[^/]+", pattern)
+                compiled.append((re.compile(pattern + r"\Z"), template))
+        except Exception as error:   # labels must never break a request
+            logger.warning("Route templates unavailable for metrics: %s", type(error).__name__)
+        # Static templates before parameterised ones, so /regions/lookup wins over /regions/{id}.
+        compiled.sort(key=lambda item: (item[1].count("{"), -len(item[1])))
+        _TEMPLATES[key] = compiled
+    return _TEMPLATES[key]
+
+
+def route_label(scope, app=None) -> str:
+    """The full route template, e.g. /api/v1/regions/{region_id}/forecast-dashboard.
+
+    FastAPI keeps included routers nested, so scope["route"].path is only relative to the innermost
+    router (it can even be ""). The full template therefore comes from the app's OpenAPI paths. Routes
+    hidden from OpenAPI fall back to the relative template; a request answered before routing
+    (PredictionGate's 503 busy) still matches by path. A raw path is never used as a label.
     """
+    if app is not None and scope.get("type") == "http":
+        for pattern, template in _templates(app):
+            if pattern.match(scope.get("path", "")):
+                return template
     path = getattr(scope.get("route"), "path", None)
     if isinstance(path, str) and path:
         return path

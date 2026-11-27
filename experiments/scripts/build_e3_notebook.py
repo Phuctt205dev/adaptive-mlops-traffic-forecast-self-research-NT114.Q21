@@ -23,7 +23,7 @@ md("""# E3 — Khi nào nên retrain? Tín hiệu nào phát hiện drift tốt 
 | --- | --- | --- |
 | **5.1** | Chạy lại đúng cách phát hiện drift của hệ thống trên dữ liệu thật | Xong |
 | **5.2** | Dựng "đáp án": lúc nào retrain thật sự có lợi | Xong |
-| **5.3** | Tính 5 tín hiệu trên cùng dòng thời gian | Chưa |
+| **5.3** | Tính 5 tín hiệu trên cùng dòng thời gian | Xong |
 | **5.4** | Chấm: độ trễ, báo nhầm, bỏ sót; drift giả lập | Chưa |
 | **5.5** | Chọn tín hiệu, ngưỡng; lợi ích khi retrain; báo cáo | Chưa |"""),
 code("""from pathlib import Path
@@ -363,6 +363,143 @@ md("""### Tóm tắt bước 5.2
 1. Muốn chấm một bộ phát hiện, phải có **đáp án định nghĩa bằng hậu quả** (retrain có làm sai số giảm không), không phải bằng chính tín hiệu đang được chấm.
 2. **Kiểm tra đáp án trước khi dùng**: định nghĩa nháp cho gần nửa số tuần "nên retrain" ở nơi ổn định — vô lý, nên phải sửa.
 3. Đáp án gắn với **một quyết định thật** (retrain hôm nay, hưởng lợi 4 tuần tới) dễ giải thích hơn đáp án theo từng tuần rời rạc."""),
+md("""---
+## Bước 5.3 — Năm tín hiệu trên cùng một dòng thời gian
+
+**Đang làm gì.** Với mỗi tình huống của bước 5.2, mỗi ngày lúc 00:00 tính 5 tín hiệu, **chỉ dùng dữ liệu trước ngày đó** (đúng những gì hệ thống biết lúc đó). Model theo dõi là **M0** (giữ nguyên, như 5.2).
+
+| Tín hiệu | Nhìn vào | Giá trị | Báo khi |
+| --- | --- | --- | --- |
+| **A. Cách hiện tại** | 13 cột thời tiết/ngày lễ, 7 ngày so với 30 ngày trước `train_end` | số cột vượt ngưỡng | ≥ 2 cột (gọi `check` của bước 5.1) |
+| **B. PSI trên số xe** | phân bố `traffic_volume`, cùng hai kỳ như A | PSI | PSI > 0,2 (cùng ngưỡng hệ thống) |
+| **C. Sai số model theo tuần** | WAPE của M0 trong 7 ngày qua ÷ WAPE **lúc train** | tỉ số | > 1,15 (tệ hơn lúc train từ 15%) |
+| **D. Kém cách đoán tuần trước** | MAE của M0 so với MAE của "cùng giờ tuần trước", 7 ngày qua | % chênh | > 0 (model kém hơn) |
+| **E. CUSUM** | cộng dồn mỗi ngày phần sai số **vượt** mức lúc train quá 15% | tổng cộng dồn | ≥ 1,0 |
+
+**"WAPE lúc train"** của C và E: train một bản M0 trên 85% đầu cửa sổ, đo WAPE trên 15% cuối (phần model chưa thấy) — giống điểm *final test* hệ thống lưu khi train. C, D, E cần số xe thực tế của các ngày đã qua; dataset của hệ thống có sẵn cột này (tab Model Quality cũng dùng nó).
+
+Ngưỡng của C, D, E ở đây là **ngưỡng tự nhiên đầu tiên** (15% như hệ thống, 0 cho D, h = 1 cho E); bước 5.4 mới dò ngưỡng tốt nhất.
+
+> **Đoán trước:**
+> 1. Tín hiệu nào phản ứng mạnh nhất khi COVID xảy ra?
+> 2. Ở nơi ổn định, tín hiệu nào sẽ "im lặng" được?"""),
+code("""from src.feature_drift import _numeric_psi
+C_RATIO, CUSUM_K, CUSUM_H = 1.15, 0.15, 1.0
+RAW = {"Glasgow": glasgow, "I-94": i94}
+
+def signals(name):
+    df, data_start, m0_end, eval_end = SCENARIOS[name]
+    raw = RAW[name.split(" ")[0]]
+    m0_end = pd.Timestamp(m0_end)
+    m0_start = max(pd.Timestamp(data_start), m0_end - pd.DateOffset(months=WINDOW_MONTHS))
+    # Mức sai số lúc train: model học 85% đầu, đo trên 15% cuối (chưa thấy).
+    window = df[(df.date_time >= m0_start) & (df.date_time < m0_end)]
+    cut = window.date_time.iloc[int(len(window) * 0.85)]
+    val_model, vcols, _ = fit(df, m0_start, cut)
+    held = window[window.date_time >= cut]
+    ref_wape = np.abs(held.traffic_volume - predict(val_model, vcols, held)).sum() / held.traffic_volume.sum()
+    # M0 và sai số từng giờ sau train; cách đoán "cùng giờ tuần trước".
+    m0, cols, _ = fit(df, m0_start, m0_end)
+    ev = df[(df.date_time >= m0_end) & (df.date_time < pd.Timestamp(eval_end))].copy()
+    ev["err"] = (ev.traffic_volume - predict(m0, cols, ev)).abs()
+    last_week = df.set_index("date_time").traffic_volume.reindex(ev.date_time - pd.Timedelta(hours=168)).to_numpy()
+    ev["naive_err"] = np.abs(ev.traffic_volume.to_numpy() - last_week)
+    ev["date"] = ev.date_time.dt.floor("D")
+    days = pd.date_range(m0_end, pd.Timestamp(eval_end) - pd.Timedelta(days=1), freq="D")
+    daily = ev.groupby("date").agg(n=("err", "size"), err=("err", "sum"), actual=("traffic_volume", "sum")).reindex(days)
+    paired = ev.dropna(subset=["naive_err"]).groupby("date").agg(k=("err", "size"), m=("err", "sum"), nv=("naive_err", "sum")).reindex(days)
+    roll, roll_p = daily.fillna(0).rolling(7).sum(), paired.fillna(0).rolling(7).sum()
+    reference = raw[(raw.date_time >= m0_end - pd.Timedelta(days=S.drift_reference_days)) & (raw.date_time < m0_end)]
+    rows, cusum = [], 0.0
+    for day in days[7:]:
+        prev = day - pd.Timedelta(days=1)                  # chỉ các ngày đã trọn trước `day`
+        a = check(raw, m0_end, day)                        # A: đúng hàm và cửa sổ của hệ thống
+        current = raw[(raw.date_time > day - pd.Timedelta(days=7)) & (raw.date_time <= day) & (raw.date_time >= m0_end)]
+        psi = _numeric_psi(reference.traffic_volume, current.traffic_volume) if len(current) >= 24 else np.nan
+        w, wp, d1 = roll.loc[prev], roll_p.loc[prev], daily.loc[prev]
+        c = (w.err / w.actual) / ref_wape if w.n >= 84 and w.actual > 0 else np.nan
+        dchg = 100 * (wp.m / wp.nv - 1) if wp.k >= 84 and wp.nv > 0 else np.nan
+        if d1.n >= 12 and d1.actual > 0:
+            cusum = max(0.0, cusum + (d1.err / d1.actual) / ref_wape - 1 - CUSUM_K)
+        rows.append({"day": day,
+                     "A_value": a.get("drifted_count", np.nan), "A_alarm": {"drift": 1.0, "stable": 0.0}.get(a["status"], np.nan),
+                     "B_value": psi, "B_alarm": float(psi > S.drift_psi_threshold) if psi == psi else np.nan,
+                     "C_value": c, "C_alarm": float(c > C_RATIO) if c == c else np.nan,
+                     "D_value": dchg, "D_alarm": float(dchg > 0) if dchg == dchg else np.nan,
+                     "E_value": cusum, "E_alarm": float(cusum >= CUSUM_H)})
+    return pd.DataFrame(rows).set_index("day"), ref_wape"""),
+code("""sigs, rows = {}, []
+for name in SCENARIOS:
+    sig, ref = signals(name)
+    sigs[name] = sig
+    sig.round(4).to_csv(OUT_E3 / f"signals_{SLUG[name]}.csv", lineterminator="\\n")
+    row = {"Tình huống": name, "WAPE lúc train (%)": 100 * ref}
+    for s in "ABCDE":
+        row[f"{s}: % ngày báo"] = 100 * sig[f"{s}_alarm"].dropna().mean()
+    rows.append(row)
+pd.DataFrame(rows).set_index("Tình huống").round(1)"""),
+code("""t = sigs["Glasgow COVID"]
+first = {s: t[t[f"{s}_alarm"] == 1].index.min().date() for s in "ABCDE"}
+print("Lần báo đầu tiên ở Glasgow COVID:", first)
+print("Đáp án (bước 5.2): lần đầu nên retrain = 2020-03-30; phong tỏa = 2020-03-23")
+t.loc["2020-03-08":"2020-04-06", [f"{s}_value" for s in "ABCDE"]].round(2)"""),
+code("""PANELS = [("A_value", "A. Số cột thời tiết\\nvượt ngưỡng", S.drift_min_drifted_features - 0.5, None),
+          ("B_value", "B. PSI số xe", S.drift_psi_threshold, None),
+          ("C_value", "C. WAPE 7 ngày\\n÷ lúc train", C_RATIO, None),
+          ("D_value", "D. Model so với\\ntuần trước (%)", 0, (-100, 200)),
+          ("E_value", "E. CUSUM", CUSUM_H, (0, 10))]
+
+def plot_signals(name, start, end, path, title):
+    sig = sigs[name].loc[start:end]
+    tr = truths[name].loc[start:end]
+    fig, axes = plt.subplots(6, 1, figsize=(10, 11), sharex=True)
+    axes[0].bar(tr.index, 100 * tr.gain, width=5, color=[BLUE if v else "#c9c9c9" for v in tr.needs_retrain])
+    axes[0].axhline(15, color=INK, lw=1, ls="--")
+    axes[0].set_ylabel("Đáp án:\\nlợi ích retrain (%)", color=INK)
+    for ax, (col, label, threshold, ylim) in zip(axes[1:], PANELS):
+        alarm = sig[col.replace("value", "alarm")] == 1
+        ax.fill_between(sig.index, 0, 1, where=alarm, transform=ax.get_xaxis_transform(),
+                        color=ORANGE, alpha=0.18, step="mid", lw=0)
+        ax.plot(sig.index, sig[col].clip(*(ylim or (None, None))), color=BLUE, lw=1.6)
+        ax.axhline(threshold, color=INK, lw=1, ls="--")
+        if ylim:
+            ax.set_ylim(*ylim)
+        ax.set_ylabel(label, color=INK)
+    for ax in axes:
+        ax.spines[["top", "right"]].set_visible(False); ax.grid(axis="y", color="#e5e5e5", lw=0.6)
+        ax.set_axisbelow(True); ax.tick_params(colors=MUTED)
+    axes[0].set_title(title + "\\nNền cam = ngày tín hiệu báo; đường gạch = ngưỡng; D cắt ở 200%, E cắt ở 10",
+                      loc="left", color=INK, fontsize=10)
+    return fig, axes
+
+fig, axes = plot_signals("Glasgow COVID", "2020-03-01", "2020-07-31", FIG / "E3-4-signals-glasgow-covid.png",
+                         "Glasgow 03–07/2020: năm tín hiệu so với đáp án")
+for ax in axes:
+    ax.axvline(LOCKDOWN, color=INK, lw=1)
+fig.tight_layout(); fig.savefig(FIG / "E3-4-signals-glasgow-covid.png", dpi=150); plt.show()"""),
+code("""fig, axes = plot_signals("I-94 (M0 đến 01/2017)", "2017-01-01", "2017-12-31", FIG / "E3-5-signals-i94-stable.png",
+                         "I-94 2017 (ổn định, đáp án: không lúc nào cần retrain): năm tín hiệu")
+fig.tight_layout(); fig.savefig(FIG / "E3-5-signals-i94-stable.png", dpi=150); plt.show()"""),
+md("""**Đọc kết quả** (ngưỡng tự nhiên, chưa dò; chấm chính thức ở 5.4).
+- **A (cách hiện tại):** báo **100%** số ngày ở **cả 5 tình huống** — không phân biệt gì, như bước 5.1.
+- **B (PSI số xe):** COVID làm PSI vọt từ ≈ 0,2 lên **> 1,5 ngay sau phong tỏa** (24/03) rồi ≈ 6,5. Nơi ổn định báo 3–27% số ngày. Đây là tín hiệu **đơn giản nhất mà đã phản ứng đúng hiện tượng**, và **không cần model**.
+- **C, E (sai số model so với lúc train):** phản ứng rất mạnh với COVID (tỉ số WAPE từ ≈ 1,2 lên > 8). Nhưng ở nơi ổn định chúng **dao động theo "mức lúc train"**: mức này chỉ đo trên 15% cuối cửa sổ (vài tháng, một mùa), nên lúc thấp (I‑94 07/2017: 5,8%) thì sau đó ngày nào cũng có vẻ "tệ hơn" → báo 65–99%; lúc cao (I‑94 01/2017: 11,7%) thì gần như im (4–8%).
+- **D (kém cách đoán tuần trước):** báo 37–89% ở mọi nơi. Ở Glasgow model cây vốn kém cách đoán tuần trước (đã thấy ở E1), nên D luôn bật; sau phong tỏa D còn tăng vọt lên hàng trăm % vì "tuần trước" bắt kịp mức mới sau 1 tuần còn M0 thì không.
+- **Một điều chung:** vài tín hiệu chạm ngưỡng **trước** phong tỏa (A, C từ 08/03; B 11/03; E 16/03), trong khi đáp án nói retrain chỉ có lợi từ 30/03. Báo sớm như vậy là **báo nhầm** theo đáp án — chuyện này sẽ tính ở 5.4."""),
+md("""### Tóm tắt bước 5.3
+
+| Tín hiệu | COVID | Nơi ổn định | Nhận xét |
+| --- | --- | --- | --- |
+| A. Cách hiện tại | báo | **báo 100%** | Không dùng được |
+| B. PSI số xe | **phản ứng rất rõ** | báo 3–27% | Hứa hẹn; không cần model; cần chọn ngưỡng |
+| C. WAPE ÷ lúc train | phản ứng rất rõ | 4–65% | Phụ thuộc "mức lúc train" đo ra sao |
+| D. Kém tuần trước | phản ứng muộn, rồi rất mạnh | 37–89% | Nhiễu khi model vốn ngang/kém cách đoán đơn giản |
+| E. CUSUM | phản ứng rõ | 8–99% | Như C, vì dùng cùng mức lúc train |
+
+**Bài học về phương pháp (bước 5.3)**
+1. **Vẽ mọi phương án trên cùng một dòng thời gian, cạnh đáp án** — nhìn một hình là thấy cái nào "kêu" bừa, cái nào kêu đúng lúc.
+2. Tín hiệu dựa trên sai số model **chỉ tốt bằng "mức so sánh" của nó**: mức đo trên một đoạn ngắn thì ngưỡng 15% lúc quá chặt, lúc quá lỏng.
+3. Chưa kết luận ở bước này: ngưỡng mới là "ngưỡng tự nhiên". Bước 5.4 sẽ **dò ngưỡng** và **chấm bằng số** (độ trễ, báo nhầm, bỏ sót)."""),
 ]
 
 nb = nbformat.v4.new_notebook(cells=cells, metadata={

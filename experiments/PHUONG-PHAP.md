@@ -83,3 +83,8 @@
 **5.2 — dựng đáp án**
 - Đáp án định nghĩa bằng **hậu quả** (retrain có làm sai số 28 ngày tới giảm ≥ 15% không), không bằng chính tín hiệu đang chấm.
 - **Kiểm tra đáp án trước khi dùng:** bản nháp (so từng tuần, model học 3.593 giờ) cho 47% tuần "nên retrain" ở nơi ổn định → vô lý → đổi sang quyết định mỗi thứ Hai, đo 28 ngày, cửa sổ 24 tháng như hệ thống (I‑94: 0–11%).
+
+**5.3 — so nhiều phương án**
+- Vẽ mọi phương án **trên cùng một dòng thời gian, cạnh đáp án**: nhìn là thấy cái nào báo bừa.
+- Tín hiệu dựa trên sai số model chỉ tốt bằng **mức so sánh** của nó: "WAPE lúc train" đo trên 15% cuối cửa sổ dao động 5,8–17,6% tùy mùa, nên cùng ngưỡng 15% lúc quá chặt, lúc quá lỏng.
+- Chưa kết luận khi ngưỡng mới là "ngưỡng tự nhiên"; dò ngưỡng và chấm bằng số ở bước sau.

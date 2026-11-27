@@ -19,7 +19,7 @@ import sys
 from urllib.parse import urlparse
 
 from src.cloud_training.artifacts import MAX_BYTES, MAX_FILES, read_bundle, relative_path
-from src.cloud_training.control import render_notebook, source_configuration, source_control, with_control
+from src.cloud_training.control import LEASE_SECONDS, render_notebook, source_configuration, source_control, with_control
 from src.cloud_training.kaggle_transport import ProviderError
 from src.cloud_training.probe import canonical, sha256_file
 from src.cloud_training.errors import validate_failure
@@ -37,6 +37,11 @@ CONTROL_REREAD_SECONDS = 5
 CONTROL_GIVE_UP_MARGIN = 30
 CONTROL_REJECTION_LIMIT = 4
 CONTROL_REJECTION_MARGIN = 45
+# A lost notebook push is replaced only after its lease can no longer be honoured.
+SUBMIT_ATTEMPTS = 3
+SUBMIT_LEASE_MARGIN = 60
+SUBMIT_ABSENCE_POLL_SECONDS = 5
+SUBMIT_RECONCILE_SECONDS = 900
 
 
 class TrainingCancelled(ProviderError):
@@ -386,23 +391,12 @@ class KaggleExecution:
         if not self.ledger["submit_pending"]:
             if cancelled():
                 raise TrainingCancelled("The run was cancelled before notebook submission.")
-            source = render_notebook(self.ledger["snapshot"], self.ledger["reference"], self.ledger["dataset_reference"], clock=self.clock())
-            (notebook / "train.py").write_text(source, encoding="utf-8")
-            self.save(submit_pending=True)
-            response = self.call("kernel_push", directory=str(notebook), no_run=False, timeout=90)
-            if response.get("rejected"):
-                self.save(submit_rejected=True, expected_version=response.get("version"))
-                raise ProviderError("The provider rejected this notebook execution.", operation="kernel_push",
-                                    category="submit_rejected", diagnostic=response.get("diagnostic"))
-            self.save(expected_version=response["version"])
-            if type(response.get("session_id")) is int and response["session_id"] > 0:
-                self.save(session_id=response["session_id"])
-            keys = response.get("url_query_keys")
-            if isinstance(keys, list) and all(type(key) is str for key in keys):
-                # Names only. Kaggle has never returned a session id here, and
-                # knowing which parameters it does return explains why.
-                self.save(submit_url_query_keys=keys[:8])
-        # An uncertain response is recovered by read-back, never by a new push.
+            confirmed = self._push_execution(notebook)
+        else:
+            confirmed = False  # A restarted owner never knows how the earlier push ended.
+        if not confirmed:
+            self._reconcile_push(notebook, cancelled)
+        # An uncertain response is recovered by read-back, never by a blind new push.
         remote = self.call("kernel_get", reference=self.ledger["reference"])
         self.verify_remote(remote)
         version = remote["current_version_number"]
@@ -413,6 +407,111 @@ class KaggleExecution:
         self.milestone("submit_confirmed")
         self.phase("provider_wait")
         return self.reference
+
+    def _push_execution(self, notebook):
+        """One fenced notebook execution push. False when its reply was lost in transit."""
+        rendered_at = self.clock()
+        source = render_notebook(self.ledger["snapshot"], self.ledger["reference"], self.ledger["dataset_reference"],
+                                 clock=rendered_at)
+        (notebook / "train.py").write_text(source, encoding="utf-8")
+        # The lease inside this source starts at rendered_at. Journal it before
+        # the network so a later replacement can prove that lease has expired.
+        self.save(submit_pending=True, submit_attempts=self.ledger.get("submit_attempts", 0) + 1,
+                  submit_attempted_at=rendered_at)
+        try:
+            response = self.call("kernel_push", directory=str(notebook), no_run=False, timeout=90)
+        except ProviderError as error:
+            if not transient(error):
+                raise
+            self.save(last_failure={"operation": error.operation, "category": error.category,
+                                    "http_status": error.http_status})
+            return False
+        if response.get("rejected"):
+            self.save(submit_rejected=True, expected_version=response.get("version"))
+            raise ProviderError("The provider rejected this notebook execution.", operation="kernel_push",
+                                category="submit_rejected", diagnostic=response.get("diagnostic"))
+        self.save(expected_version=response["version"])
+        if type(response.get("session_id")) is int and response["session_id"] > 0:
+            self.save(session_id=response["session_id"])
+        keys = response.get("url_query_keys")
+        if isinstance(keys, list) and all(type(key) is str for key in keys):
+            # Names only. Kaggle has never returned a session id here, and
+            # knowing which parameters it does return explains why.
+            self.save(submit_url_query_keys=keys[:8])
+        return True
+
+    def _push_cannot_run(self, absent_since):
+        """True once an unseen notebook could no longer start a fit even if it appeared now.
+
+        The notebook trains only while the lease in its own source is in the
+        future, and a push writes a lease of LEASE_SECONDS from its render time.
+        A journal from before that time was recorded counts from the first
+        absence read instead, which is later and therefore stricter.
+        """
+        written = self.ledger.get("submit_attempted_at")
+        start = absent_since if written is None else written
+        return (self.clock() - absent_since >= INPUT_ABSENCE_SECONDS
+                and self.clock() >= start + LEASE_SECONDS + SUBMIT_LEASE_MARGIN)
+
+    def _reconcile_push(self, notebook, cancelled):
+        """Decide an unconfirmed push by reading Kaggle; push again only when it provably cannot run.
+
+        A notebook that exists is read back as usual and a confirmed reply is
+        never replaced. An absent notebook is pushed again (bounded) only after
+        it stayed absent across a visibility window AND its lease expired. Once
+        the budget is spent the absence is journaled, so Stop needs no read.
+        """
+        self.phase("submit_reconciling")
+        deadline, absent_since = self.clock() + SUBMIT_RECONCILE_SECONDS, None
+        while True:
+            if cancelled():
+                raise TrainingCancelled("The run was cancelled while confirming notebook submission.")
+            if self.clock() >= deadline:
+                raise ProviderUncertain("Notebook submission could not be confirmed.", operation="kernel_push",
+                                        category="provider_unknown")
+            try:
+                exists = self.call("resource_exists", kind="notebook", reference=self.ledger["reference"])["exists"]
+            except ProviderError as error:
+                if not transient(error):
+                    raise
+                exists = None  # A failed read is not proof of absence.
+            if exists is True:
+                self.phase("notebook_submit")
+                return
+            if exists is False:
+                absent_since = self.clock() if absent_since is None else absent_since
+                if self.ledger.get("expected_version") is None and self._push_cannot_run(absent_since):
+                    if self.ledger.get("submit_attempts", 1) >= SUBMIT_ATTEMPTS:
+                        self.save(submit_pending=False, submit_abandoned=True)
+                        raise ProviderError("Kaggle never received the notebook after bounded retries.",
+                                            operation="kernel_push", category="submit_failed")
+                    self.phase("notebook_submit")
+                    if self._push_execution(notebook):
+                        return
+                    self.phase("submit_reconciling")
+                    deadline, absent_since = self.clock() + SUBMIT_RECONCILE_SECONDS, None
+                    continue
+            else:
+                absent_since = None
+            for _ in range(SUBMIT_ABSENCE_POLL_SECONDS):
+                if cancelled():
+                    raise TrainingCancelled("The run was cancelled while confirming notebook submission.")
+                self.sleep(1)
+
+    def _stop_unconfirmed_push(self):
+        """Stop a branch whose push was never confirmed. None means the notebook exists: stop it normally."""
+        since = self.ledger.get("stop_absence_since")
+        if since is not None and self.clock() < self.ledger.get("stop_next_poll_at", 0):
+            return False  # The watcher sweeps every 2 seconds; read Kaggle gently.
+        if self.call("resource_exists", kind="notebook", reference=self.ledger["reference"])["exists"] is not False:
+            self.save(stop_absence_since=None)
+            return None
+        since = self.clock() if since is None else since
+        if self._push_cannot_run(since):
+            self.save(remote_stopped=True, notebook_cleaned=True, stop_absence_since=since)
+            return True
+        self.save(stop_absence_since=since, stop_next_poll_at=self.clock() + STOP_POLL_SECONDS)
+        return False
 
     def control(self, *, cancel=False):
         cancel = bool(cancel or self.ledger.get("cancel_requested"))
@@ -751,6 +850,12 @@ class KaggleExecution:
                     "resource_exists", kind="notebook", reference=self.ledger["reference"])["exists"]:
                 self.save(remote_stopped=True, notebook_cleaned=True)
                 return True
+            if not self.ledger.get("submit_rejected") and self.ledger.get("expected_version") is None:
+                # The push reply was lost: reading the notebook would only 404
+                # forever if Kaggle never created it. Decide by absence + lease.
+                stopped = self._stop_unconfirmed_push()
+                if stopped is not None:
+                    return stopped
             remote = self.call("kernel_get", reference=self.ledger["reference"])
             self.verify_remote(remote)
             self.save(version=remote["current_version_number"])

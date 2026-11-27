@@ -347,6 +347,24 @@ class TrainingExecutionTests(unittest.TestCase):
         self.db.commit()
         self.assertEqual(service.visible_runs(self.db, self.region.id), [])
 
+    def test_closed_run_no_longer_says_it_is_waiting_for_the_stop(self):
+        attempt = self.claim()
+        service.request_cancel(self.db, self.run.id)
+        self.assertIn("Waiting", service.execution(self.db, self.run.id).error_message)
+        service.acknowledge_stop(self.db, self.run.id, "tree", attempt, stopped=True, cleaned=True)
+        record, run = service.execution(self.db, self.run.id), self.db.get(TrainingRun, self.run.id)
+        self.assertEqual(run.status, TrainingRunStatus.CANCELLED)
+        self.assertEqual(run.error_message, "Cancelled by the administrator.")
+        self.assertEqual(record.error_message, "Cancelled by the administrator.")
+
+    def test_failed_run_message_is_in_the_past_tense_once_everything_stopped(self):
+        attempt = self.claim()
+        service.fail_run(self.db, self.run.id, "tree", attempt)
+        self.assertIn("is being stopped", service.execution(self.db, self.run.id).error_message)
+        service.acknowledge_stop(self.db, self.run.id, "tree", attempt, stopped=True, cleaned=True)
+        run = self.db.get(TrainingRun, self.run.id)
+        self.assertEqual(run.error_message, "Training failed. The remaining work in this run was stopped.")
+
     def test_error_remains_visible_until_stopped_and_dismissed(self):
         attempt = self.claim()
         service.fail_run(self.db, self.run.id, "tree", attempt)

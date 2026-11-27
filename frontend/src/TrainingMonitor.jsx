@@ -63,6 +63,7 @@ function RunCard({ run, timezone, onDismiss, snapshotAgeSeconds, capabilities })
   const phases = Object.values(run.branches || {}).map((b) => b.observation?.phase);
   const connection = phases.includes("needs_attention") ? "needs_attention"
     : phases.includes("input_reconciling") ? "input_reconciling"
+      : phases.includes("submit_reconciling") ? "submit_reconciling"
       : phases.includes("reconnecting") ? "reconnecting" : null;
   const stopWait = stopWaitNotice(run);
   const queueWait = queueWaitNotice(run);
@@ -114,6 +115,7 @@ function RunCard({ run, timezone, onDismiss, snapshotAgeSeconds, capabilities })
       {dismissError && <p className="training-monitor-error" role="alert">{dismissError}</p>}
       {connection && !run.cancel_requested && <div className="training-location-note" role="status">
         {connection === "input_reconciling" ? "Checking whether Kaggle received the training data. If needed, only the upload is retried. No duplicate model training is started."
+          : connection === "submit_reconciling" ? "The reply from Kaggle was lost while sending the notebook. The system is checking whether Kaggle received it, and sends it again only after confirming the first copy is missing and can no longer start. No duplicate model training is started."
           : connection === "reconnecting" ? "Contact with Kaggle was interrupted. The last confirmed progress is shown; no duplicate training was submitted."
           : "Kaggle's outcome could not be confirmed. Stop this run and wait for stop confirmation before starting a replacement. No Local fallback has started."}
       </div>}

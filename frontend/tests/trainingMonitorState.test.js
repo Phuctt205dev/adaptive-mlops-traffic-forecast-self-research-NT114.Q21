@@ -22,6 +22,12 @@ test("input reconciliation shows data checks without claiming ML has started", (
   assert.equal(modelStatus({ ...run, state: "cancelling" }, { id: "gru", state: "cancelling" }), "Stopping");
 });
 
+test("notebook submission check is shown as a check, not as a connection failure", () => {
+  const run = { backend: "kaggle", state: "running", branches: { lstm: { observation: { phase: "submit_reconciling" } } } };
+  assert.equal(modelStatus(run, { id: "lstm", stage: "queued", state: "waiting" }), "Checking that Kaggle received the notebook");
+  assert.equal(modelStatus({ ...run, state: "cancelling" }, { id: "lstm", state: "cancelling" }), "Stopping");
+});
+
 test("CV completion is a wait for final training, not completion of the run", () => {
   assert.match(modelStatus({}, { id: "lstm", stage: "model_cv_completed" }), /Waiting for final training/);
 });

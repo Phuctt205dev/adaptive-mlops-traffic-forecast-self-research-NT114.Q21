@@ -67,3 +67,15 @@
 - Mỗi lựa chọn đi kèm **bằng chứng đo được và đánh đổi**.
 - **Minh họa quyết định trên dữ liệu thật** ("hiện nay / đề xuất"): ở Glasgow, con số tuyệt đối nhỏ nhất (28 xe/giờ) lại là model kém cách đoán đơn giản 40%.
 - Tách **kết quả** (báo cáo E1) khỏi **đề xuất thay đổi hệ thống** (cần người có quyền quyết).
+
+### Giai đoạn 4 — áp dụng vào hệ thống
+
+- **Chạy lại bằng đúng hàm của hệ thống** (E2 gọi `_build_report` trên dự đoán của E1) để chắc phần đã sửa cho đúng con số của phân tích; nhờ vậy lộ ra một câu trong E1 thiếu tên model.
+
+### Giai đoạn 5 — khi nào retrain
+
+**5.1 — đo cách đang có**
+- **Đo hệ thống có sẵn trước khi đề xuất cái mới**, bằng chính mã và cấu hình của nó (gọi `calculate_feature_drift`, chọn cửa sổ như `_check_region`).
+- **Kiểm chứng âm:** dựng tình huống chắc chắn không có hiện tượng (kỳ hiện tại nằm trong kỳ tham chiếu). Bộ phát hiện drift hiện tại vẫn báo ≈ 98% → nó luôn bật, không mang thông tin.
+- "Báo đúng lúc" chưa đủ: phải hỏi **nó có báo cả lúc không nên báo không**. Ở Glasgow, hệ thống có báo trong thời gian COVID nhưng đã báo từ hai tuần trước đó vì thời tiết đổi.
+- Đọc hình trước khi viết kết luận: câu ban đầu "số cột vượt ngưỡng không tăng khi COVID" sai; hình cho thấy có tăng, nhưng cũng tăng y như vậy khi giao thông bình thường.

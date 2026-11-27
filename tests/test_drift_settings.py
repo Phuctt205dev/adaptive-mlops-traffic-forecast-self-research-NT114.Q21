@@ -104,6 +104,10 @@ class DriftSettingsTests(unittest.TestCase):
             stack.enter_context(patch.object(drift, "_download_dataset_frame", return_value=frame))
             stack.enter_context(patch.object(drift, "_production_frame", return_value=frame.iloc[2:]))
             stack.enter_context(patch.object(drift, "calculate_feature_drift", return_value={"summary": {"drift_detected": detected}}))
+            # Retraining follows traffic drift (E3); weather drift is reference only.
+            stack.enter_context(patch.object(drift, "calculate_traffic_drift", return_value={
+                "metric": "psi", "column": "traffic_volume", "value": 2.0 if detected else 0.1,
+                "threshold": 1.0, "drift": detected}))
             stack.enter_context(patch.object(drift, "_has_running_training", return_value=running))
             stack.enter_context(patch.object(drift, "_has_recent_retrain", return_value=cooldown))
             trigger = stack.enter_context(patch.object(drift, "_trigger_retraining", return_value=SimpleNamespace(id=uuid.uuid4())))

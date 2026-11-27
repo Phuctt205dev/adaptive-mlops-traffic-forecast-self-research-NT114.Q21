@@ -56,6 +56,26 @@ def _categorical_js_divergence(reference: pd.Series, current: pd.Series) -> floa
     return 0.5 * kl_divergence(p, m) + 0.5 * kl_divergence(q, m)
 
 
+def calculate_traffic_drift(
+    reference_df: pd.DataFrame,
+    current_df: pd.DataFrame,
+    threshold: float = 1.0,
+    column: str = "traffic_volume",
+) -> dict:
+    """PSI of the hourly target between the reference and current windows.
+
+    Experiment E3 (experiments/E3-drift-retrain.md) found this signal far more
+    informative than weather-feature drift: PSI > 1.0 gave 5% false alarms and
+    caught an abrupt 30% traffic drop within 5 days, while weather drift fired
+    on about 98% of checks even when nothing had changed.
+    """
+    if column not in reference_df.columns or column not in current_df.columns:
+        return {"metric": "psi", "column": column, "value": None, "threshold": float(threshold), "drift": False}
+    value = _numeric_psi(reference_df[column], current_df[column])
+    return {"metric": "psi", "column": column, "value": round(float(value), 6),
+            "threshold": float(threshold), "drift": bool(value > threshold)}
+
+
 def calculate_feature_drift(
     reference_df: pd.DataFrame,
     current_df: pd.DataFrame,

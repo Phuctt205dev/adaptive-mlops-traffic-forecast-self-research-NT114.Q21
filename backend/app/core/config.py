@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     drift_psi_threshold: float = 0.2
     drift_js_threshold: float = 0.15
     drift_min_drifted_features: int = 2
+    # Drift that triggers retraining: PSI of traffic_volume (E3). Weather PSI/JS above is reference only.
+    drift_traffic_psi_threshold: float = 1.0
+    # Automatic retrain when the active model's training data is this old (0 disables). E3: 28 days.
+    drift_scheduled_retrain_days: int = 28
     drift_auto_retrain: bool = True
     drift_auto_promote: bool = False
     drift_retrain_window_months: int = 24

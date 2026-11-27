@@ -115,7 +115,7 @@ WAPE cả năm (số lần retrain trong năm):
 1. **Tín hiệu drift tốt nhất** trong 5 tín hiệu là **PSI trên `traffic_volume`**, ngưỡng **1,0** (cùng hàm `_numeric_psi` hệ thống đã có, không cần model).
 2. **Khi nào nên retrain:** với model hiện tại, **định kỳ** (tần suất chọn theo chi phí: 4 tuần ≈ 13 lần/năm/vùng; 2 tuần ≈ 26) **và ngay khi PSI số xe > 1,0**. Tín hiệu thời tiết không nên là điều kiện retrain.
 
-**Đề xuất cho hệ thống** (chưa làm; cần người dùng/GVHD quyết):
+**Đề xuất cho hệ thống** (đề xuất 1–3 đã áp dụng trong mã ngày 27/11 trên nhánh local `feat/traffic-psi-drift-scheduled-retrain`, **chưa phát hành**; giữ Activate thủ công; xem mục 5.1):
 
 | # | Đề xuất | Bằng chứng | Mức thay đổi |
 | --- | --- | --- | --- |
@@ -124,6 +124,19 @@ WAPE cả năm (số lần retrain trong năm):
 | 3 | Thêm **retrain định kỳ** (ví dụ 4 tuần) | Sai số giảm đều theo số lần retrain | Vừa (lịch Airflow); chi phí Kaggle ≈ 4–5 phút mỗi lượt 5 model (đo 24/11) |
 | 4 | Quyết định có **tự Activate** candidate khi đạt kiểm tra chất lượng hay không | Lợi ích retrain chỉ có khi model mới được dùng | Chính sách vận hành |
 | 5 | Trước mắt, nếu chưa đổi (1): **tắt tự retrain theo drift thời tiết** | Trên hệ thống thật 9/9 lần kiểm báo drift, đã kích hoạt 2 lần retrain | Bật/tắt có sẵn |
+
+### 5.1 Đã áp dụng vào mã (chưa phát hành)
+
+| Thành phần | Thay đổi |
+| --- | --- |
+| `src/feature_drift.py` | Thêm `calculate_traffic_drift` (PSI của `traffic_volume`) |
+| `backend/app/core/config.py` | `drift_traffic_psi_threshold = 1.0`, `drift_scheduled_retrain_days = 28` |
+| `backend/app/services/drift_monitoring.py` | Drift = PSI số xe > 1,0 (thời tiết chỉ lưu tham khảo); retrain định kỳ khi dữ liệu model ≥ 28 ngày; bỏ qua `candidate_pending` khi lượt retrain từ chính model active còn chờ Activate; ghi `trigger_reason`; không đổi schema DB |
+| Tab Drift (`frontend/src/main.jsx`, `driftText.js`, `styles.css`) | Ô Traffic change (PSI); thời tiết ghi "(reference)"; trạng thái Scheduled retrain nền xanh dương; lý do retrain/bỏ qua bằng lời; lịch sử có cột Traffic PSI và lý do; lần kiểm cũ hiển thị như trước |
+| Kiểm tra | 16 test backend mới (`tests/test_drift_traffic_decision.py`), 8 test chữ (`frontend/tests/driftText.test.js`), 7 ca trình duyệt (`frontend/tests/check_drift_ui.py`); toàn bộ 1.051 test Python và 45 test frontend đạt; `scripts/drift/check_auto_retrain_ui.py` vẫn 10/10 |
+| Tài liệu | `docs/guides/DRIFT_AUTO_RETRAIN.md` mục "Khi nào hệ thống tự retrain" |
+
+![Tab Drift sau khi áp dụng (API giả lập)](figures/E3-8-drift-page-after.png)
 
 ## 6. Giới hạn
 

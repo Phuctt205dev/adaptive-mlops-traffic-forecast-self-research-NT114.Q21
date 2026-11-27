@@ -18,6 +18,46 @@ bền vững để chuyển đổi; admin cần bật lại những vùng muốn
 - Trong lúc tải/lưu lựa chọn, checkbox và Check now tạm khóa. Lưu lỗi sẽ có
   thông báo và giao diện đọc lại trạng thái server để tránh giữ tick chưa được xác nhận.
 
+## Khi nào hệ thống tự retrain (theo thực nghiệm E3)
+
+Mỗi ngày lúc 00:00 (DAG `traffic_region_drift_monitoring`), backend so **7 ngày
+gần nhất** với **30 ngày ngay trước `train_end_date`** của model active, như cũ.
+Từ bản này, **drift được quyết định bằng chính số xe**:
+
+| Tín hiệu | Dùng để | Ngưỡng |
+| --- | --- | --- |
+| PSI của `traffic_volume` (hàm `calculate_traffic_drift` trong `src/feature_drift.py`) | **Báo drift và retrain** | `drift_traffic_psi_threshold = 1.0` |
+| PSI/JS của 13 cột thời tiết, ngày lễ | Chỉ **hiển thị tham khảo** | như cũ (0,2 / 0,15, ≥ 2 cột) |
+| Tuổi dữ liệu của model active (ngày kiểm − `train_end_date`) | **Retrain định kỳ** | `drift_scheduled_retrain_days = 28` (0 = tắt) |
+
+Lý do và số đo ở [E3](../../experiments/E3-drift-retrain.md): tín hiệu thời tiết
+báo ≈ 98% kể cả khi chắc chắn không có drift (điểm J = 0); PSI số xe > 1,0 báo
+nhầm 5%, phát hiện giảm đột ngột 30% sau 5 ngày; với model hiện tại sai số giảm
+đều theo số lần retrain nên cần thêm retrain định kỳ.
+
+Quy tắc tự retrain (chỉ khi vùng bật **Auto retrain** và công tắc toàn hệ thống bật):
+
+1. **PSI số xe > 1,0** → retrain, lý do `traffic_drift`. Bỏ qua (`candidate_pending`)
+   nếu trong 28 ngày qua đã có lượt retrain tự động **từ chính model active này**
+   — model mới của lượt đó đang chờ Activate, retrain lại chỉ lặp cùng việc.
+   Admin bấm Check now kèm force vẫn retrain được.
+2. Không có drift, **dữ liệu của model active đã cũ ≥ 28 ngày** và 28 ngày qua chưa
+   có lượt retrain tự động nào (không tính lượt lỗi/hủy) → retrain, lý do `scheduled`.
+3. Các chặn cũ giữ nguyên: đang có training chạy (`training_already_running`),
+   thời gian chờ 72 giờ (`cooldown_active`).
+
+Lượt retrain vẫn có `trigger_source = feature_drift` (các dịch vụ khác nhận ra lượt
+retrain theo trường này) và thêm `trigger_reason` = `traffic_drift` hoặc `scheduled`.
+Model mới vẫn là **candidate**, admin xem và Activate như trước (`drift_auto_promote`
+vẫn tắt). Không đổi schema DB: PSI số xe, tuổi dữ liệu và lý do nằm trong JSON
+của `drift_checks` (`summary.traffic_psi`, `summary.weather_drift_detected`,
+`summary.model_data_age_days`, `retrain_reason`, `traffic`).
+
+Tab Drift: ô **Traffic change (PSI)** (giá trị / ngưỡng), ô thời tiết ghi
+"(reference)", trạng thái **Scheduled retrain** nền xanh dương (không phải cảnh
+báo), lý do retrain/bỏ qua bằng lời, lịch sử có cột Traffic PSI và lý do. Lần
+kiểm lưu trước bản này vẫn hiển thị như cũ.
+
 ## API và lưu trữ
 
 Chỉ admin được GET/PATCH `/api/v1/admin/regions/{region_id}/drift-settings`.
@@ -35,5 +75,8 @@ thêm schema hay yêu cầu migration runtime cho bản cập nhật này.
 
 `tests/test_drift_settings.py` kiểm lưu/đọc qua session khác, cách ly vùng,
 quyền admin, đầu vào và chặn dispatch ngoài lựa chọn. Training được giả lập.
+`tests/test_drift_traffic_decision.py` kiểm PSI số xe, quyết định retrain theo số xe và theo lịch, `candidate_pending`,
+lượt lỗi/hủy không chặn lịch, công tắc vùng và `trigger_reason`. `frontend/tests/driftText.test.js` kiểm chữ hiển thị;
+`frontend/tests/check_drift_ui.py` kiểm tab Drift với API giả (lý do retrain, lần kiểm cũ, 1440/390/320 px).
 `scripts/drift/check_auto_retrain_ui.py` kiểm bản frontend build với API giả:
 đổi vùng, tải lại trang, phản hồi chậm và lỗi lưu; không thay cấu hình hay train thật.

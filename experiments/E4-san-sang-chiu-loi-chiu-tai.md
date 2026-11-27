@@ -144,6 +144,26 @@ Không đổi: số pod, PDB, anti-affinity, blue/green, rate limit, `Prediction
 
 Phát hiện khi đọc mã (dùng cho 6.4): mỗi pod chỉ chạy **1 lượt dự báo tại một thời điểm** (khóa `serialized`), `PredictionGate` cho tối đa 1 đang chạy + 8 chờ (chờ tối đa 60 s), quá mức trả **503 busy** ngay — cơ chế tự bảo vệ khi quá tải. Khả năng chịu tải của trang dự báo vì vậy bị giới hạn bởi thời gian một lượt dự báo × 2 pod.
 
+### 4.3 Sự cố thật khi phát hành 6.3 (27/11) — chịu lỗi được kiểm chứng ngoài ý muốn
+
+Bản 6.3 (PR #35, `3ec28f2`) thêm một thư viện nên phải dựng lại mọi image. Diễn biến (giờ VN):
+
+| Giờ | Sự kiện |
+| --- | --- |
+| 14:59–15:12 | CI đạt (dựng lại 4 image) |
+| 15:14 | Dựng API bản mới: node-03 kéo image (0,52 GiB nén) ≈ 2 phút; **node-02 kéo > 10 phút** |
+| 15:25 | Rollout quá hạn 600 s → engine **tự rollback**: thu bản mới, giữ bản cũ |
+| 15:25–15:41 | Pod mới trên node-02 chờ hết thời gian tắt 900 s (preStop lỗi) → lease guard 2400 s hết trước khi engine ghi xong → CD **chặn**, `recovery_required` |
+| 15:55–16:16 | Kiểm chỉ đọc: tài nguyên duy nhất đã patch (slot `api`) **trùng 100% spec trước phát hành**; phát hiện engine đã **tạm dừng 2 DAG** (training, drift) và chưa bật lại → người dùng bật lại; công cụ mới `scripts/cicd/recover_lease_lost.py` chứng minh trạng thái rồi nhả chốt CD |
+| 16:10 | Người dùng kéo trước image tree (node-02), neural (node-03) |
+| 16:18–16:31 | Chạy lại (Manual): CI ≈ 3 phút, pod API mới sẵn sàng sau ≈ 4 phút, **đạt** |
+
+**Người dùng không bị gián đoạn lúc nào**: Service luôn trỏ về 2 pod bản cũ, health 200 suốt sự cố. Thời gian từ lỗi đầu tiên tới bản mới chạy: ≈ 66 phút, phần lớn là chờ (lease, kiểm chứng, thao tác người).
+
+Bài học cho hệ thống: (1) mạng node-02 chậm là giới hạn hạ tầng — bản đổi thư viện nên kéo trước image; (2) khi rollback bị ngắt, DAG có thể bị bỏ ở trạng thái tạm dừng — phải kiểm DAG sau mọi sự cố CD; (3) chuỗi "rollout timeout 600 s + grace 900 s" có thể vượt lease 2400 s — đề xuất xem lại (chưa đổi). Hướng dẫn phục hồi: `docs/guides/CD_MODES.md`, mục "Lease hết hạn giữa lúc rollback".
+
+Sau phát hành, kiểm sau CD phát hiện nhãn route bị sai (FastAPI giữ router lồng nhau nên `route.path` chỉ là phần tương đối, có route ra `""` → "unmatched"); đã sửa bằng mẫu route đầy đủ từ OpenAPI của app (test tái hiện đúng lỗi) — chờ phát hành.
+
 ## 5. Kết luận và đề xuất
 
 (Bổ sung ở 6.6.)

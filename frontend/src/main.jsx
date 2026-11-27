@@ -11,6 +11,10 @@ import { readPendingCleanup } from "./cleanupProgress.js";
 import { pages, rememberedPage, rememberPage } from "./pageNavigation.js";
 import { normalizeTrainingConfiguration } from "./trainingConfiguration.js";
 import {
+  decisionNote, driftStatusClass, driftStatusText, historyRetrainText, historyTrafficText,
+  retrainReasonText, scheduleText, skipReasonText, trafficChange,
+} from "./driftText.js";
+import {
   belongsToRegion, createRequestGate, hourBucket, isScopeLoaded, itemsForRegion, scopedItems,
 } from "./regionScope.js";
 import "./styles.css";
@@ -1647,16 +1651,6 @@ function PredictionPage({ selectedRegion }) {
   );
 }
 
-function driftStatusText(check) {
-  if (!check) return "Not checked";
-  if (check.status === "retrain_triggered") return "Retrain triggered";
-  if (check.status === "drift_detected") return "Drift detected";
-  if (check.status === "stable") return "Stable";
-  if (check.status === "skipped") return "Skipped";
-  if (check.status === "failed") return "Failed";
-  return check.status || "Unknown";
-}
-
 function driftFeatureRows(check) {
   const features = check?.feature_drift_json?.features || {};
   return Object.entries(features)
@@ -1891,7 +1885,8 @@ function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshR
 
   const displayCheck = pendingWindowChange ? null : selectedCheck;
   const featureRows = pendingWindowChange ? [] : driftFeatureRows(displayCheck);
-  const summary = displayCheck?.feature_drift_json?.summary || {};
+  const traffic = pendingWindowChange ? null : trafficChange(displayCheck);
+  const schedule = pendingWindowChange ? null : scheduleText(displayCheck);
   const visibleChecks = historyExpanded ? checks : checks.slice(0, 5);
   const currentStartPreview = useMemo(() => {
     if (!currentEnd) return "-";
@@ -1945,12 +1940,19 @@ function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshR
           </div>
         )}
         <div className="drift-summary">
-          <div className={`drift-status-card drift-status-${pendingWindowChange ? "pending" : displayCheck?.status || "none"}`}>
+          <div className={`drift-status-card drift-status-${pendingWindowChange ? "pending" : driftStatusClass(displayCheck)}`}>
             <span>Status</span>
             <strong>{pendingWindowChange ? "Not checked" : driftStatusText(displayCheck)}</strong>
           </div>
+          {traffic && (
+            <div className={`drift-traffic-card ${traffic.drifted ? "drift-traffic-changed" : ""}`}>
+              <span>Traffic change (PSI)</span>
+              <strong>{traffic.text}</strong>
+              <small>{traffic.drifted ? "Above threshold" : "Within threshold"}</small>
+            </div>
+          )}
           <div>
-            <span>Drifted features</span>
+            <span>{traffic ? "Weather features (reference)" : "Drifted features"}</span>
             <strong>{displayCheck ? `${displayCheck.drifted_feature_count}/${displayCheck.feature_count}` : "-"}</strong>
           </div>
           <div>
@@ -1976,12 +1978,12 @@ function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshR
         {displayCheck?.error_message && <div className="alert alert-error">{displayCheck.error_message}</div>}
         {displayCheck?.triggered_training_run_id && (
           <div className="alert alert-success">
-            Retrain triggered: {displayCheck.triggered_training_run_id}
+            {retrainReasonText(displayCheck) ? `Retrain triggered (${retrainReasonText(displayCheck)})` : "Retrain triggered"}: {displayCheck.triggered_training_run_id}
           </div>
         )}
         {displayCheck?.feature_drift_json?.retrain_skip_reason && (
           <div className="alert alert-info">
-            Retrain skipped: {displayCheck.feature_drift_json.retrain_skip_reason}
+            Retrain skipped: {skipReasonText(displayCheck.feature_drift_json.retrain_skip_reason)}
           </div>
         )}
         {displayCheck?.drift_detected && !displayCheck?.triggered_training_run_id && (
@@ -1994,7 +1996,7 @@ function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshR
         )}
       </Card>
 
-      <Card title="Feature Scores">
+      <Card title={traffic ? "Weather and Holiday Scores (reference)" : "Feature Scores"}>
         {featureRows.length ? (
           <Table
             columns={["Feature", "Active model", "Type", "Metric", "Score", "Threshold", "Status"]}
@@ -2020,7 +2022,8 @@ function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshR
         )}
         {displayCheck && !pendingWindowChange && (
           <p className="muted drift-threshold-note">
-            Drift is detected when at least {summary.min_drifted_features ?? "-"} features exceed their thresholds.
+            {decisionNote(displayCheck)}
+            {schedule && <><br />{schedule}</>}
           </p>
         )}
       </Card>
@@ -2040,7 +2043,8 @@ function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshR
                 <tr>
                   <th>Created</th>
                   <th>Status</th>
-                  <th>Drifted</th>
+                  <th>Traffic PSI</th>
+                  <th>Weather</th>
                   <th>Retrain</th>
                   <th>Method</th>
                   <th>Action</th>
@@ -2055,8 +2059,9 @@ function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshR
                   >
                     <td>{formatDate(check.created_at)}</td>
                     <td><StatusBadge value={check.status} /></td>
+                    <td>{historyTrafficText(check)}</td>
                     <td>{`${check.drifted_feature_count}/${check.feature_count}`}</td>
-                    <td>{check.triggered_training_run_id ? "yes" : "-"}</td>
+                    <td>{historyRetrainText(check)}</td>
                     <td>{check.method || "auto"}</td>
                     <td>
                       <button

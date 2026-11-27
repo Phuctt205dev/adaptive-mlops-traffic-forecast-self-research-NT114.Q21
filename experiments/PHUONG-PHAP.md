@@ -67,3 +67,36 @@
 - Mỗi lựa chọn đi kèm **bằng chứng đo được và đánh đổi**.
 - **Minh họa quyết định trên dữ liệu thật** ("hiện nay / đề xuất"): ở Glasgow, con số tuyệt đối nhỏ nhất (28 xe/giờ) lại là model kém cách đoán đơn giản 40%.
 - Tách **kết quả** (báo cáo E1) khỏi **đề xuất thay đổi hệ thống** (cần người có quyền quyết).
+
+### Giai đoạn 4 — áp dụng vào hệ thống
+
+- **Chạy lại bằng đúng hàm của hệ thống** (E2 gọi `_build_report` trên dự đoán của E1) để chắc phần đã sửa cho đúng con số của phân tích; nhờ vậy lộ ra một câu trong E1 thiếu tên model.
+
+### Giai đoạn 5 — khi nào retrain
+
+**5.1 — đo cách đang có**
+- **Đo hệ thống có sẵn trước khi đề xuất cái mới**, bằng chính mã và cấu hình của nó (gọi `calculate_feature_drift`, chọn cửa sổ như `_check_region`).
+- **Kiểm chứng âm:** dựng tình huống chắc chắn không có hiện tượng (kỳ hiện tại nằm trong kỳ tham chiếu). Bộ phát hiện drift hiện tại vẫn báo ≈ 98% → nó luôn bật, không mang thông tin.
+- "Báo đúng lúc" chưa đủ: phải hỏi **nó có báo cả lúc không nên báo không**. Ở Glasgow, hệ thống có báo trong thời gian COVID nhưng đã báo từ hai tuần trước đó vì thời tiết đổi.
+- Đọc hình trước khi viết kết luận: câu ban đầu "số cột vượt ngưỡng không tăng khi COVID" sai; hình cho thấy có tăng, nhưng cũng tăng y như vậy khi giao thông bình thường.
+
+**5.2 — dựng đáp án**
+- Đáp án định nghĩa bằng **hậu quả** (retrain có làm sai số 28 ngày tới giảm ≥ 15% không), không bằng chính tín hiệu đang chấm.
+- **Kiểm tra đáp án trước khi dùng:** bản nháp (so từng tuần, model học 3.593 giờ) cho 47% tuần "nên retrain" ở nơi ổn định → vô lý → đổi sang quyết định mỗi thứ Hai, đo 28 ngày, cửa sổ 24 tháng như hệ thống (I‑94: 0–11%).
+
+**5.3 — so nhiều phương án**
+- Vẽ mọi phương án **trên cùng một dòng thời gian, cạnh đáp án**: nhìn là thấy cái nào báo bừa.
+- Tín hiệu dựa trên sai số model chỉ tốt bằng **mức so sánh** của nó: "WAPE lúc train" đo trên 15% cuối cửa sổ dao động 5,8–17,6% tùy mùa, nên cùng ngưỡng 15% lúc quá chặt, lúc quá lỏng.
+- Chưa kết luận khi ngưỡng mới là "ngưỡng tự nhiên"; dò ngưỡng và chấm bằng số ở bước sau.
+
+**5.4 — chấm bằng số**
+- Đặt **bắt đúng cạnh báo nhầm** (và độ trễ): cách hiện tại bắt đúng 100% nhưng báo nhầm 100%, điểm J = 0.
+- **Dò ngưỡng trước khi so**; dò hết mà vẫn kém thì lỗi ở *thứ được đo*, không ở ngưỡng.
+- **Giả lập có kiểm soát** (giảm 30% đột ngột/dần từ ngày biết trước) bổ sung cho dữ liệu thật: đo được độ trễ rõ ràng.
+- Đọc lại câu chữ sau khi có số: ba câu viết trước khi chạy (khoảng báo nhầm, độ trễ drift dần, bảng tóm tắt) phải sửa theo số thật.
+
+**5.5 — quyết định bằng mô phỏng cả vòng**
+- **Chấm tín hiệu chưa đủ, phải mô phỏng cả vòng** báo → retrain → dùng model mới: ở 5.4 cách hiện tại tệ nhất, nhưng khi mô phỏng nó lại cho sai số thấp — vì luôn báo nên thành retrain hằng tuần, không vì phát hiện đúng.
+- **Đặt lợi ích cạnh chi phí** (số lần retrain); chính sách "tốt hơn" có thể chỉ vì tốn hơn.
+- Kết quả trái dự đoán là thông tin quý: giá trị của retrain ở hệ thống này đến chủ yếu từ **dữ liệu mới**, không từ **phát hiện drift**.
+- Khi chạy việc lâu ở chế độ nền, **luôn bật theo dõi tiến độ** cho người dùng (lần dựng notebook 5.5 đầu tiên quên bật, người dùng không biết đã xong chưa).

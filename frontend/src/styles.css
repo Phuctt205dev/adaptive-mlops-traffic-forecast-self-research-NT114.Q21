@@ -1707,7 +1707,7 @@ td {
 
 .drift-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 10px;
   margin-top: 12px;
 }
@@ -1735,6 +1735,8 @@ td {
 }
 
 .drift-window-input {
+  width: 100%;
+  min-width: 0;
   min-height: 34px;
   padding: 7px 9px;
   font-size: 13px;
@@ -1759,6 +1761,26 @@ td {
 .drift-status-skipped {
   border-color: #fde68a !important;
   background: #fffbeb !important;
+}
+
+.drift-status-scheduled {
+  border-color: #bfdbfe !important;
+  background: #eff6ff !important;
+}
+
+.drift-summary small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.drift-traffic-card strong {
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+}
+
+.drift-summary > .drift-traffic-changed {
+  border-color: #fecaca;
+  background: #fef2f2;
 }
 
 .drift-status-pending {

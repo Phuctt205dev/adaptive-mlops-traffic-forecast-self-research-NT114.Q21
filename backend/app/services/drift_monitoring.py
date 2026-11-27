@@ -23,8 +23,15 @@ from backend.app.db.models import (
 from backend.app.services import airflow_client, model_registry, drift_settings
 from backend.app.services.predictions import _production_frame
 from backend.app.services.storage import get_s3_client
-from src.feature_drift import calculate_feature_drift
+from src.feature_drift import calculate_feature_drift, calculate_traffic_drift
 
+
+# Every automatic retrain keeps trigger_source="feature_drift" (other services
+# recognise drift retrains by it); trigger_reason says why it was started.
+DRIFT_TRIGGER_SOURCE = "feature_drift"
+REASON_TRAFFIC = "traffic_drift"
+REASON_SCHEDULED = "scheduled"
+INACTIVE_RUN_STATUSES = {TrainingRunStatus.FAILED, TrainingRunStatus.CANCELLED}
 
 RUNNING_TRAINING_STATUSES = {
     TrainingRunStatus.QUEUED,
@@ -101,6 +108,42 @@ def _has_recent_retrain(db: Session, region_id: uuid.UUID, cooldown_hours: int) 
             .limit(1)
         )
     )
+
+
+def _recent_drift_retrains(db: Session, region_id: uuid.UUID, days: int) -> list[TrainingRun]:
+    """Drift-started runs of the region in the last `days`, ignoring failed or cancelled ones.
+
+    Training runs are used instead of drift checks because only the latest ten
+    checks per region are kept.
+    """
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    runs = db.scalars(
+        select(TrainingRun).where(TrainingRun.region_id == region_id, TrainingRun.created_at >= cutoff)
+    )
+    return [run for run in runs
+            if (run.configuration_json or {}).get("trigger_source") == DRIFT_TRIGGER_SOURCE
+            and run.status not in INACTIVE_RUN_STATUSES]
+
+
+def _retrain_reason(db: Session, region_id: uuid.UUID, model_id, train_end, current_end, traffic_drift: bool,
+                    settings) -> tuple[str | None, str | None]:
+    """Return (reason, skip_reason) for an automatic retrain, before running/cooldown guards.
+
+    - traffic drift: retrain, unless a drift retrain from this same active model is
+      still recent (its candidate is waiting for Activate; retraining again would
+      only repeat the same work every cooldown period);
+    - otherwise scheduled: when the active model's data ends `drift_scheduled_retrain_days`
+      or more before the check and no drift retrain ran in that period.
+    """
+    days = int(settings.drift_scheduled_retrain_days)
+    recent = _recent_drift_retrains(db, region_id, days) if days > 0 else []
+    if traffic_drift:
+        if any((run.configuration_json or {}).get("retrain_source_model_id") == str(model_id) for run in recent):
+            return None, "candidate_pending"
+        return REASON_TRAFFIC, None
+    if days > 0 and current_end - train_end >= pd.Timedelta(days=days) and not recent:
+        return REASON_SCHEDULED, None
+    return None, None
 
 
 def _create_check(
@@ -207,7 +250,7 @@ def _training_configuration(training_run: TrainingRun, current_end_at: pd.Timest
         "recurrent_batch_size": int(previous.get("recurrent_batch_size") or 32),
         "neural_accelerator": "gpu" if previous.get("neural_accelerator") == "gpu" else "cpu",
         "final_test_ratio": float(previous.get("final_test_ratio") or 0.15),
-        "trigger_source": "feature_drift",
+        "trigger_source": DRIFT_TRIGGER_SOURCE,
         "drift_current_end": str(current_end_at),
         "shap": dict(previous.get("shap") or {}),
     }
@@ -260,9 +303,11 @@ def _trigger_retraining(
     training_run: TrainingRun,
     current_end_at: pd.Timestamp,
     serving_runtime=None,
+    reason: str = REASON_TRAFFIC,
 ) -> TrainingRun:
     settings = get_settings()
     configuration = _training_configuration(training_run, current_end_at)
+    configuration["trigger_reason"] = reason
     if configuration["training_backend"] == "kaggle" and not (settings.training_control_enabled and settings.cloud_training_enabled):
         raise ValueError("Kaggle retraining is unavailable; automatic fallback is disabled.")
     region = db.get(Region, dataset.region_id)
@@ -407,11 +452,23 @@ def _check_region(
             categorical_threshold=settings.drift_js_threshold,
             min_drifted_features=settings.drift_min_drifted_features,
         )
-        drift_report["summary"]["reference_row_count"] = len(reference)
-        drift_report["summary"]["current_row_count"] = len(current)
-        drift_report["summary"]["requested_current_end"] = current_end.isoformat()
-        drift_report["summary"]["check_method"] = check_method
-        drift_detected = bool(drift_report["summary"]["drift_detected"])
+        summary = drift_report["summary"]
+        summary["reference_row_count"] = len(reference)
+        summary["current_row_count"] = len(current)
+        summary["requested_current_end"] = current_end.isoformat()
+        summary["check_method"] = check_method
+        # Weather/holiday drift stays in the report for reference only; the
+        # decision uses the traffic itself (see experiments/E3-drift-retrain.md).
+        traffic = calculate_traffic_drift(reference, current, threshold=settings.drift_traffic_psi_threshold)
+        drift_report["traffic"] = traffic
+        summary["weather_drift_detected"] = bool(summary.get("drift_detected", False))
+        summary["decision_signal"] = "traffic_volume_psi"
+        summary["traffic_psi"] = traffic["value"]
+        summary["traffic_psi_threshold"] = traffic["threshold"]
+        summary["drift_detected"] = traffic["drift"]
+        summary["model_data_age_days"] = round((current_end - train_end) / pd.Timedelta(days=1), 2)
+        summary["scheduled_retrain_days"] = int(settings.drift_scheduled_retrain_days)
+        drift_detected = bool(traffic["drift"])
         status = (
             DriftCheckStatus.DRIFT_DETECTED
             if drift_detected
@@ -420,13 +477,22 @@ def _check_region(
         triggered_run = None
         # Scheduler/request flags can suppress automatic work, never opt a region
         # into it. Only an explicit admin force request bypasses the preference.
-        allow_retrain = False
-        if drift_detected and auto_retrain and settings.drift_auto_retrain:
-            allow_retrain = (
+        region_allows = False
+        if auto_retrain and settings.drift_auto_retrain:
+            region_allows = (
                 (force_retrain and check_method == "manual")
                 or drift_settings.auto_retrain_enabled(db, region.id)
             )
-        if allow_retrain:
+        reason = None
+        if region_allows:
+            if force_retrain and check_method == "manual" and drift_detected:
+                reason = REASON_TRAFFIC   # admin asked explicitly; no pending-candidate guard
+            else:
+                reason, skip = _retrain_reason(db, region.id, model_version.id, train_end, current_end,
+                                               drift_detected, settings)
+                if skip:
+                    drift_report["retrain_skip_reason"] = skip
+        if reason:
             if _has_running_training(db, region.id):
                 drift_report["retrain_skip_reason"] = "training_already_running"
             elif (
@@ -436,12 +502,14 @@ def _check_region(
                 drift_report["retrain_skip_reason"] = "cooldown_active"
             else:
                 drift_report["force_retrain"] = force_retrain
+                drift_report["retrain_reason"] = reason
                 triggered_run = _trigger_retraining(
                     db,
                     dataset,
                     training_run,
                     current_end,
                     serving_runtime=serving_runtime,
+                    reason=reason,
                 )
                 status = DriftCheckStatus.RETRAIN_TRIGGERED
 

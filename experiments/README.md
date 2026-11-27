@@ -15,8 +15,8 @@ Làm lần lượt từng giai đoạn; mỗi giai đoạn xong có một kết 
 | 1 | Dữ liệu dự án đang dùng ra sao? Dọn thư mục `data/` | **Hoàn thành** (người dùng xác nhận 26/11) | [E0-dataset.md](E0-dataset.md) (phần A) |
 | 2 | Có bộ dữ liệu thật nào gần với dự án? | **Hoàn thành** (người dùng: "cũng ổn rồi", 26/11) | [E0-dataset.md](E0-dataset.md) (phần B) |
 | 3 | Chỉ số nào đánh giá khả năng dự đoán tốt nhất? | **Hoàn thành** (người dùng xác nhận 26/11): chọn model = MAE; hiển thị = WAPE + MAE + so với cách đoán tuần trước; theo dõi = họ MAE/WAPE (kiểm ở E3). Kết quả train offline ở `outputs/e1/`, hình ở `figures/` | Báo cáo [E1-chi-so-danh-gia.md](E1-chi-so-danh-gia.md); notebook [notebooks/E1-chi-so-danh-gia.ipynb](notebooks/E1-chi-so-danh-gia.ipynb) |
-| 4 | Tab Model Quality nên hiển thị sai số thế nào? | **Đã chạy, đã kiểm** (26/11): tab hiện WAPE + MAE + so với cùng giờ tuần trước, nhãn Low traffic; chờ phát hành và người dùng xác nhận | [E2-model-quality.md](E2-model-quality.md); script [scripts/e2_backend_replay.py](scripts/e2_backend_replay.py) |
-| 5 | Khi nào nên retrain? Tín hiệu drift nào tốt nhất? | Chưa làm | `E3-drift-retrain.md` |
+| 4 | Tab Model Quality nên hiển thị sai số thế nào? | **Đã phát hành** (26/11, PR #33, kiểm sau CD đạt): tab hiện WAPE + MAE + so với cùng giờ tuần trước, nhãn Low traffic; chờ người dùng xác nhận | [E2-model-quality.md](E2-model-quality.md); script [scripts/e2_backend_replay.py](scripts/e2_backend_replay.py) |
+| 5 | Khi nào nên retrain? Tín hiệu drift nào tốt nhất? | **Đã chạy, đã kiểm** (27/11): cách phát hiện hiện tại luôn báo (J = 0); tín hiệu tốt nhất là PSI trên số xe (> 1,0: báo nhầm 5%); nên retrain định kỳ + PSI số xe khi có biến cố; chờ người dùng xác nhận | Báo cáo [E3-drift-retrain.md](E3-drift-retrain.md); notebook [notebooks/E3-drift-retrain.ipynb](notebooks/E3-drift-retrain.ipynb) (dựng bằng `scripts/build_e3_notebook.py`) |
 | 6 | Hệ thống chạy nhanh và ổn cỡ nào? | Chưa làm | `E4-hieu-nang.md` |
 | 7 | Tổng hợp cho báo cáo | Chưa làm | `00-tong-hop.md` |
 

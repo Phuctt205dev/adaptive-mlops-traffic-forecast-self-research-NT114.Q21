@@ -88,3 +88,9 @@
 - Vẽ mọi phương án **trên cùng một dòng thời gian, cạnh đáp án**: nhìn là thấy cái nào báo bừa.
 - Tín hiệu dựa trên sai số model chỉ tốt bằng **mức so sánh** của nó: "WAPE lúc train" đo trên 15% cuối cửa sổ dao động 5,8–17,6% tùy mùa, nên cùng ngưỡng 15% lúc quá chặt, lúc quá lỏng.
 - Chưa kết luận khi ngưỡng mới là "ngưỡng tự nhiên"; dò ngưỡng và chấm bằng số ở bước sau.
+
+**5.4 — chấm bằng số**
+- Đặt **bắt đúng cạnh báo nhầm** (và độ trễ): cách hiện tại bắt đúng 100% nhưng báo nhầm 100%, điểm J = 0.
+- **Dò ngưỡng trước khi so**; dò hết mà vẫn kém thì lỗi ở *thứ được đo*, không ở ngưỡng.
+- **Giả lập có kiểm soát** (giảm 30% đột ngột/dần từ ngày biết trước) bổ sung cho dữ liệu thật: đo được độ trễ rõ ràng.
+- Đọc lại câu chữ sau khi có số: ba câu viết trước khi chạy (khoảng báo nhầm, độ trễ drift dần, bảng tóm tắt) phải sửa theo số thật.

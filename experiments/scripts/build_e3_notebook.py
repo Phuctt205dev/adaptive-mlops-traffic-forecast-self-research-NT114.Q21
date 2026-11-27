@@ -24,7 +24,7 @@ md("""# E3 — Khi nào nên retrain? Tín hiệu nào phát hiện drift tốt 
 | **5.1** | Chạy lại đúng cách phát hiện drift của hệ thống trên dữ liệu thật | Xong |
 | **5.2** | Dựng "đáp án": lúc nào retrain thật sự có lợi | Xong |
 | **5.3** | Tính 5 tín hiệu trên cùng dòng thời gian | Xong |
-| **5.4** | Chấm: độ trễ, báo nhầm, bỏ sót; drift giả lập | Chưa |
+| **5.4** | Chấm: độ trễ, báo nhầm, bỏ sót; drift giả lập | Xong |
 | **5.5** | Chọn tín hiệu, ngưỡng; lợi ích khi retrain; báo cáo | Chưa |"""),
 code("""from pathlib import Path
 import sys
@@ -389,7 +389,7 @@ RAW = {"Glasgow": glasgow, "I-94": i94}
 
 def signals(name):
     df, data_start, m0_end, eval_end = SCENARIOS[name]
-    raw = RAW[name.split(" ")[0]]
+    raw = RAW[name] if name in RAW else RAW[name.split(" ")[0]]
     m0_end = pd.Timestamp(m0_end)
     m0_start = max(pd.Timestamp(data_start), m0_end - pd.DateOffset(months=WINDOW_MONTHS))
     # Mức sai số lúc train: model học 85% đầu, đo trên 15% cuối (chưa thấy).
@@ -500,6 +500,141 @@ md("""### Tóm tắt bước 5.3
 1. **Vẽ mọi phương án trên cùng một dòng thời gian, cạnh đáp án** — nhìn một hình là thấy cái nào "kêu" bừa, cái nào kêu đúng lúc.
 2. Tín hiệu dựa trên sai số model **chỉ tốt bằng "mức so sánh" của nó**: mức đo trên một đoạn ngắn thì ngưỡng 15% lúc quá chặt, lúc quá lỏng.
 3. Chưa kết luận ở bước này: ngưỡng mới là "ngưỡng tự nhiên". Bước 5.4 sẽ **dò ngưỡng** và **chấm bằng số** (độ trễ, báo nhầm, bỏ sót)."""),
+md("""---
+## Bước 5.4 — Chấm điểm bằng số: bắt đúng, báo nhầm, độ trễ
+
+**Đang làm gì.** Ở mỗi **thời điểm quyết định** (thứ Hai) của 5 tình huống thật, so tín hiệu hôm đó với đáp án của bước 5.2. Mỗi tín hiệu thử **5 mức ngưỡng**.
+
+| Chỉ số | Nói đơn giản | Muốn |
+| --- | --- | --- |
+| **Bắt đúng** (recall) | Trong các thời điểm *nên retrain*, tín hiệu báo được bao nhiêu % | cao |
+| **Báo nhầm** (false alarm rate) | Trong các thời điểm *chưa cần retrain*, tín hiệu vẫn báo bao nhiêu % | thấp |
+| **Độ tin** (precision) | Khi tín hiệu báo, bao nhiêu % là đúng lúc cần | cao |
+| **Điểm J** | Bắt đúng − báo nhầm (0 = không hơn đoán bừa, 1 = hoàn hảo) | cao |
+| **Trễ COVID** | Từ 30/03/2020 (lúc đầu tiên nên retrain) đến thứ Hai đầu tiên tín hiệu báo | thấp |
+| **Báo sớm COVID** | Số thứ Hai tín hiệu báo **trước** 30/03 (lúc retrain chưa có ích) | 0 |
+
+Thời điểm mà tín hiệu không tính được (A bị hệ thống bỏ qua vì thiếu giờ) không được chấm; số này ghi ở cột "bỏ qua".
+
+> **Đoán trước:** tín hiệu nào có điểm J cao nhất? Nâng ngưỡng của cách hiện tại (A) có cứu được nó không?"""),
+code("""GRID = {"A": [2, 4, 6, 8, 10], "B": [0.1, 0.2, 0.3, 0.5, 1.0], "C": [1.15, 1.3, 1.5, 2.0, 3.0],
+        "D": [0, 10, 25, 50, 100], "E": [1, 2, 5, 10, 20]}
+NAMES = {"A": "A. Cách hiện tại (số cột)", "B": "B. PSI số xe", "C": "C. WAPE ÷ lúc train",
+         "D": "D. Kém tuần trước (%)", "E": "E. CUSUM"}
+REAL = list(truths)          # 5 tình huống thật của bước 5.2
+
+def fires(values, s, threshold):
+    \"\"\"A dùng 'từ k cột trở lên', E dùng 'từ h trở lên'; còn lại 'vượt ngưỡng'.\"\"\"
+    return (values >= threshold) if s in ("A", "E") else (values > threshold)
+
+rows = []
+for s, grid in GRID.items():
+    for threshold in grid:
+        tp = fp = fn = tn = skipped = 0
+        for name in REAL:
+            truth = truths[name]
+            values = sigs[name][f"{s}_value"].reindex(truth.index)
+            ok = values.notna()
+            skipped += int((~ok).sum())
+            alarm, need = fires(values[ok], s, threshold), truth.needs_retrain[ok]
+            tp += int((alarm & need).sum()); fp += int((alarm & ~need).sum())
+            fn += int((~alarm & need).sum()); tn += int((~alarm & ~need).sum())
+        g = truths["Glasgow COVID"]
+        gv = sigs["Glasgow COVID"][f"{s}_value"].reindex(g.index)
+        galarm = fires(gv, s, threshold) & gv.notna()
+        after = galarm[galarm.index >= "2020-03-30"]
+        first = after[after].index.min()
+        rows.append({"Tín hiệu": NAMES[s], "Ngưỡng": threshold, "Bắt đúng (%)": 100 * tp / (tp + fn),
+                     "Báo nhầm (%)": 100 * fp / (fp + tn), "Độ tin (%)": 100 * tp / (tp + fp) if tp + fp else np.nan,
+                     "Điểm J": (tp / (tp + fn)) - (fp / (fp + tn)),
+                     "Trễ COVID (ngày)": (first - pd.Timestamp("2020-03-30")).days if pd.notna(first) else np.nan,
+                     "Báo sớm COVID": int(galarm[galarm.index < "2020-03-30"].sum()), "Bỏ qua": skipped})
+score = pd.DataFrame(rows)
+print("Số thời điểm được chấm:", sum(len(t) for t in truths.values()),
+      "| nên retrain:", sum(int(t.needs_retrain.sum()) for t in truths.values()))
+score.round(2)"""),
+code("""best = score.loc[score.groupby("Tín hiệu")["Điểm J"].idxmax()].sort_values("Điểm J", ascending=False)
+print("Ngưỡng tốt nhất của mỗi tín hiệu (điểm J cao nhất):")
+best.set_index("Tín hiệu").round(2)"""),
+code("""COLORS = {"A": BLUE, "B": ORANGE, "C": "#00b894", "D": "#f2a600", "E": "#ee7fac"}   # đã kiểm bằng validate_palette.js
+MARKERS = {"A": "o", "B": "s", "C": "^", "D": "D", "E": "v"}
+LABEL_AT = {"A": (78, 90), "B": (3, 56), "C": (36, 60), "D": (47, 72), "E": (58, 82)}   # chỗ trống, không đè đường
+fig, ax = plt.subplots(figsize=(8.5, 6))
+ax.plot([0, 100], [0, 100], color="#c9c9c9", lw=1, ls=":")
+ax.text(62, 55, "đường đoán bừa", color=MUTED, fontsize=9, rotation=35)
+for s in GRID:
+    part = score[score["Tín hiệu"] == NAMES[s]].sort_values("Báo nhầm (%)")
+    ax.plot(part["Báo nhầm (%)"], part["Bắt đúng (%)"], color=COLORS[s], marker=MARKERS[s], ms=7, lw=2, label=NAMES[s])
+    top = part.loc[part["Điểm J"].idxmax()]
+    ax.annotate(f"{s}: ngưỡng {top['Ngưỡng']:g}".replace(".", ","), (top["Báo nhầm (%)"], top["Bắt đúng (%)"]),
+                xytext=LABEL_AT[s], textcoords="data", fontsize=9, color=INK,
+                arrowprops={"arrowstyle": "-", "color": MUTED, "lw": 0.8})
+ax.set_xlabel("Báo nhầm (%) — thấp là tốt", color=INK); ax.set_ylabel("Bắt đúng (%) — cao là tốt", color=INK)
+ax.set_xlim(-2, 102); ax.set_ylim(-2, 102)
+ax.set_title("Đánh đổi bắt đúng / báo nhầm của 5 tín hiệu (mỗi điểm = một ngưỡng; góc trên trái là tốt nhất)",
+             loc="left", fontsize=10, color=INK)
+ax.legend(frameon=False, loc="lower right", fontsize=9)
+ax.spines[["top", "right"]].set_visible(False); ax.grid(color="#eeeeee", lw=0.6); ax.tick_params(colors=MUTED)
+fig.tight_layout(); fig.savefig(FIG / "E3-6-signal-tradeoff.png", dpi=150); plt.show()"""),
+md("""**Đọc kết quả.**
+- **A (cách hiện tại):** ở ngưỡng đang dùng (≥ 2 cột) bắt đúng 100% nhưng **báo nhầm 100%** — điểm J = 0, không hơn đoán bừa. Nâng lên ≥ 6 cột còn báo nhầm 73%; ≥ 8 cột thì báo nhầm 18% nhưng chỉ bắt đúng 26%. **Chỉnh ngưỡng không cứu được**, vì A không nhìn số xe. A còn bị bỏ qua 70 thời điểm do thiếu giờ dữ liệu.
+- **B (PSI số xe)** có **điểm J cao nhất** (≈ 0,6). Từ ngưỡng 0,3 trở lên: bắt đúng ≈ 70%, báo nhầm chỉ 5–11%; ở ngưỡng 1,0 không báo sớm lần nào ở Glasgow và báo đúng ngay 30/03.
+- **C, D, E** đứng giữa: bắt đúng 81–92% nhưng báo nhầm 32–57% ở ngưỡng tốt nhất của chúng — do "mức lúc train" dao động (C, E) và model vốn ngang/kém cách đoán tuần trước (D).
+- **B chưa bắt được ≈ 30% còn lại**: đó là những lúc giao thông đã trở lại mức cũ (PSI nhỏ) nhưng model M0 vẫn lỗi thời vì học quá ít mùa (Glasgow M0 chỉ có 5 tháng). Tín hiệu theo phân bố số xe không thấy được loại này."""),
+md("""### 5.4b — Drift giả lập: biết chắc ngày bắt đầu
+
+Dùng tình huống yên nhất (**I‑94, M0 đến 01/2017**, đáp án: không lúc nào cần retrain). Từ **01/05/2017**, cố ý sửa số xe:
+1. **Giảm đột ngột 30%** (như đóng một làn đường).
+2. **Giảm dần** đến −30% trong 8 tuần.
+
+Thời tiết giữ nguyên. Trước 01/05 tín hiệu nên **im**; sau 01/05 nên **báo càng sớm càng tốt**. Ở đây chấm **từng ngày**: *báo nhầm* = % ngày báo trước 01/05; *trễ* = số ngày từ 01/05 đến lần báo đầu tiên.
+
+> **Đoán trước:** cách hiện tại (A) phát hiện drift này sau bao nhiêu ngày?"""),
+code("""SHIFT_START = pd.Timestamp("2017-05-01")
+SHIFTS = {"I-94 giả lập: giảm đột ngột 30%": lambda t: np.where(t >= SHIFT_START, 0.7, 1.0),
+          "I-94 giả lập: giảm dần 30% trong 8 tuần": lambda t: 1 - 0.3 * np.clip((t - SHIFT_START) / pd.Timedelta(days=56), 0, 1)}
+synthetic = {}
+for name, factor in SHIFTS.items():
+    raw, feat = i94.copy(), i94_f.copy()
+    raw["traffic_volume"] = raw.traffic_volume * factor(raw.date_time)
+    feat["traffic_volume"] = feat.traffic_volume * factor(feat.date_time)
+    RAW[name] = raw
+    SCENARIOS[name] = (feat, "2012-10-01", "2017-01-01", "2018-01-01")
+    synthetic[name], _ = signals(name)
+
+rows = []
+for name, sig in synthetic.items():
+    for s, grid in GRID.items():
+        for threshold in grid:
+            values = sig[f"{s}_value"]
+            alarm = fires(values, s, threshold) & values.notna()
+            before = alarm[(alarm.index < SHIFT_START) & values.notna()]
+            after = alarm[alarm.index >= SHIFT_START]
+            first = after[after].index.min()
+            rows.append({"Giả lập": name.split(": ")[1], "Tín hiệu": NAMES[s], "Ngưỡng": threshold,
+                         "Báo nhầm trước 01/05 (%)": 100 * before.mean(),
+                         "Trễ (ngày)": (first - SHIFT_START).days if pd.notna(first) else np.nan})
+syn = pd.DataFrame(rows)
+syn.pivot_table(index=["Tín hiệu", "Ngưỡng"], columns="Giả lập", values=["Báo nhầm trước 01/05 (%)", "Trễ (ngày)"]).round(0)"""),
+md("""**Đọc kết quả.**
+- **A** không đổi gì so với dữ liệu gốc (thời tiết giữ nguyên): ở ngưỡng hệ thống nó "phát hiện ngay" chỉ vì **lúc nào cũng đang báo** (báo nhầm 100% trước 01/05). Ngưỡng ≥ 10 cột thì im hẳn và **không bao giờ phát hiện**.
+- **Giảm đột ngột 30%:** B phát hiện sau **4–5 ngày** (ngưỡng 0,2–1,0), C sau 2–4 ngày, E sau 1–3 ngày, và cả ba gần như **không báo nhầm** trước đó (0–3%).
+- **Giảm dần:** mọi tín hiệu theo số xe/sai số cần **≈ 3–7 tuần** (22–47 ngày tùy ngưỡng; B ở ngưỡng 0,5–1,0: 37 ngày) — drift chậm thì ngưỡng chỉ bị vượt khi mức giảm đã đủ lớn.
+- Lưu ý: tình huống này có "mức lúc train" cao (11,7%) nên C, E im lặng trước 01/05; ở bước 5.3 ta đã thấy với mức thấp thì C, E báo nhầm rất nhiều."""),
+md("""### Tóm tắt bước 5.4
+
+| Tín hiệu (ngưỡng) | Điểm J | Bắt đúng | Báo nhầm | Drift đột ngột −30% | Drift giảm dần | Nhận xét |
+| --- | --- | --- | --- | --- | --- | --- |
+| **A. Cách hiện tại** (≥ 2 cột, đang dùng) | 0,00 | 100% | **100%** | không phản ứng (vốn luôn báo) | không phản ứng | Không dùng được; ngưỡng tốt nhất (≥ 6 cột) vẫn báo nhầm 73% |
+| **B. PSI số xe** (> 1,0) | **0,64** | 69% | **5%** | 5 ngày | 37 ngày | **Tốt nhất**; đơn giản, không cần model; không báo sớm ở COVID |
+| C. WAPE ÷ lúc train (> 1,3) | 0,52 | 83% | 32% | 3 ngày | 26 ngày | Nhanh nhưng phụ thuộc mức lúc train |
+| D. Kém tuần trước (> 25%) | 0,46 | 81% | 35% | 9 ngày | 22 ngày | Nhiễu; trễ 7 ngày ở COVID |
+| E. CUSUM (≥ 10) | 0,35 | 92% | 57% | 5 ngày | 31 ngày | Báo nhầm nhiều trên dữ liệu thật |
+
+**Bài học về phương pháp (bước 5.4)**
+1. **Một con số chưa đủ**: phải đặt "bắt đúng" cạnh "báo nhầm" (và độ trễ); một tín hiệu bắt đúng 100% có thể vô dụng nếu báo nhầm cũng 100%.
+2. **Dò ngưỡng trước khi so**: so ở ngưỡng tốt nhất của mỗi tín hiệu mới công bằng; và nếu dò hết mà vẫn kém (A) thì lỗi nằm ở *thứ được đo*, không ở ngưỡng.
+3. **Giả lập có kiểm soát** bổ sung cho dữ liệu thật: biết chắc ngày bắt đầu nên đo được độ trễ rõ ràng, và kiểm được cả loại drift chậm."""),
 ]
 
 nb = nbformat.v4.new_notebook(cells=cells, metadata={

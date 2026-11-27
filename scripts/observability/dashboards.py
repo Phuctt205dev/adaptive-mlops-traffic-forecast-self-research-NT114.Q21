@@ -115,6 +115,61 @@ def stat(identifier, title, expression, x, y, width, height=4, *, status=False, 
     return result
 
 
+API_PODS = 'kube_deployment_status_replicas_available{job="kube-state-metrics",namespace="traffic-mlops",deployment=~"api|api-next"}'
+REQUESTS = 'traffic_api_requests_total{source!="probe"}'   # kubelet health checks are not user requests
+DURATION = 'traffic_api_request_duration_seconds_bucket{source!="probe"}'
+NGROK_DAILY = 667   # ngrok free plan: 20,000 HTTP requests per month ≈ 667 per day
+
+
+def rising(steps):
+    """Thresholds where a higher value is better (red below the first step)."""
+    return {"mode": "absolute", "steps": [{"color": "red", "value": None}] + [
+        {"color": color, "value": value} for color, value in steps]}
+
+
+def service_quality(y):
+    """Website service row (E4): availability, response time, failures and ngrok use; request-level metrics."""
+    availability = stat(50, "Prediction API · available (7 days)",
+        f"100 * avg_over_time((sum({API_PODS}) >= bool 1)[7d:1m])", 0, y, 6, 5,
+        description="Share of the last 7 days with at least one Prediction API pod ready to answer (checked every 5 seconds by Kubernetes). Prometheus keeps 7 days. This is readiness, not the success of every request; see Failed requests.")
+    availability["fieldConfig"]["defaults"].update({"unit": "percent", "decimals": 2, "thresholds": rising([("orange", 99), ("green", 99.5)])})
+    p95 = stat(51, "Response time · 95% of requests (1 h)",
+        f"histogram_quantile(0.95, sum by (le) (rate({DURATION}[1h]))) >= 0", 6, y, 6, 5,
+        description="95% of user requests in the last hour were answered within this time (health checks excluded). No requests in the hour shows No requests. Review at 1 s, high at 2.5 s.")
+    p95["fieldConfig"]["defaults"].update({"unit": "s", "decimals": 2, "noValue": "No requests", "thresholds": {
+        "mode": "absolute", "steps": [{"color": "green", "value": None}, {"color": "orange", "value": 1}, {"color": "red", "value": 2.5}]}})
+    failed = stat(52, "Failed requests (1 h)",
+        f'100 * sum(rate({REQUESTS[:-1]},status=~"5.."}}[1h])) / sum(rate({REQUESTS}[1h])) >= 0', 12, y, 6, 5,
+        description="Share of user requests in the last hour answered with a server error (5xx), including 'busy' replies when a pod already has a full prediction queue. Wrong input or sign-in errors (4xx) are not failures. Review at 1%, high at 5%.")
+    failed["fieldConfig"]["defaults"].update({"unit": "percent", "decimals": 1, "noValue": "No requests", "thresholds": {
+        "mode": "absolute", "steps": [{"color": "green", "value": None}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}})
+    web = stat(53, "Website requests · last 24 h",
+        'round(sum(increase(traffic_api_requests_total{source="web"}[24h])))', 18, y, 6, 5,
+        description=f"Requests from the website that reached the API in the last 24 hours. Every one passes through ngrok, whose free plan allows 20,000 a month (about {NGROK_DAILY} a day); above that the website loses the API until the next month. Turns orange at the daily share.")
+    web["fieldConfig"]["defaults"].update({"unit": f"suffix: / {NGROK_DAILY}", "noValue": "0", "thresholds": {
+        "mode": "absolute", "steps": [{"color": "green", "value": None}, {"color": "orange", "value": NGROK_DAILY}, {"color": "red", "value": 2 * NGROK_DAILY}]}})
+    return [availability, p95, failed, web]
+
+
+def request_details(y):
+    """Collapsed charts for diagnosis: response time and request rate over time."""
+    latency = panel(61, "Response time over time", "timeseries", 0, y + 1, 12, 8,
+        "Time within which 50% and 95% of user requests were answered, over 5-minute windows. Health checks excluded.")
+    latency["targets"] = [target(f"histogram_quantile({q}, sum by (le) (rate({DURATION}[5m])))", chr(65 + i),
+                                 legend=label, trend=True) for i, (q, label) in enumerate(((0.5, "50% of requests"), (0.95, "95% of requests")))]
+    rate = panel(62, "Requests per second by origin", "timeseries", 12, y + 1, 12, 8,
+        "web: the website through ngrok; proxy: other requests through Nginx (for example a load test); cluster: Airflow and workers.")
+    rate["targets"] = [target(f"sum by (source) (rate({REQUESTS}[5m]))", trend=True, legend="{{source}}")]
+    for graph, unit in ((latency, "s"), (rate, "reqps")):
+        graph["fieldConfig"]["defaults"].update({"unit": unit, "decimals": 2, "min": 0, "color": {"mode": "palette-classic"},
+            "custom": {"lineWidth": 2, "fillOpacity": 0, "showPoints": "never", "spanNulls": False, "axisGridShow": False,
+                       "stacking": {"mode": "none", "group": "A"}}})
+        graph["options"] = {"legend": {"showLegend": True, "displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}}
+        graph["maxDataPoints"] = 240
+    return {"id": 60, "title": "Request details", "type": "row", "collapsed": True,
+            "gridPos": {"x": 0, "y": y, "w": 24, "h": 1}, "panels": [latency, rate]}
+
+
 def document(uid, title, panels, peer_uid, peer_title):
     return {"id": None, "uid": uid, "title": title, "schemaVersion": 42, "version": 0,
         "description": "Kubernetes readiness and resource usage. Unknown means missing or stale metrics. Open panel info for definitions.",
@@ -175,7 +230,9 @@ def build_system():
         result["options"].update(textMode="value_and_name", text={"valueSize": 36, "titleSize": 16})
         result["fieldConfig"]["defaults"]["links"] = [{"title": "View nodes", "url": "/d/traffic-rke2-nodes"}]
         panels.append(result)
-    details = panel(31, "Alerts to review", "table", 0, 17, 24, 7,
+    panels.extend(service_quality(16))
+    panels.append(request_details(21))
+    details = panel(31, "Alerts to review", "table", 0, 23, 24, 7,
         "Warning/critical alerts reported by Prometheus. No rows may mean no matching alerts; check Monitoring above for collection state.")
     details["targets"] = [target('ALERTS{alertstate="firing",severity=~"warning|critical"}', table=True)]
     details["options"] = {"showHeader": True, "cellHeight": "lg", "footer": {"show": False}}
@@ -184,7 +241,7 @@ def build_system():
     details["fieldConfig"]["overrides"] = [{"matcher": {"id": "byName", "options": "What to review"}, "properties": [{"id": "mappings", "value": [
         {"type": "value", "options": {"PrometheusNotConnectedToAlertmanagers": {"text": "Alert delivery is not connected"}}}]}]}]
     panels.append({"id": 30, "title": "Alert details", "type": "row", "collapsed": True,
-                   "gridPos": {"x": 0, "y": 16, "w": 24, "h": 1}, "panels": [details]})
+                   "gridPos": {"x": 0, "y": 22, "w": 24, "h": 1}, "panels": [details]})
     return document("traffic-system-overview", "System Overview", panels, "traffic-rke2-nodes", "Nodes")
 
 

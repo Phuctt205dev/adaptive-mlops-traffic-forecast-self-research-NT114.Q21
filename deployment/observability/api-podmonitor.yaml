@@ -1,0 +1,30 @@
+# Prometheus scrapes the API request metrics (backend/app/core/metrics.py) from each API pod.
+# Port 9464 is private: the public path (ngrok -> Nginx -> NodePort 30080) only reaches port 8000.
+# Selects both blue/green slots by role; `slot` keeps which one served (api or api-next).
+# Apply once, after a release whose API pods serve port 9464 (otherwise TargetDown fires):
+#   kubectl apply -f deployment/observability/api-podmonitor.yaml
+# Remove: kubectl -n traffic-mlops delete podmonitor traffic-api-requests
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: traffic-api-requests
+  namespace: traffic-mlops
+  labels:
+    release: traffic-monitoring
+spec:
+  selector:
+    matchLabels:
+      traffic.mlops/role: api
+  namespaceSelector:
+    matchNames:
+      - traffic-mlops
+  podMetricsEndpoints:
+    - portNumber: 9464
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 5s
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_label_app]
+          targetLabel: slot
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node

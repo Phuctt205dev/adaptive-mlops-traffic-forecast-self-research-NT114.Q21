@@ -105,3 +105,18 @@ export function freshness(model, snapshotAgeSeconds = 0) {
   const seconds = Math.max(0, Math.floor((Number(model.ml_age_seconds) || 0) + snapshotAgeSeconds));
   return seconds >= 30 ? `Waiting for new ML progress · Last received ${seconds}s ago` : `ML progress received ${seconds}s ago`;
 }
+
+// Every monitor request goes through ngrok, whose free plan allows 20,000 requests a month
+// (experiments/E4-san-sang-chiu-loi-chiu-tai.md). Poll often only while a run is shown;
+// an idle page checks slowly and refreshes at once when this page starts a training run.
+export const MONITOR_POLL_ACTIVE_MS = 5000;
+export const MONITOR_POLL_IDLE_MS = 20000;
+export const TRAINING_STARTED_EVENT = "traffic-training-started";
+
+export function monitorPollDelay(items) {
+  return Array.isArray(items) && items.length ? MONITOR_POLL_ACTIVE_MS : MONITOR_POLL_IDLE_MS;
+}
+
+export function announceTrainingStarted(target = globalThis) {
+  target?.dispatchEvent?.(new Event(TRAINING_STARTED_EVENT));
+}

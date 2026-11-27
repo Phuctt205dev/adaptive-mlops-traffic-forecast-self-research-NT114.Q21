@@ -1,0 +1,44 @@
+{
+  "window": "7d",
+  "step": "1m",
+  "source": "prometheus kube-state-metrics (pod/node readiness)",
+  "api_ready_ge1_share": 1.0,
+  "api_ready_ge2_share": 1.0,
+  "api_ready_min": 2.0,
+  "api_minutes_below2": 0.0,
+  "api_minutes_zero": 0.0,
+  "minutes_with_data": 10080.0,
+  "components": {
+    "postgres": {
+      "ready_share": 1.0,
+      "minutes_zero": 0.0
+    },
+    "minio": {
+      "ready_share": 1.0,
+      "minutes_zero": 0.0
+    },
+    "mlflow": {
+      "ready_share": 1.0,
+      "minutes_zero": 0.0
+    },
+    "airflow-scheduler": {
+      "ready_share": 1.0,
+      "minutes_zero": 0.0
+    },
+    "airflow-webserver": {
+      "ready_share": 1.0,
+      "minutes_zero": 0.0
+    }
+  },
+  "nodes": {
+    "mlops-node-01": 1.0,
+    "mlops-node-02": 1.0,
+    "mlops-node-03": 1.0
+  },
+  "node_boot_utc": {
+    "mlops-node-01": "2026-11-08T05:32:28Z",
+    "mlops-node-02": "2026-11-08T05:33:26Z",
+    "mlops-node-03": "2026-11-08T05:33:51Z"
+  },
+  "restarts_7d": {}
+}

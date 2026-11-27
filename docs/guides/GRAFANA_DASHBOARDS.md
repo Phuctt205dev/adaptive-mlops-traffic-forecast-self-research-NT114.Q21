@@ -36,7 +36,44 @@ dịch vụ hỏng. Dung lượng Available không phải ngân sách đã dành
 Monitoring hiển thị warning/critical đang firing từ Prometheus; bỏ heartbeat
 và informational. Dịch vụ gửi thông báo chưa kết nối vẫn phải hiện cảnh báo,
 không xóa alert rule hoặc tô xanh để dashboard trông đẹp hơn. Chỉ dùng các
-metric thực đang có; chưa tạo số liệu độ trễ/lỗi nghiệp vụ khi chưa instrument.
+metric thực đang có; số liệu độ trễ/lỗi request có từ khi API tự ghi số đo
+(mục Website service).
+
+## Website service (sẵn sàng và số đo request)
+
+Hàng thứ tư của System Overview trả lời "người dùng có được phục vụ tốt không",
+theo thực nghiệm [E4](../../experiments/E4-san-sang-chiu-loi-chiu-tai.md):
+
+| Ô | Ý nghĩa | Màu |
+| --- | --- | --- |
+| Prediction API · available (7 days) | % thời gian 7 ngày có ít nhất 1 pod API sẵn sàng (readiness 5 s). Là sẵn sàng, chưa phải mọi request thành công. | Xanh ≥ 99,5%, cam ≥ 99%, đỏ thấp hơn |
+| Response time · 95% of requests (1 h) | 95% request của người dùng trong 1 giờ được trả lời trong thời gian này (bỏ health check). | Cam từ 1 s, đỏ từ 2,5 s |
+| Failed requests (1 h) | % request trả lỗi máy chủ (5xx), gồm cả phản hồi "busy" khi pod đã đầy hàng chờ dự báo. 4xx (nhập sai, chưa đăng nhập) không tính. | Cam từ 1%, đỏ từ 5% |
+| Website requests · last 24 h | Request từ website tới API trong 24 giờ. Mọi request này đi qua ngrok miễn phí (20.000/tháng ≈ 667/ngày). | Cam khi vượt phần của một ngày |
+
+Không có request trong giờ thì hai ô giữa hiện **No requests** (không phải 0). Mục
+thu gọn **Request details** có biểu đồ độ trễ 50%/95% và request/giây theo nguồn.
+
+Số đo request do backend tự ghi (`backend/app/core/metrics.py`): số request,
+thời gian trả lời (histogram) và request đang xử lý, gắn nhãn theo mẫu route
+(không theo đường dẫn thật), mã trạng thái, phương thức và nguồn:
+`web` (website qua ngrok), `proxy` (qua Nginx từ mạng riêng, ví dụ kiểm tải),
+`cluster` (Airflow, worker), `probe` (health check của kubelet). Không lưu IP.
+Pod API phục vụ số đo ở **cổng riêng 9464**; đường public (ngrok → Nginx →
+NodePort 30080) chỉ tới cổng 8000 nên `/metrics` không lộ ra ngoài. Đặt
+`TRAFFIC_METRICS_PORT=0` để tắt. Prometheus lấy số đo qua PodMonitor
+[`api-podmonitor.yaml`](../../deployment/observability/api-podmonitor.yaml)
+(mỗi 15 s, chọn cả hai slot blue/green theo `traffic.mlops/role=api`). PodMonitor
+không đi qua CI/CD; **người dùng áp dụng một lần sau khi bản có cổng 9464 đã
+chạy** (áp dụng trước sẽ làm cảnh báo TargetDown bật):
+
+```powershell
+kubectl apply -f deployment/observability/api-podmonitor.yaml
+kubectl -n traffic-mlops get podmonitor traffic-api-requests
+```
+
+Prometheus chỉ giữ 7 ngày; số liệu cần cho báo cáo phải xuất ra file trước khi
+hết hạn (`experiments/scripts/e4_prometheus_availability.py`).
 
 ## Nguồn và cập nhật
 

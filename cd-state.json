@@ -3,15 +3,7 @@
   "mode": "auto",
   "epoch": 11,
   "blocked": true,
-  "active": {
-    "run_id": "45962240131",
-    "attempt": 1,
-    "commit": "3ec28f2a1b85c14dadb1766e66688f9e412ff190",
-    "ci_number": 124,
-    "mode": "auto",
-    "epoch": 11,
-    "recovery_required": true
-  },
+  "active": null,
   "failure": {
     "run_id": "45962240131",
     "attempt": 1,
@@ -19,7 +11,7 @@
     "ci_number": 124,
     "mode": "auto",
     "epoch": 11,
-    "recovery_required": true,
+    "recovery_required": false,
     "url": "https://github.com/Phuctt205dev/adaptive-mlops-traffic-forecast-self-research-NT114.Q21/actions/runs/45962240131"
   },
   "last_success": {
@@ -31,5 +23,5 @@
     "epoch": 10
   },
   "last_control": 45953276548,
-  "updated_by": "delivery-result"
+  "updated_by": "operator-recovery"
 }

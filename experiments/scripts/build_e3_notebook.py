@@ -21,8 +21,8 @@ md("""# E3 — Khi nào nên retrain? Tín hiệu nào phát hiện drift tốt 
 
 | Bước nhỏ | Nội dung | Trạng thái |
 | --- | --- | --- |
-| **5.1** | Chạy lại đúng cách phát hiện drift của hệ thống trên dữ liệu thật | Đang làm |
-| **5.2** | Dựng "đáp án": tuần nào model thật sự cần retrain | Chưa |
+| **5.1** | Chạy lại đúng cách phát hiện drift của hệ thống trên dữ liệu thật | Xong |
+| **5.2** | Dựng "đáp án": lúc nào retrain thật sự có lợi | Xong |
 | **5.3** | Tính 5 tín hiệu trên cùng dòng thời gian | Chưa |
 | **5.4** | Chấm: độ trễ, báo nhầm, bỏ sót; drift giả lập | Chưa |
 | **5.5** | Chọn tín hiệu, ngưỡng; lợi ích khi retrain; báo cáo | Chưa |"""),
@@ -220,6 +220,149 @@ md("""### Tóm tắt bước 5.1
 1. **Đo hệ thống có sẵn trước khi đề xuất cái mới**, và gọi đúng mã của nó — nếu tự viết lại, kết quả "sai" có thể do mình viết sai.
 2. **Kiểm chứng âm** (tình huống chắc chắn không có hiện tượng) là cách nhanh nhất để biết một bộ phát hiện có đáng tin không: một bộ báo động kêu cả khi không có trộm thì không dùng được.
 3. Một tín hiệu "có báo đúng lúc" chưa đủ; phải hỏi **nó có báo cả lúc không nên báo không**."""),
+md("""---
+## Bước 5.2 — Dựng "đáp án": lúc nào retrain **thật sự có lợi**?
+
+**Đang làm gì.** Muốn chấm một tín hiệu drift (bước 5.3–5.4), ta cần biết **đúng ra** lúc nào nên retrain. Định nghĩa bằng lời thường:
+
+> Tại một **thời điểm quyết định** (mỗi thứ Hai), nếu **retrain ngay lúc đó** trên dữ liệu mới nhất thì **28 ngày tiếp theo** sai số (MAE) có giảm **ít nhất 15%** so với giữ model cũ không? Có → thời điểm đó **"nên retrain"**.
+
+Điều kiện giữ giống hệ thống:
+- Model: **LightGBM** của nhánh cây hệ thống (`src.preprocess.preprocess` + `src.pipeline.train_lightgbm`, feature thời tiết + lịch, seed 42). Nhánh cây chọn giữa RF/XGB/LightGBM; ở đây dùng LightGBM vì nhanh (giới hạn ghi ở báo cáo).
+- Cửa sổ train khi retrain: **24 tháng gần nhất** (`drift_retrain_window_months = 24`), ít hơn nếu dữ liệu không đủ.
+- Ngưỡng 15%: trùng con số hệ thống đang dùng khi so chất lượng lúc retrain (`retrain_quality_mae_increase = 0.15`).
+- Model cũ (gọi là **M0**) giữ nguyên suốt thời gian xét — giống hệ thống khi model retrain chỉ là *candidate* chưa Activate."""),
+md("""### Thử lần 1 (cách nháp) và vì sao bỏ
+
+Lần đầu tôi định nghĩa theo **từng tuần đơn lẻ**: tuần nào model train lại hằng tháng (12 tháng gần nhất) sai ít hơn M0 từ 15% trở lên thì "nên retrain". Chạy trên I‑94 (M0 train năm 2015) — nơi giao thông ổn định:
+
+> **Đoán trước:** ở nơi ổn định, bao nhiêu % tuần "nên retrain"?"""),
+code("""import contextlib, io, warnings
+from src.preprocess import preprocess
+from src.pipeline import train_lightgbm
+warnings.filterwarnings("ignore")
+SEED, GAIN = 42, 0.15
+
+def features(path):
+    \"\"\"Feature của nhánh cây hệ thống (thời tiết + lịch).\"\"\"
+    return preprocess(pd.read_csv(ROOT / path)).sort_values("date_time").reset_index(drop=True)
+
+def fit(df, start, end):
+    part = df[(df.date_time >= start) & (df.date_time < end)]
+    X = part.drop(columns=["traffic_volume", "date_time"])
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        model = train_lightgbm(X, part.traffic_volume, SEED)       # hàm train của hệ thống
+    return model, list(X.columns), len(part)
+
+def predict(model, cols, part):
+    X = part.drop(columns=["traffic_volume", "date_time"]).reindex(columns=cols, fill_value=0)
+    return np.asarray(model.predict(X)).reshape(-1)
+
+i94_f = features("data/real/i94-minneapolis/TrafficVolumeData_I94_Minneapolis_2012_2018.csv")
+glasgow_f = features("data/real/glasgow/TrafficVolumeData_Glasgow_GD1351_R_2019_2023.csv")
+
+m0, cols, n = fit(i94_f, "2015-01-01", "2016-01-01")
+ev = i94_f[(i94_f.date_time >= "2016-01-01") & (i94_f.date_time < "2018-10-01")].copy()
+ev["old"] = predict(m0, cols, ev)
+for month in pd.date_range("2016-01-01", "2018-10-01", freq="MS", inclusive="left"):
+    model, c, _ = fit(i94_f, month - pd.DateOffset(months=12), month)
+    mask = (ev.date_time >= month) & (ev.date_time < month + pd.DateOffset(months=1))
+    ev.loc[mask, "fresh"] = predict(model, c, ev[mask])
+ev["abs_old"] = (ev.traffic_volume - ev.old).abs()
+ev["abs_fresh"] = (ev.traffic_volume - ev.fresh).abs()
+week = ev.groupby(ev.date_time.dt.to_period("W-SUN"))
+weekly = pd.DataFrame({"hours": week.size(), "gain": 1 - week.abs_fresh.sum() / week.abs_old.sum()})
+weekly = weekly[weekly.hours >= 84]
+print(f"M0 chỉ có {n} giờ để học (năm 2015 của I-94 thiếu nhiều giờ)")
+print(f"Tuần 'nên retrain': {(weekly.gain >= GAIN).sum()}/{len(weekly)} = {100 * (weekly.gain >= GAIN).mean():.0f}%")"""),
+md("""**Đọc kết quả.** Gần **một nửa** số tuần "nên retrain" ở nơi ổn định — khó tin. Hai nguyên nhân:
+1. **Một tuần quá ngắn**: so hai model trên 1 tuần thì chênh lệch dao động mạnh, có tuần hơn 15% chỉ do may rủi.
+2. **M0 học quá ít** (3.593 giờ), nên model mới nào cũng dễ hơn nó.
+
+Vì vậy chuyển sang định nghĩa ở đầu bước: **quyết định mỗi thứ Hai, đo trên 28 ngày tiếp theo, cửa sổ train 24 tháng như hệ thống**. Đây là một bài học: *đáp án cũng cần được kiểm tra xem có hợp lý không* trước khi dùng nó để chấm."""),
+code("""WINDOW_MONTHS, HORIZON = 24, pd.Timedelta(days=28)
+
+def mae(model, cols, part):
+    return float(np.mean(np.abs(part.traffic_volume.to_numpy() - predict(model, cols, part))))
+
+def truth(df, data_start, m0_end, eval_end):
+    \"\"\"Mỗi thứ Hai: retrain ngay lúc đó có giảm MAE 28 ngày tới >= 15% so với giữ M0 không?\"\"\"
+    m0_start = max(pd.Timestamp(data_start), pd.Timestamp(m0_end) - pd.DateOffset(months=WINDOW_MONTHS))
+    m0, cols, n = fit(df, m0_start, m0_end)
+    rows = []
+    for d in pd.date_range(pd.Timestamp(m0_end) + pd.Timedelta(days=7), pd.Timestamp(eval_end) - HORIZON, freq="W-MON"):
+        nxt = df[(df.date_time >= d) & (df.date_time < d + HORIZON)]
+        if len(nxt) < 14 * 24:                       # 28 ngày tới thiếu quá nửa số giờ -> bỏ
+            continue
+        fresh, fcols, _ = fit(df, max(pd.Timestamp(data_start), d - pd.DateOffset(months=WINDOW_MONTHS)), d)
+        old_mae, fresh_mae = mae(m0, cols, nxt), mae(fresh, fcols, nxt)
+        rows.append({"decision": d, "old_mae": old_mae, "fresh_mae": fresh_mae,
+                     "old_wape": 100 * old_mae / nxt.traffic_volume.mean(), "gain": 1 - fresh_mae / old_mae})
+    table = pd.DataFrame(rows).set_index("decision")
+    table["needs_retrain"] = table.gain >= GAIN
+    return table, n
+
+SCENARIOS = {   # tên: (dữ liệu, ngày dữ liệu bắt đầu, M0 train đến, xét đến)
+    "Glasgow COVID": (glasgow_f, "2019-10-01", "2020-03-01", "2021-03-01"),
+    "Glasgow ổn định": (glasgow_f, "2019-10-01", "2022-10-01", "2023-10-01"),
+    "I-94 (M0 đến 07/2016)": (i94_f, "2012-10-01", "2016-07-01", "2017-07-01"),
+    "I-94 (M0 đến 01/2017)": (i94_f, "2012-10-01", "2017-01-01", "2018-01-01"),
+    "I-94 (M0 đến 07/2017)": (i94_f, "2012-10-01", "2017-07-01", "2018-07-01"),
+}
+SLUG = {"Glasgow COVID": "glasgow_covid", "Glasgow ổn định": "glasgow_stable",
+        "I-94 (M0 đến 07/2016)": "i94_2016_07", "I-94 (M0 đến 01/2017)": "i94_2017_01",
+        "I-94 (M0 đến 07/2017)": "i94_2017_07"}"""),
+md("""> **Đoán trước:**
+> 1. Ở Glasgow, thời điểm **đầu tiên** retrain có lợi là trước hay sau phong tỏa 23/03/2020?
+> 2. Ở I‑94 (ổn định), bao nhiêu % thời điểm retrain có lợi?"""),
+code("""OUT_E3 = ROOT / "experiments" / "outputs" / "e3"
+OUT_E3.mkdir(parents=True, exist_ok=True)
+truths, summary = {}, []
+for name, (df, data_start, m0_end, eval_end) in SCENARIOS.items():
+    table, n = truth(df, data_start, m0_end, eval_end)
+    truths[name] = table
+    table.round(4).to_csv(OUT_E3 / f"truth_{SLUG[name]}.csv", lineterminator="\\n")
+    positives = table[table.needs_retrain]
+    summary.append({"Tình huống": name, "M0 học (giờ)": n, "Số thời điểm": len(table),
+                    "Nên retrain": len(positives), "% nên retrain": 100 * table.needs_retrain.mean(),
+                    "Lợi ích trung vị (%)": 100 * table.gain.median(),
+                    "Lần đầu nên retrain": positives.index.min().date() if len(positives) else "—"})
+pd.DataFrame(summary).set_index("Tình huống").round(1)"""),
+code("""print("Glasgow quanh thời điểm phong tỏa (MAE xe/giờ trên 28 ngày tới):")
+truths["Glasgow COVID"].loc["2020-03-01":"2020-05-15", ["old_mae", "fresh_mae", "gain", "needs_retrain"]].round(2)"""),
+code("""fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharey=True)
+for ax, name in zip(axes, ["Glasgow COVID", "I-94 (M0 đến 01/2017)"]):
+    t = truths[name]
+    colors = [BLUE if v else "#c9c9c9" for v in t.needs_retrain]
+    ax.bar(t.index, 100 * t.gain, width=5, color=colors)
+    ax.axhline(100 * GAIN, color=INK, lw=1, ls="--")
+    ax.axhline(0, color=MUTED, lw=0.8)
+    ax.set_title(f"{name}: lợi ích nếu retrain tại thời điểm đó (xanh = từ 15% trở lên, nên retrain)",
+                 loc="left", fontsize=10, color=INK)
+    ax.set_ylabel("MAE 28 ngày tới\\ngiảm (%)", color=INK)
+    ax.spines[["top", "right"]].set_visible(False); ax.grid(axis="y", color="#e5e5e5", lw=0.6)
+    ax.set_axisbelow(True); ax.tick_params(colors=MUTED)
+axes[0].axvline(LOCKDOWN, color=INK, lw=1)
+axes[0].text(LOCKDOWN + pd.Timedelta(days=3), axes[0].get_ylim()[1] * 0.85, "Phong tỏa 23/03", color=INK, fontsize=9)
+fig.tight_layout(); fig.savefig(FIG / "E3-3-ground-truth-retrain-gain.png", dpi=150); plt.show()"""),
+md("""**Đọc kết quả.**
+- **Glasgow COVID:** ba thứ Hai đầu (09, 16, 23/03) retrain **chưa** giúp gì (lợi ích ≈ 0%) — vì dữ liệu mới nhất lúc đó vẫn là giao thông trước COVID. Thứ Hai **30/03**, một tuần sau phong tỏa, retrain giúp MAE 28 ngày tới **giảm 41%**; tuần sau đó **59%**. Sau đó đa số thời điểm đều "nên retrain" vì M0 (học 10/2019–02/2020) ngày càng lỗi thời.
+- **Nơi ổn định** (I‑94 ba mốc, Glasgow 2022–2023): phần lớn thời điểm retrain giúp chưa tới 15% (lợi ích trung vị chỉ vài %). Ở đây một tín hiệu tốt phải **im lặng**.
+- Đáp án có **điểm bắt đầu rõ** (30/03/2020) và **giai đoạn yên** để đo báo nhầm — đủ để chấm tín hiệu ở bước 5.3–5.4. So với bước 5.1: hệ thống hiện tại báo từ 08/03, **sớm 3 tuần so với lúc retrain bắt đầu có ích**, và báo cả trong mọi giai đoạn yên.
+
+Đáp án được lưu ở `experiments/outputs/e3/truth_*.csv` để dùng lại."""),
+md("""### Tóm tắt bước 5.2
+
+| Câu hỏi | Trả lời |
+| --- | --- |
+| "Nên retrain" nghĩa là gì? | Retrain ngay lúc đó (24 tháng gần nhất) làm MAE 28 ngày tới giảm ≥ 15% so với giữ model cũ |
+| COVID ở Glasgow: khi nào bắt đầu nên retrain? | Thứ Hai 30/03/2020 (sau phong tỏa 1 tuần), lợi ích 41% |
+| Nơi ổn định có nên retrain thường xuyên không? | Ít — xem bảng tóm tắt các tình huống ở trên |
+
+**Bài học về phương pháp (bước 5.2)**
+1. Muốn chấm một bộ phát hiện, phải có **đáp án định nghĩa bằng hậu quả** (retrain có làm sai số giảm không), không phải bằng chính tín hiệu đang được chấm.
+2. **Kiểm tra đáp án trước khi dùng**: định nghĩa nháp cho gần nửa số tuần "nên retrain" ở nơi ổn định — vô lý, nên phải sửa.
+3. Đáp án gắn với **một quyết định thật** (retrain hôm nay, hưởng lợi 4 tuần tới) dễ giải thích hơn đáp án theo từng tuần rời rạc."""),
 ]
 
 nb = nbformat.v4.new_notebook(cells=cells, metadata={

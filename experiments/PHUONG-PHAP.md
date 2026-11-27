@@ -79,3 +79,7 @@
 - **Kiểm chứng âm:** dựng tình huống chắc chắn không có hiện tượng (kỳ hiện tại nằm trong kỳ tham chiếu). Bộ phát hiện drift hiện tại vẫn báo ≈ 98% → nó luôn bật, không mang thông tin.
 - "Báo đúng lúc" chưa đủ: phải hỏi **nó có báo cả lúc không nên báo không**. Ở Glasgow, hệ thống có báo trong thời gian COVID nhưng đã báo từ hai tuần trước đó vì thời tiết đổi.
 - Đọc hình trước khi viết kết luận: câu ban đầu "số cột vượt ngưỡng không tăng khi COVID" sai; hình cho thấy có tăng, nhưng cũng tăng y như vậy khi giao thông bình thường.
+
+**5.2 — dựng đáp án**
+- Đáp án định nghĩa bằng **hậu quả** (retrain có làm sai số 28 ngày tới giảm ≥ 15% không), không bằng chính tín hiệu đang chấm.
+- **Kiểm tra đáp án trước khi dùng:** bản nháp (so từng tuần, model học 3.593 giờ) cho 47% tuần "nên retrain" ở nơi ổn định → vô lý → đổi sang quyết định mỗi thứ Hai, đo 28 ngày, cửa sổ 24 tháng như hệ thống (I‑94: 0–11%).

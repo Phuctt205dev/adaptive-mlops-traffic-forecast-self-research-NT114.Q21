@@ -13,6 +13,7 @@ const errorMessages = {
   worker_restarted: "A training service restarted before the results could be confirmed.",
   cleanup_failed: "The system is still checking that temporary training files have been removed.",
   dispatch_failed: "The training request could not be confirmed. No more models will start in this run.",
+  kaggle_queue_timeout: "Kaggle did not start a notebook within 15 minutes, so this run was stopped. Train again, or choose CPU for LSTM and GRU (Advanced → Kaggle hardware).",
 };
 
 const branchNames = { tree: "Tree models", lstm: "LSTM", gru: "GRU" };
@@ -37,6 +38,7 @@ function logMessage(event) {
     cleanup_failed: "Removal of temporary files has not been confirmed",
     publication_started: "All group results checked · Saving the run",
     dispatch_failed: "The training request could not be confirmed. No more models will start in this run",
+    kaggle_queue_timeout: "Kaggle did not start a notebook within 15 minutes. The rest of this run is being stopped",
   };
   const details = event.details || {};
   return messages[event.code] || progressLabel({ stage: event.code, ...details });
@@ -120,16 +122,15 @@ function RunCard({ run, timezone, onDismiss, snapshotAgeSeconds, capabilities })
           : "Kaggle's outcome could not be confirmed. Stop this run and wait for stop confirmation before starting a replacement. No Local fallback has started."}
       </div>}
       {queueWait && !stopWait && <div className="training-location-note" role="status">
-        <strong>{queueWait.branch.toUpperCase()} has waited {queueWait.minutes} minutes in Kaggle's queue.</strong>{" "}
-        Kaggle does not say why or for how long, and this system cannot move it forward. Waiting is safe, but other training runs stay
-        blocked. To give up, press Stop, then open kaggle.com, go to Your Work, find the notebook named <code>{queueWait.notebook}</code> and
-        cancel its session.{queueWait.branch !== "tree" && " LSTM and GRU can run on CPU instead (Advanced training settings → Kaggle hardware), which never waits for a GPU."}
+        <strong>{queueWait.branch.toUpperCase()} has waited {queueWait.minutes} minutes for Kaggle to start it.</strong>{" "}
+        Kaggle does not say why or for how long. If it has not started after 15 minutes, this run stops by itself and nothing needs
+        cancelling on Kaggle. To give up sooner, press Stop.{queueWait.branch !== "tree" && " LSTM and GRU can run on CPU instead (Advanced training settings → Kaggle hardware), which does not wait for a GPU."}
       </div>}
       {stopWait && <div className="training-location-note" role="status">
-        <strong>Stop was sent, but Kaggle still has this notebook in its queue.</strong>{" "}
-        It can only stop itself once Kaggle starts it, and Kaggle does not let this system cancel a queued notebook. To finish now,
-        open kaggle.com, go to Your Work, find the notebook named <code>{stopWait.notebook}</code> and cancel its session.
-        The system notices the cancellation by itself and then removes the temporary files.
+        <strong>Stop was sent while Kaggle still has this notebook in its queue.</strong>{" "}
+        Once the stop signal's time limit has passed the notebook can no longer train, so the stop finishes by itself within about
+        4 minutes and the temporary files are removed. To finish sooner, open kaggle.com, go to Your Work, find the notebook
+        named <code>{stopWait.notebook}</code> and cancel its session.
       </div>}
       {run.error_code === "admin_cancelled" && <p role="status">{run.state === "cancelled"
         ? "Cancelled by the administrator. Training has stopped and cleanup is complete."

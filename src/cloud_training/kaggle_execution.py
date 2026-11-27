@@ -19,7 +19,7 @@ import sys
 from urllib.parse import urlparse
 
 from src.cloud_training.artifacts import MAX_BYTES, MAX_FILES, read_bundle, relative_path
-from src.cloud_training.control import LEASE_SECONDS, render_notebook, source_configuration, source_control, with_control
+from src.cloud_training.control import LEASE_SECONDS, START_LEASE_SECONDS, render_notebook, source_configuration, source_control, with_control
 from src.cloud_training.kaggle_transport import ProviderError
 from src.cloud_training.probe import canonical, sha256_file
 from src.cloud_training.errors import validate_failure
@@ -37,11 +37,14 @@ CONTROL_REREAD_SECONDS = 5
 CONTROL_GIVE_UP_MARGIN = 30
 CONTROL_REJECTION_LIMIT = 4
 CONTROL_REJECTION_MARGIN = 45
+# A lease that ended this long ago proves its notebook is not training: the
+# notebook reads its lease at start and every 3 s while it runs.
+LEASE_EXPIRY_MARGIN = 60
 # A lost notebook push is replaced only after its lease can no longer be honoured.
 SUBMIT_ATTEMPTS = 3
-SUBMIT_LEASE_MARGIN = 60
+SUBMIT_LEASE_MARGIN = LEASE_EXPIRY_MARGIN
 SUBMIT_ABSENCE_POLL_SECONDS = 5
-SUBMIT_RECONCILE_SECONDS = 900
+SUBMIT_RECONCILE_SECONDS = START_LEASE_SECONDS + 300
 
 
 class TrainingCancelled(ProviderError):
@@ -412,12 +415,12 @@ class KaggleExecution:
         """One fenced notebook execution push. False when its reply was lost in transit."""
         rendered_at = self.clock()
         source = render_notebook(self.ledger["snapshot"], self.ledger["reference"], self.ledger["dataset_reference"],
-                                 clock=rendered_at)
+                                 clock=rendered_at, lease_seconds=START_LEASE_SECONDS)
         (notebook / "train.py").write_text(source, encoding="utf-8")
         # The lease inside this source starts at rendered_at. Journal it before
         # the network so a later replacement can prove that lease has expired.
         self.save(submit_pending=True, submit_attempts=self.ledger.get("submit_attempts", 0) + 1,
-                  submit_attempted_at=rendered_at)
+                  submit_attempted_at=rendered_at, lease_until=rendered_at + START_LEASE_SECONDS)
         try:
             response = self.call("kernel_push", directory=str(notebook), no_run=False, timeout=90)
         except ProviderError as error:
@@ -440,18 +443,33 @@ class KaggleExecution:
             self.save(submit_url_query_keys=keys[:8])
         return True
 
-    def _push_cannot_run(self, absent_since):
-        """True once an unseen notebook could no longer start a fit even if it appeared now.
+    def _effective_lease(self, fallback_start=None):
+        """The latest lease the notebook could read, or None when it cannot be proven.
 
-        The notebook trains only while the lease in its own source is in the
-        future, and a push writes a lease of LEASE_SECONDS from its render time.
-        A journal from before that time was recorded counts from the first
-        absence read instead, which is later and therefore stricter.
+        The notebook reads the newest saved source, so a confirmed write
+        replaces the earlier lease; an unconfirmed write may still land, so its
+        lease counts too. A journal from before leases were recorded counts
+        LEASE_SECONDS from the push, or from the caller's fallback time.
         """
-        written = self.ledger.get("submit_attempted_at")
-        start = absent_since if written is None else written
-        return (self.clock() - absent_since >= INPUT_ABSENCE_SECONDS
-                and self.clock() >= start + LEASE_SECONDS + SUBMIT_LEASE_MARGIN)
+        lease = self.ledger.get("lease_until")
+        if lease is None:
+            start = self.ledger.get("submit_attempted_at", fallback_start)
+            if start is None:
+                return None
+            lease = start + LEASE_SECONDS
+        pending = self.ledger.get("pending_control") if self.ledger.get("control_pending") else None
+        if pending:
+            lease = max(lease, pending["lease_until"])
+        return lease
+
+    def _lease_expired(self, fallback_start=None):
+        """True once the notebook can no longer be training, whatever Kaggle reports."""
+        lease = self._effective_lease(fallback_start)
+        return lease is not None and self.clock() >= lease + LEASE_EXPIRY_MARGIN
+
+    def _push_cannot_run(self, absent_since):
+        """True once an unseen notebook could no longer start a fit even if it appeared now."""
+        return self.clock() - absent_since >= INPUT_ABSENCE_SECONDS and self._lease_expired(absent_since)
 
     def _reconcile_push(self, notebook, cancelled):
         """Decide an unconfirmed push by reading Kaggle; push again only when it provably cannot run.
@@ -777,6 +795,17 @@ class KaggleExecution:
                                             operation='terminal_events', category=category)
                     self._stop_progress()
                     return self.receive_output(cancelled)
+                queued_lease = (self._effective_lease() if state == "QUEUED" and self.last_sequence == 0
+                                and not self.ledger.get("child_running_observed")
+                                and not self.ledger.get("supervisor_started_observed") else None)
+                if queued_lease is not None:
+                    # A queued run reads its lease only when Kaggle starts it. A Quick Save
+                    # now adds a version that Kaggle tries to run and fails, while the queued
+                    # one keeps waiting (run 98f8a8bd). The start lease covers the wait.
+                    if self.clock() >= queued_lease:
+                        raise ProviderError("Kaggle did not start the notebook before its start lease ended.",
+                                            operation="provider_wait", category="queue_timeout")
+                    renewal = queued_lease
                 if self.clock() >= renewal:
                     # Do not Quick Save an execution already observed terminal.
                     # Schedule from the actual lease written, not from reply time.
@@ -860,6 +889,11 @@ class KaggleExecution:
             self.verify_remote(remote)
             self.save(version=remote["current_version_number"])
         if self.status() not in TERMINAL:
+            if self._lease_expired():
+                # The notebook reads its lease at start and every 3 s, so it cannot be
+                # training. A queued run that Kaggle starts later exits at once.
+                self.save(remote_stopped=True, stopped_by_lease_expiry=True)
+                return True
             if self.ledger.get("stop_waiting_since") and self.clock() < self.ledger.get("stop_next_poll_at", 0):
                 return False  # The signal is written; the watcher sweeps every 2 seconds.
             if self.ledger.get("session_id") and not self.ledger.get("cancel_session_pending"):

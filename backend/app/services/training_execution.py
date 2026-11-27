@@ -34,6 +34,7 @@ ERROR_MESSAGES = {
     "worker_restarted": "The worker restarted before this operation could be confirmed.",
     "cleanup_failed": "Temporary output cleanup has not been confirmed.",
     "dispatch_failed": "Airflow did not complete training dispatch. This run is closed to new training work.",
+    "kaggle_queue_timeout": "Kaggle did not start a notebook within 15 minutes; it can no longer train. The rest of this run was stopped.",
 }
 # Two messages above describe work still in progress; once every branch has
 # acknowledged its stop and cleanup the closed run must not keep saying so.

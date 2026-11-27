@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import Mock, patch
 import uuid
 
-from src.cloud_training.control import CONTROL_PREFIX
+from src.cloud_training.control import CONTROL_PREFIX, START_LEASE_SECONDS
 from src.cloud_training.kaggle_execution import KaggleExecution, TrainingCancelled, initial_ledger
 from src.cloud_training.kaggle_transport import ProviderError
 
@@ -331,17 +331,23 @@ class KaggleExecutionTests(unittest.TestCase):
         # Kaggle gives no session id, so a queued notebook can only stop itself
         # when it starts and reads the signal. Writing it again changes nothing
         # on Kaggle: the 23/11 run made 76 Quick Saves that each ran and failed.
+        # Once the cancel signal's own lease has ended the notebook cannot train,
+        # so the stop is confirmed without anyone cancelling it on Kaggle.
         now = [1_000_000.0]
         self.provider.clock = lambda: now[0]
         self.provider.submit()
         self.transport.state = "QUEUED"
-        for _ in range(60):
+        for _ in range(23):  # 230 s: the cancel lease (180 s) plus its margin has not passed
             self.assertFalse(self.provider.stop())
             now[0] += 10
         self.assertEqual(len(self.control_saves()), 1)
         self.assertEqual(self.transport.version, 2)
         self.assertTrue(self.provider.ledger["cancel_requested"])
         self.assertFalse(self.provider.ledger["remote_stopped"])
+        now[0] += 10
+        self.assertTrue(self.provider.stop())
+        self.assertEqual(len(self.control_saves()), 1)
+        self.assertTrue(self.provider.ledger["stopped_by_lease_expiry"])
         self.assertFalse(any(op == "cancel_session" for op, _ in self.transport.calls))
 
     def test_waiting_stop_rereads_the_notebook_at_a_gentle_interval_but_sees_the_end_at_once(self):
@@ -585,7 +591,14 @@ class KaggleExecutionTests(unittest.TestCase):
         self.transport.state = "QUEUED"
         return elapsed
 
-    def test_long_queue_reduces_status_calls_while_renewing_the_actual_lease(self):
+    def running_clock(self):
+        # Lease renewal only happens once Kaggle runs the notebook; a queued
+        # run is covered by its start lease and is never Quick Saved.
+        elapsed = self.queued_clock()
+        self.transport.state = "RUNNING"
+        return elapsed
+
+    def test_long_queue_reduces_status_calls_and_never_writes_to_the_queued_notebook(self):
         elapsed = self.queued_clock()
         with self.assertRaises(TrainingCancelled):
             self.provider.run(lambda _: None, lambda: elapsed[0] >= 1120)
@@ -595,7 +608,9 @@ class KaggleExecutionTests(unittest.TestCase):
         self.assertEqual(set(statuses), {self.provider.reference})
         pushes = [values for op, values in self.transport.calls if op == "kernel_push"]
         self.assertEqual(sum(not item["no_run"] for item in pushes), 1)
-        self.assertGreaterEqual(sum(item["no_run"] for item in pushes), 3)
+        # Run 98f8a8bd: each Quick Save of a queued GPU notebook became a Failed
+        # version and the queued run never started. The start lease covers it.
+        self.assertEqual(sum(item["no_run"] for item in pushes), 0)
         self.assertEqual(elapsed[0], 1120)
         self.assertGreater(self.provider.ledger["lease_until"], 1120)
 
@@ -776,7 +791,7 @@ class KaggleExecutionTests(unittest.TestCase):
         return ProviderError("not confirmed", operation="kernel_get", category="control_unconfirmed")
 
     def test_an_unconfirmed_renewal_is_read_again_instead_of_abandoning_the_branch(self):
-        elapsed = self.queued_clock()
+        elapsed = self.running_clock()
         self.provider.submit()
         self.provider.ledger.update(control_pending=True, pending_control={
             "lease_until": elapsed[0] + 180, "cancel": False, "sha256": "x", "base_version": 1, "writes": 2})
@@ -846,7 +861,7 @@ class KaggleExecutionTests(unittest.TestCase):
         now = [1000.0]
         self.provider.clock = lambda: now[0]
         self.provider.submit()
-        now[0] += 150  # Written with a 180 s lease: 30 s left, less than the margin.
+        now[0] += START_LEASE_SECONDS - 30  # Written with the start lease: 30 s left, less than the margin.
         self.refuse_control_writes()
         with self.assertRaises(ProviderError) as caught:
             self.provider.control()
@@ -861,7 +876,7 @@ class KaggleExecutionTests(unittest.TestCase):
         self.assertEqual(refused["refused"], 1)
 
     def test_run_goes_on_after_a_refused_renewal_and_asks_again_within_seconds(self):
-        elapsed = self.queued_clock()
+        elapsed = self.running_clock()
         self.provider.submit()
         self.refuse_control_writes(count=1)
         with self.assertRaises(TrainingCancelled):
@@ -872,13 +887,13 @@ class KaggleExecutionTests(unittest.TestCase):
         self.assertGreater(self.provider.ledger["lease_until"], 1060)
 
     def test_run_still_fails_when_every_renewal_is_refused(self):
-        elapsed = self.queued_clock()
+        elapsed = self.running_clock()
         self.provider.submit()
         self.refuse_control_writes()
         with self.assertRaises(ProviderError) as caught:
             self.provider.run(lambda _: None, lambda: elapsed[0] >= 5000)
         self.assertEqual(caught.exception.category, "control_rejected")
-        self.assertLess(elapsed[0], 1120)  # Failed well before the 180 s lease ran out.
+        self.assertLess(elapsed[0], 1120)  # Failed well before the lease ran out.
 
 
 if __name__ == "__main__":

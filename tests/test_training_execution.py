@@ -365,6 +365,17 @@ class TrainingExecutionTests(unittest.TestCase):
         run = self.db.get(TrainingRun, self.run.id)
         self.assertEqual(run.error_message, "Training failed. The remaining work in this run was stopped.")
 
+    def test_queue_timeout_has_its_own_reason(self):
+        from backend.app.services.training_control import failure_code
+        from src.cloud_training.kaggle_transport import ProviderError
+        timeout = ProviderError("queued", operation="provider_wait", category="queue_timeout")
+        self.assertEqual(failure_code("kaggle", True, timeout), "kaggle_queue_timeout")
+        self.assertIn("15 minutes", service.ERROR_MESSAGES["kaggle_queue_timeout"])
+        self.assertEqual(failure_code("kaggle", True, ProviderError("x", category="ml_execution_failed")), "training_failed")
+        self.assertEqual(failure_code("kaggle", True, RuntimeError("x")), "cloud_unavailable")
+        self.assertEqual(failure_code("kaggle", False, timeout), "training_failed")
+        self.assertEqual(failure_code("local", True, RuntimeError("x")), "training_failed")
+
     def test_error_remains_visible_until_stopped_and_dismissed(self):
         attempt = self.claim()
         service.fail_run(self.db, self.run.id, "tree", attempt)

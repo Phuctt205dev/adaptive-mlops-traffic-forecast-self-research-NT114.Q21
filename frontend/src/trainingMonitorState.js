@@ -51,8 +51,8 @@ export function kaggleQueueMinutes(run, branch) {
   return Math.floor((now - since) / 60000);
 }
 
-// Past this many minutes in Kaggle's queue the Monitor says so and shows what can be done.
-export const QUEUE_WARNING_MINUTES = 15;
+// Past this many minutes in Kaggle's queue the Monitor says so; at 15 minutes the run stops by itself.
+export const QUEUE_WARNING_MINUTES = 5;
 
 // Kaggle gives no reason or position for a queued notebook, so only the wait is reported.
 export function queueWaitNotice(run) {
@@ -67,7 +67,7 @@ export function queueWaitNotice(run) {
 }
 
 // A notebook that is still queued cannot read the stop signal until Kaggle starts it.
-// Kaggle offers no way for the system to cancel a queued session, so the person does.
+// Once the signal's lease has ended it can no longer train, so the stop finishes by itself.
 export function stopWaitNotice(run) {
   if (run?.backend !== "kaggle" || run.state !== "cancelling") return null;
   for (const [branch, item] of Object.entries(run.branches || {})) {

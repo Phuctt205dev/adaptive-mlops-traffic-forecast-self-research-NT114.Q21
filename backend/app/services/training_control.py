@@ -38,6 +38,17 @@ def failure_facts(error, phase, branch):
                        for frame in traceback.extract_tb(error.__traceback__)[-6:]]}
 
 
+def failure_code(backend, provider_started, error):
+    """Run error code for a failed branch; a Kaggle queue timeout keeps its own reason."""
+    if backend != "kaggle" or not provider_started:
+        return "training_failed"
+    if isinstance(error, ProviderError) and error.category == "queue_timeout":
+        return "kaggle_queue_timeout"
+    if isinstance(error, ProviderError) and error.category == "ml_execution_failed":
+        return "training_failed"
+    return "cloud_unavailable"
+
+
 def delete_prefix(store, prefix):
     """Only callers deriving UUID-owned staging prefixes may invoke this."""
     if not prefix.endswith("/"):
@@ -347,9 +358,7 @@ class WorkerController:
                     pass
             with self.sessions() as db:
                 db.rollback()
-                state.fail_run(db, run_id, branch, attempt,
-                               "cloud_unavailable" if backend == "kaggle" and handle["provider"] is not None and not (
-                                   isinstance(error, ProviderError) and error.category == "ml_execution_failed") else "training_failed")
+                state.fail_run(db, run_id, branch, attempt, failure_code(backend, handle["provider"] is not None, error))
             # Watcher retries network/cleanup failures without making a new fit.
         finally:
             if attempt_transport is not None and attempt_transport is not self.transport:

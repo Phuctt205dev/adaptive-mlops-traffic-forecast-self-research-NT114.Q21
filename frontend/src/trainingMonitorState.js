@@ -18,6 +18,7 @@ export const providerPhases = {
   waiting_resources: "Waiting for RKE2 resources", local_running: "Training on RKE2",
   reconnecting: "Reconnecting to Kaggle", needs_attention: "Connection needs attention",
   input_reconciling: "Checking uploaded training data",
+  submit_reconciling: "Checking that Kaggle received the notebook",
   prepare_input: "Preparing input", input_upload: "Uploading input", input_processing: "Kaggle is preparing input",
   notebook_submit: "Submitting to Kaggle", provider_wait: "Submitted · Waiting for Kaggle progress",
   supervisor_started: "Starting the Kaggle environment", child_running: "Starting the training process",
@@ -50,8 +51,8 @@ export function kaggleQueueMinutes(run, branch) {
   return Math.floor((now - since) / 60000);
 }
 
-// Past this many minutes in Kaggle's queue the Monitor says so and shows what can be done.
-export const QUEUE_WARNING_MINUTES = 15;
+// Past this many minutes in Kaggle's queue the Monitor says so; at 15 minutes the run stops by itself.
+export const QUEUE_WARNING_MINUTES = 5;
 
 // Kaggle gives no reason or position for a queued notebook, so only the wait is reported.
 export function queueWaitNotice(run) {
@@ -66,7 +67,7 @@ export function queueWaitNotice(run) {
 }
 
 // A notebook that is still queued cannot read the stop signal until Kaggle starts it.
-// Kaggle offers no way for the system to cancel a queued session, so the person does.
+// Once the signal's lease has ended it can no longer train, so the stop finishes by itself.
 export function stopWaitNotice(run) {
   if (run?.backend !== "kaggle" || run.state !== "cancelling") return null;
   for (const [branch, item] of Object.entries(run.branches || {})) {

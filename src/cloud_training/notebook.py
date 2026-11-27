@@ -158,7 +158,8 @@ def main():
                     or control["attempt_id"] != CONFIG["context"]["attempt_id"]
                     or type(control["cancel"]) is not bool
                     or type(control["lease_until"]) not in (int, float)
-                    or not time.time() < control["lease_until"] <= time.time() + 300):
+                    # 1200 s admits the 900 s start lease plus clock skew, never an unbounded one.
+                    or not time.time() < control["lease_until"] <= time.time() + 1200):
                 return False
             return not control["cancel"]
 

@@ -34,6 +34,26 @@ silently queued. Stop is checked during every backoff. Training Monitor shows
 progress. This recovery runs inside an owned attempt before its notebook starts;
 it does not resume an older `needs_attention` attempt after controller replacement.
 
+**Notebook lease (since 27/11).** The supervisor in each notebook trains only while the
+lease written in the notebook's newest source is in the future; it reads it at start and
+every 3 s. The execution push writes a **15-minute start lease**, journaled before the
+network call. While Kaggle still reports the run as `QUEUED`, the worker writes nothing
+to the notebook: each lease Quick Save had shown on Kaggle as a new Failed version, and in
+run 98f8a8bd the queued GPU run never started while the same account started two GPU
+sessions at once by hand. Renewal (180 s lease, about every 45 s) starts once the
+notebook runs. If Kaggle has not started the notebook when the start lease ends, the
+branch fails with `kaggle_queue_timeout` and the run is stopped; it is never switched to
+CPU automatically. A lease that ended more than 60 s ago proves the notebook is not
+training, so Stop and cleanup can finish without cancelling anything on kaggle.com.
+
+**Lost notebook push (since 27/11).** If the reply to the execution push is lost, the
+worker reads whether the notebook exists. An existing notebook is read back as usual and a
+reply Kaggle confirmed is never pushed again. An absent notebook is pushed again (at most
+three pushes in total) only after it stayed absent for 15 s and its lease has expired, so
+a copy that appears late exits at start instead of fitting. Training Monitor shows
+"Checking that Kaggle received the notebook". Stop of such a branch uses the same rule
+(run d65a2049 had stayed in Stopping because `kernel_get` returned 404 forever).
+
 The [official Kaggle dataset metadata contract](https://github.com/Kaggle/kaggle-cli/blob/main/docs/datasets_metadata.md)
 defines create with a unique owner/slug separately from creating a new dataset
 version. Retries preserve that original create-only identity and source snapshot.
@@ -114,12 +134,14 @@ kept: only words from a fixed allow-list (for example `running`, `limit`, `quota
 retry cleans only attempt-owned partial output and downloads the same version;
 it does not retrain. Native session cancellation is used at most once when the
 original SaveKernel response explicitly linked a session ID for this notebook;
-otherwise cooperative cancellation remains the fallback. Neither response to
-Cancel nor lease expiry is treated as proof of stop.
+otherwise cooperative cancellation remains the fallback. A response to Cancel is
+not proof of stop; a lease that ended more than 60 s ago is (see Notebook lease).
 
-Training Monitor labels a notebook queued on Kaggle with its wait. After 15 minutes it
-adds the notebook name to cancel on kaggle.com and points to the CPU option; Kaggle gives
-no reason or position, and the system cannot cancel a queued session itself.
+Training Monitor labels a notebook queued on Kaggle with its wait. After 5 minutes it
+says the run stops by itself at 15 minutes and points to the CPU option; Kaggle gives no
+reason or position. Stopping a queued notebook finishes by itself about 4 minutes after
+the stop signal (its lease has then ended); cancelling the session on kaggle.com only
+makes it sooner.
 
 When the outcome remains unknown, the worker keeps the original attempt and
 execution fence in Needs attention. Airflow timeout does not convert that

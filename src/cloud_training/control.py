@@ -11,6 +11,10 @@ from src.cloud_training.probe import canonical
 
 CONTROL_PREFIX = "# TRAFFIC_CONTROL "
 LEASE_SECONDS = 180
+# The lease written with the execution push must cover a wait in Kaggle's queue:
+# nothing is written to a notebook while its run is queued (each Quick Save
+# became a Failed version and the queued run never started, run 98f8a8bd).
+START_LEASE_SECONDS = 900
 
 
 def body_digest(source):
@@ -43,22 +47,22 @@ def source_control(source):
     return value
 
 
-def control_message(attempt_id, *, cancel=False, clock=None):
+def control_message(attempt_id, *, cancel=False, clock=None, lease_seconds=LEASE_SECONDS):
     current = time.time() if clock is None else clock
     if not isinstance(current, (int, float)) or not math.isfinite(current) or type(cancel) is not bool:
         raise ValueError("Invalid control clock/cancellation state.")
-    return {"attempt_id": attempt_id, "cancel": cancel, "lease_until": current + LEASE_SECONDS}
+    return {"attempt_id": attempt_id, "cancel": cancel, "lease_until": current + lease_seconds}
 
 
-def with_control(source, *, cancel=False, clock=None):
+def with_control(source, *, cancel=False, clock=None, lease_seconds=LEASE_SECONDS):
     configuration = source_configuration(source)
     body = "\n".join(line for line in source.replace("\r\n", "\n").splitlines()
                      if not line.startswith(CONTROL_PREFIX)).rstrip() + "\n"
-    control = control_message(configuration["context"]["attempt_id"], cancel=cancel, clock=clock)
+    control = control_message(configuration["context"]["attempt_id"], cancel=cancel, clock=clock, lease_seconds=lease_seconds)
     return body + CONTROL_PREFIX + canonical(control).decode() + "\n"
 
 
-def render_notebook(snapshot, reference, dataset_reference, *, clock=None):
+def render_notebook(snapshot, reference, dataset_reference, *, clock=None, lease_seconds=LEASE_SECONDS):
     validate_context(snapshot["context"])
     # These are deterministic, per-attempt private resources. Never accept an
     # arbitrary existing notebook as a target for control writes or cleanup.
@@ -70,4 +74,4 @@ def render_notebook(snapshot, reference, dataset_reference, *, clock=None):
     configuration = {**snapshot, "reference": reference, "dataset_reference": dataset_reference,
                      "body_sha256": body_digest(template)}
     source = template.replace("CONFIG = {}", "CONFIG = " + repr(configuration), 1)
-    return with_control(source, clock=clock)
+    return with_control(source, clock=clock, lease_seconds=lease_seconds)

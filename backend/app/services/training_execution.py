@@ -34,6 +34,13 @@ ERROR_MESSAGES = {
     "worker_restarted": "The worker restarted before this operation could be confirmed.",
     "cleanup_failed": "Temporary output cleanup has not been confirmed.",
     "dispatch_failed": "Airflow did not complete training dispatch. This run is closed to new training work.",
+    "kaggle_queue_timeout": "Kaggle did not start a notebook within 15 minutes; it can no longer train. The rest of this run was stopped.",
+}
+# Two messages above describe work still in progress; once every branch has
+# acknowledged its stop and cleanup the closed run must not keep saying so.
+FINAL_MESSAGES = {
+    "admin_cancelled": "Cancelled by the administrator.",
+    "training_failed": "Training failed. The remaining work in this run was stopped.",
 }
 
 
@@ -477,6 +484,8 @@ def acknowledge_stop(db, run_id, branch, attempt, *, stopped, cleaned):
         record.state = "cancelled" if record.error_code == "admin_cancelled" else "failed"
         run = db.get(TrainingRun, run_id)
         run.status, run.completed_at = (TrainingRunStatus.CANCELLED if record.state == "cancelled" else TrainingRunStatus.FAILED), now()
+        if record.error_code in FINAL_MESSAGES and record.error_message == ERROR_MESSAGES[record.error_code]:
+            record.error_message = FINAL_MESSAGES[record.error_code]
         run.error_message = record.error_message
         add_event(record, "run_stopped_and_cleaned", level="error")
     else:

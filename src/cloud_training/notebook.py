@@ -207,6 +207,9 @@ def main():
             for key in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS",
                         "TF_NUM_INTEROP_THREADS", "TF_NUM_INTRAOP_THREADS"):
                 environment[key] = "1"
+            if CONFIG.get("accelerator_override") == "cpu":
+                # A CPU notebook that replaced a GPU notebook Kaggle had not started.
+                environment["TRAFFIC_KAGGLE_ACCELERATOR"] = "cpu"
             child = subprocess.Popen([sys.executable, "-u", str(code / "scripts/cloud_training/execute_branch.py"),
                                       "--job", str(inputs / "job.json"), "--dataset", str(inputs / "dataset.csv"),
                                       "--output", str(output)], cwd=code, env=environment,

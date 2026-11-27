@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { stages as labels, modelStatus, progressLabel, freshness, stopWaitNotice, queueWaitNotice, monitorPollDelay, TRAINING_STARTED_EVENT } from "./trainingMonitorState";
+import { stages as labels, modelStatus, progressLabel, freshness, stopWaitNotice, queueWaitNotice, gpuFallbackNotices, monitorPollDelay, TRAINING_STARTED_EVENT } from "./trainingMonitorState";
 import AppDialog from "./AppDialog.jsx";
 
 
@@ -69,6 +69,7 @@ function RunCard({ run, timezone, onDismiss, snapshotAgeSeconds, capabilities })
       : phases.includes("reconnecting") ? "reconnecting" : null;
   const stopWait = stopWaitNotice(run);
   const queueWait = queueWaitNotice(run);
+  const gpuFallbacks = gpuFallbackNotices(run);
   const cvCompleted = Number(run.cv_completed_models) || 0;
   const outputVerified = Number(run.output_verified_models) || 0;
 
@@ -125,6 +126,10 @@ function RunCard({ run, timezone, onDismiss, snapshotAgeSeconds, capabilities })
         <strong>{queueWait.branch.toUpperCase()} has waited {queueWait.minutes} minutes for Kaggle to start it.</strong>{" "}
         Kaggle does not say why or for how long. If it has not started after 15 minutes, this run stops by itself and nothing needs
         cancelling on Kaggle. To give up sooner, press Stop.{queueWait.branch !== "tree" && " LSTM and GRU can run on CPU instead (Advanced training settings → Kaggle hardware), which does not wait for a GPU."}
+      </div>}
+      {gpuFallbacks.length > 0 && <div className="training-location-note" role="status">
+        <strong>{gpuFallbacks.map((item) => item.branch.toUpperCase()).join(" and ")} did not get a Kaggle GPU within 2 minutes, so {gpuFallbacks.length > 1 ? "they are" : "it is"} trained on CPU instead.</strong>{" "}
+        The GPU request was stopped first, so the same model cannot be trained twice. Kaggle sometimes needs several minutes to prepare a GPU.
       </div>}
       {stopWait && <div className="training-location-note" role="status">
         <strong>Stop was sent while Kaggle still has this notebook in its queue.</strong>{" "}

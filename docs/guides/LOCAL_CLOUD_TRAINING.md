@@ -38,13 +38,25 @@ it does not resume an older `needs_attention` attempt after controller replaceme
 lease written in the notebook's newest source is in the future; it reads it at start and
 every 3 s. The execution push writes a **15-minute start lease**, journaled before the
 network call. While Kaggle still reports the run as `QUEUED`, the worker writes nothing
-to the notebook: each lease Quick Save had shown on Kaggle as a new Failed version, and in
-run 98f8a8bd the queued GPU run never started while the same account started two GPU
-sessions at once by hand. Renewal (180 s lease, about every 45 s) starts once the
-notebook runs. If Kaggle has not started the notebook when the start lease ends, the
-branch fails with `kaggle_queue_timeout` and the run is stopped; it is never switched to
-CPU automatically. A lease that ended more than 60 s ago proves the notebook is not
-training, so Stop and cleanup can finish without cancelling anything on kaggle.com.
+to the notebook (each lease Quick Save had shown on Kaggle as a new Failed version, and in
+run 98f8a8bd the queued run never started). Once the notebook runs, it is renewed with
+another 15-minute lease when 5 minutes are left, so a normal run makes no Quick Save at all;
+a stop signal keeps a short 3-minute lease. A lease that ended more than 60 s ago proves
+the notebook is not training, so Stop and cleanup can finish without cancelling anything
+on kaggle.com. A notebook Kaggle has not started when its start lease ends fails the run
+with `kaggle_queue_timeout`.
+
+**GPU not ready in time (since 27/11, admin decision).** Kaggle sometimes needs several
+minutes to prepare a GPU machine (run 095dc119: the GRU notebook waited 5.7 minutes on an
+empty account while the LSTM notebook pushed 24 s later got a GPU at once). If an LSTM/GRU
+notebook asked for a GPU is still queued after **2 minutes**, the worker writes a stop
+signal to it (if Kaggle ever starts it, it exits within seconds, so the branch is never
+fitted twice) and runs the branch in a new CPU notebook named `traffic-train-<attempt>-c`.
+The CPU notebook reuses the uploaded input; its configuration carries
+`accelerator_override: cpu`, which can only lower GPU to CPU. The provider journal keeps
+`gpu_fallback` (wait in seconds) and `accelerator: cpu`; the replaced GPU notebook is
+deleted at cleanup after its identity is read back. Training Monitor says which branch
+moved to CPU. There is at most one fallback per attempt.
 
 **Lost notebook push (since 27/11).** If the reply to the execution push is lost, the
 worker reads whether the notebook exists. An existing notebook is read back as usual and a

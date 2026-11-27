@@ -73,4 +73,5 @@ def operation_timing(telemetry, name, seconds, *, failed=False, byte_count=0):
 def timing_summary(provider):
     """Never expose provider source, resource references or signed download URLs."""
     return {key: provider[key] for key in ("phase", "telemetry", "last_failure", "provider_state",
-            "provider_observed_at", "provider_checked_at", "last_control_confirmed_at", "stop_waiting_since", "workload") if key in provider}
+            "provider_observed_at", "provider_checked_at", "last_control_confirmed_at", "stop_waiting_since", "workload",
+            "accelerator", "gpu_fallback") if key in provider}

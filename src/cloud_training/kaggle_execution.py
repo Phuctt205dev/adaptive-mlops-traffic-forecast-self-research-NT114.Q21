@@ -19,7 +19,7 @@ import sys
 from urllib.parse import urlparse
 
 from src.cloud_training.artifacts import MAX_BYTES, MAX_FILES, read_bundle, relative_path
-from src.cloud_training.control import LEASE_SECONDS, START_LEASE_SECONDS, render_notebook, source_configuration, source_control, with_control
+from src.cloud_training.control import CPU_FALLBACK_SUFFIX, LEASE_SECONDS, START_LEASE_SECONDS, render_notebook, source_configuration, source_control, with_control
 from src.cloud_training.kaggle_transport import ProviderError
 from src.cloud_training.probe import canonical, sha256_file
 from src.cloud_training.errors import validate_failure
@@ -45,6 +45,13 @@ SUBMIT_ATTEMPTS = 3
 SUBMIT_LEASE_MARGIN = LEASE_EXPIRY_MARGIN
 SUBMIT_ABSENCE_POLL_SECONDS = 5
 SUBMIT_RECONCILE_SECONDS = START_LEASE_SECONDS + 300
+# A running notebook is renewed with a long lease once this little of it is left, so
+# a normal run (a few minutes) needs no Quick Save at all. A cancel signal keeps the
+# short LEASE_SECONDS so a stopped notebook is provably idle within minutes.
+RENEW_BEFORE_SECONDS = 300
+# A GPU notebook that Kaggle has not started by then is stopped and the branch runs on
+# CPU (admin decision 27/11): Kaggle sometimes needs minutes to prepare a GPU machine.
+GPU_QUEUE_FALLBACK_SECONDS = 120
 
 
 class TrainingCancelled(ProviderError):
@@ -415,7 +422,8 @@ class KaggleExecution:
         """One fenced notebook execution push. False when its reply was lost in transit."""
         rendered_at = self.clock()
         source = render_notebook(self.ledger["snapshot"], self.ledger["reference"], self.ledger["dataset_reference"],
-                                 clock=rendered_at, lease_seconds=START_LEASE_SECONDS)
+                                 clock=rendered_at, lease_seconds=START_LEASE_SECONDS,
+                                 accelerator_override="cpu" if self.ledger.get("gpu_fallback") else None)
         (notebook / "train.py").write_text(source, encoding="utf-8")
         # The lease inside this source starts at rendered_at. Journal it before
         # the network so a later replacement can prove that lease has expired.
@@ -531,6 +539,73 @@ class KaggleExecution:
         self.save(stop_absence_since=since, stop_next_poll_at=self.clock() + STOP_POLL_SECONDS)
         return False
 
+    def _renewal_due(self):
+        """Renew RENEW_BEFORE_SECONDS before the newest lease written ends."""
+        lease = self.ledger.get("lease_until")
+        return 0 if lease is None else lease - RENEW_BEFORE_SECONDS
+
+    def _fall_back_to_cpu(self, cancelled):
+        """Stop a GPU notebook Kaggle has not started and run this branch in a CPU notebook.
+
+        The cancel signal carries a short lease, so if Kaggle ever starts the GPU
+        notebook it exits at once: the branch is never fitted twice. The CPU notebook
+        has its own name, reuses the uploaded input and tells the training process to
+        use the CPU; the GPU notebook is deleted at cleanup after an identity check.
+        """
+        waited = self.clock() - self.ledger["submit_attempted_at"]
+        self.reconnect(lambda: self.control(cancel=True), cancelled)
+        abandoned = copy.deepcopy(self.ledger.get("abandoned_notebooks", []))
+        abandoned.append({"reference": self.ledger["reference"], "version": self.ledger["version"],
+                          "supervisor_configuration": self.ledger["supervisor_configuration"],
+                          "lease_until": self.ledger.get("lease_until"), "notebook_cleaned": False})
+        reference = self.ledger["reference"] + CPU_FALLBACK_SUFFIX
+        configuration = source_configuration(render_notebook(
+            self.ledger["snapshot"], reference, self.ledger["dataset_reference"], accelerator_override="cpu"))
+        if self.stream is not None:
+            self.stream.stop()
+            self.stream = None
+        self.last_sequence = 0
+        with self._journal_lock:
+            # Everything below described the GPU notebook; the input upload stays.
+            for key in [key for key in self.ledger if key.endswith("_observed")] + [
+                    "expected_version", "submit_attempted_at", "lease_until", "control_version", "control_pending",
+                    "pending_control", "cancel_requested", "provider_state", "provider_checked_at",
+                    "confirmed_control_writes", "control_rejections", "last_control_confirmed_at", "session_id",
+                    "submit_url_query_keys", "stop_waiting_since", "stop_next_poll_at", "stop_absence_since",
+                    "submit_rejected", "submit_abandoned", "input_deadline"]:
+                self.ledger.pop(key, None)
+            self.save(abandoned_notebooks=abandoned, accelerator="cpu", reference=reference,
+                      supervisor_configuration=configuration, version=None, submit_pending=False, submit_attempts=0,
+                      terminal=None, remote_stopped=False, notebook_cleaned=False,
+                      gpu_fallback={"after_seconds": round(waited), "at": self.timestamp()})
+        self.milestone("gpu_fallback")
+        self.phase("gpu_fallback")
+        self.submit(cancelled)
+
+    def _clean_abandoned(self):
+        """Delete GPU notebooks replaced by a CPU notebook, only after reading back their identity."""
+        for index, item in enumerate(self.ledger.get("abandoned_notebooks", [])):
+            if item.get("notebook_cleaned"):
+                continue
+            if self.call("resource_exists", kind="notebook", reference=item["reference"])["exists"]:
+                remote = self.call("kernel_get", reference=item["reference"])
+                source = remote["source"].replace("\r\n", "\n")
+                try:
+                    same = (remote["ref"] == item["reference"] and remote["is_private"] is True
+                            and source_configuration(source) == item["supervisor_configuration"])
+                except (ValueError, KeyError, SyntaxError):
+                    same = False
+                if not same:
+                    raise ProviderError("A replaced notebook's identity differs; it was not deleted.",
+                                        operation="cleanup", category="cleanup_identity")
+                self.call("cleanup", notebook=item["reference"])
+                if self.call("resource_exists", kind="notebook", reference=item["reference"])["exists"]:
+                    return False
+            abandoned = copy.deepcopy(self.ledger["abandoned_notebooks"])
+            abandoned[index]["notebook_cleaned"] = True
+            self.save(abandoned_notebooks=abandoned)
+        return True
+
     def control(self, *, cancel=False):
         cancel = bool(cancel or self.ledger.get("cancel_requested"))
         remote = self.call("kernel_get", reference=self.ledger["reference"])
@@ -543,7 +618,9 @@ class KaggleExecution:
         if pending:
             # A previous process may have lost the reply. Read back its original
             # intent, never replace it with a newly generated lease or write.
-            controlled = with_control(source, cancel=pending["cancel"], clock=pending["lease_until"] - 180)
+            seconds = pending.get("lease_seconds", LEASE_SECONDS)
+            controlled = with_control(source, cancel=pending["cancel"], clock=pending["lease_until"] - seconds,
+                                      lease_seconds=seconds)
             if (hashlib.sha256(controlled.encode()).hexdigest() != pending["sha256"]
                     or source != controlled or base_version <= pending["base_version"]):
                 raise ProviderError("Pending control update is not confirmed.", operation="kernel_get",
@@ -560,13 +637,16 @@ class KaggleExecution:
             self.save(cancel_requested=True)
             return
         control_clock = self.clock()
-        controlled = with_control(source, cancel=cancel, clock=control_clock)
+        # Renewals write a long lease so a normal run needs none; a cancel keeps a
+        # short one so the stopped notebook is provably idle within minutes.
+        seconds = LEASE_SECONDS if cancel else START_LEASE_SECONDS
+        controlled = with_control(source, cancel=cancel, clock=control_clock, lease_seconds=seconds)
         directory = self.directory / "control"
         directory.mkdir(exist_ok=True)
         (directory / "kernel-metadata.json").write_bytes(canonical(self.metadata()))
         (directory / "train.py").write_text(controlled, encoding="utf-8")
         pending = {"base_version": base_version, "sha256": hashlib.sha256(controlled.encode()).hexdigest(),
-                   "lease_until": control_clock + 180, "cancel": cancel, "writes": 0}
+                   "lease_until": control_clock + seconds, "lease_seconds": seconds, "cancel": cancel, "writes": 0}
         self.save(control_pending=True, pending_control=pending,
                   cancel_requested=self.ledger.get("cancel_requested", False) or cancel)
         # Quick Save edits the existing private source. It never starts a fit.
@@ -760,10 +840,11 @@ class KaggleExecution:
                     self.sleep(1)
 
     def run(self, progress, cancelled):
-        deadline, renewal = self.clock() + 8 * 3600, 0
+        deadline = self.clock() + 8 * 3600
         queued_polls = 0
         try:
             self.submit(cancelled)
+            renewal = self._renewal_due()
             self._start_progress(progress)
             while self.clock() < deadline:
                 if cancelled():
@@ -805,12 +886,19 @@ class KaggleExecution:
                     if self.clock() >= queued_lease:
                         raise ProviderError("Kaggle did not start the notebook before its start lease ended.",
                                             operation="provider_wait", category="queue_timeout")
-                    renewal = queued_lease
-                if self.clock() >= renewal:
+                    if (self.uses_gpu() and not self.ledger.get("gpu_fallback")
+                            and self.ledger.get("submit_attempted_at") is not None
+                            and self.clock() - self.ledger["submit_attempted_at"] >= GPU_QUEUE_FALLBACK_SECONDS):
+                        self._fall_back_to_cpu(cancelled)
+                        renewal = self._renewal_due()
+                        queued_polls = 0
+                        continue
+                # Never Quick Save a queued run; once it runs, renew in time (the schedule
+                # is always derived from the newest lease written, never from the queue).
+                if queued_lease is None and self.clock() >= renewal:
                     # Do not Quick Save an execution already observed terminal.
-                    # Schedule from the actual lease written, not from reply time.
                     if self.renew_lease(cancelled):
-                        renewal = min(self.clock() + 45, self.ledger.get("lease_until", self.clock() + 180) - 90)
+                        renewal = max(self._renewal_due(), self.clock() + CONTROL_REREAD_SECONDS)
                     else:
                         renewal = self.clock() + CONTROL_REREAD_SECONDS + random.random() * 3
                     self.drain(progress)
@@ -828,7 +916,7 @@ class KaggleExecution:
                         raise TrainingCancelled("The training run requested cancellation.")
                     self.drain(progress)
                     after = (self.last_sequence, bool(self.ledger.get("child_running_observed")), bool(self.ledger.get("child_completed_observed")))
-                    if after != before or self.clock() >= renewal:
+                    if after != before or (queued_lease is None and self.clock() >= renewal):
                         break
             raise ProviderUncertain("Kaggle execution exceeded its monitoring deadline.", category="provider_unknown")
         except ProviderError as error:
@@ -1012,6 +1100,8 @@ class KaggleExecution:
         if not self.ledger.get("remote_stopped"):
             return False
         self.milestone("cleanup_started")
+        if not self._clean_abandoned():
+            return False
         # Read identity before each destructive provider operation. References
         # were derived from a unique attempt UUID and never supplied by a user.
         if self.ledger.get("version") and not self.ledger["notebook_cleaned"]:

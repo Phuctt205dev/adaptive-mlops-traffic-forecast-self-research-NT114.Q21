@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT))
 
 from src.cloud_training.artifacts import write_bundle
 from src.cloud_training.probe import canonical, sha256_file
-from src.cloud_training.package import configuration_digest, kaggle_accelerator
+from src.cloud_training.package import configuration_digest, effective_accelerator
 from src.training_progress import reporting, report, set_fold
 from src.cloud_training.errors import FAILURE_PREFIX, safe_failure
 
@@ -103,7 +103,7 @@ def run(job, dataset, output):
             raise ValueError("A Local Job must identify one selected model in this branch.")
         selected = [model]
     if config.get("training_backend") == "kaggle" and branch in {"lstm", "gru"} and branch in selected:
-        if kaggle_accelerator(config, branch) == "gpu":
+        if effective_accelerator(config, branch, os.environ) == "gpu":
             import tensorflow as tf
             if not tf.config.list_physical_devices("GPU"):
                 raise RuntimeError("The selected cloud GPU execution has no usable GPU.")

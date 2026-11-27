@@ -96,6 +96,36 @@ python -B scripts/cicd/recover_cd.py `
 Thiếu receipt, cấu hình đổi xen vào hoặc guard chưa rõ thì phải dừng và tái lập
 phương án phục hồi có kiểm chứng. Không sửa receipt hoặc replay Apply để thử.
 
+### Lease hết hạn giữa lúc rollback (role delivery)
+
+Gặp ở run 124 (27/11/2026): node-02 kéo image API mới > 10 phút nên rollout
+quá hạn, engine bắt đầu rollback; pod ứng viên chờ hết `terminationGracePeriod`
+(preStop lỗi) nên lease guard (2400 s) hết trước khi engine ghi xong. Receipt
+dừng ở `phase: rollback`, `guard_held: true`, `recovery_required: true`, không
+có `resources`. `roles_deploy.py Rollback` từ chối ("Lease lost") và
+`recover_cd.py` từ chối (receipt chưa đóng) — cả hai đúng thiết kế.
+
+Trước tiên trả DAG về trạng thái đã ghi (`dag_was_paused`, `drift_was_paused`
+trong receipt; engine tạm dừng DAG ở admission). Sau đó
+`recover_lease_lost.py` so cụm với receipt **và** journal patch ngược riêng
+(`results/cicd/private/role-transactions/<tên receipt>`): mỗi tài nguyên đã
+patch phải đúng UID và **trùng spec BEFORE**, Service trỏ về cohort cũ đủ Ready,
+slot ứng viên 0 replica, guard Job/pod đã kết thúc, training rảnh và DAG đúng
+trạng thái đã ghi. Mặc định chỉ đọc; `--release` mới nhả quyền sở hữu qua
+`recover_cd.release_ownership` (Auto vẫn bị chặn tới một bản Manual đạt).
+
+```powershell
+python -B scripts/cicd/recover_lease_lost.py `
+  --receipt <receipt.json> --inverses results/cicd/private/role-transactions/<receipt.json> `
+  --kubectl <kubectl.exe> --kubeconfig <dedicated-kubeconfig> `
+  --context traffic-delivery --namespace-uid <reviewed-namespace-uid> `
+  --proof-output <ignored-local-proof.json>        # thêm --release sau khi xem bằng chứng
+```
+
+Trước khi chạy lại bản đó, kéo trước image lên node chậm (đã có ở node thì
+rollout không phải chờ tải):
+`sudo /var/lib/rancher/rke2/bin/crictl --runtime-endpoint unix:///run/k3s/containerd/containerd.sock pull <image@digest>`.
+
 Trường hợp controller cũ đã claim nhưng `deliver.ps1` lỗi xác minh gói ở dòng 28,
 chưa gọi engine và chưa tạo receipt, có nhánh kiểm chứng riêng:
 

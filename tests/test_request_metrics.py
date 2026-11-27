@@ -108,6 +108,63 @@ class MiddlewareMetricsTests(unittest.TestCase):
         self.assertEqual(self.client.get("/metrics").status_code, 404)
 
 
+class NestedRouterLabelTests(unittest.TestCase):
+    """FastAPI keeps included routers nested: scope["route"].path is relative to the innermost router
+    (found live on 27/11: '/training-monitor/capabilities' for /api/v1/admin/..., '' for /api/v1/admin/regions)."""
+
+    def setUp(self):
+        from fastapi import APIRouter
+        app = FastAPI()
+        register_operational_middleware(app)
+        admin = APIRouter(prefix="/admin")
+        regions = APIRouter(prefix="/regions")
+
+        @regions.get("")
+        def list_regions():
+            return []
+
+        @regions.get("/{region_id}/drift-checks")
+        def checks(region_id: str):
+            return []
+
+        scoped = APIRouter(prefix="/regions/{region_id}")
+
+        @scoped.get("/model-quality")
+        def quality(region_id: str):
+            return {}
+
+        @scoped.get("/hidden", include_in_schema=False)
+        def hidden(region_id: str):
+            return {}
+
+        admin.include_router(regions)
+        admin.include_router(scoped, prefix="/scoped")
+        api = APIRouter()
+        api.include_router(admin)
+        app.include_router(api, prefix="/api/v1")
+        self.client = TestClient(app)
+
+    def labelled(self, path):
+        before = {s.labels["route"]: s.value for m in metrics.REGISTRY.collect() if m.name == "traffic_api_requests"
+                  for s in m.samples if s.name == "traffic_api_requests_total"}
+        self.client.get(path)
+        after = {s.labels["route"]: s.value for m in metrics.REGISTRY.collect() if m.name == "traffic_api_requests"
+                 for s in m.samples if s.name == "traffic_api_requests_total"}
+        return [route for route, value in after.items() if value > before.get(route, 0)]
+
+    def test_full_template_for_nested_routers(self):
+        self.assertEqual(self.labelled("/api/v1/admin/regions"), ["/api/v1/admin/regions"])
+        self.assertEqual(self.labelled("/api/v1/admin/regions/abc-123/drift-checks"),
+                         ["/api/v1/admin/regions/{region_id}/drift-checks"])
+
+    def test_parameter_in_router_prefix_never_leaks_the_value(self):
+        self.assertEqual(self.labelled("/api/v1/admin/scoped/regions/secret-id-42/model-quality"),
+                         ["/api/v1/admin/scoped/regions/{region_id}/model-quality"])
+        hidden = self.labelled("/api/v1/admin/scoped/regions/secret-id-42/hidden")
+        self.assertEqual(len(hidden), 1)
+        self.assertNotIn("secret-id-42", hidden[0])
+
+
 class RolePackagingTests(unittest.TestCase):
     def test_api_image_carries_metrics_and_dependency(self):
         from pathlib import Path

@@ -58,6 +58,9 @@ class QueueLeaseTests(unittest.TestCase):
         self.assertEqual(fenced["lease_until"], pushed_at + START_LEASE_SECONDS)
 
     def test_queued_notebook_is_never_quick_saved_and_times_out_when_its_lease_ends(self):
+        # A CPU notebook (a GPU one falls back to CPU after two minutes instead).
+        self.ledger["accelerator"] = "cpu"
+        self.provider = self.make(self.ledger)
         self.transport.state = "QUEUED"
         submitted = self.now[0]
         with self.assertRaises(ProviderError) as caught:
@@ -73,7 +76,11 @@ class QueueLeaseTests(unittest.TestCase):
         self.assertTrue(self.provider.cleanup())
         self.assertFalse(any(self.transport.resources.values()))
 
-    def test_lease_renewal_starts_as_soon_as_the_notebook_runs(self):
+    def test_lease_is_renewed_in_time_after_the_notebook_starts_running(self):
+        # Renewal is due RENEW_BEFORE_SECONDS before the newest lease ends, not at once:
+        # a notebook that waited in the queue must still never run on an expired lease.
+        self.ledger["accelerator"] = "cpu"
+        self.provider = self.make(self.ledger)
         self.transport.state = "QUEUED"
         started = {}
         original = self.transport.call
@@ -89,8 +96,9 @@ class QueueLeaseTests(unittest.TestCase):
         self.assertEqual(len(saves), 1)
         self.assertIn("at", started)
         renewed = lease_of(self.transport.source)
-        self.assertLessEqual(renewed["lease_until"], self.now[0] + LEASE_SECONDS)
-        self.assertGreaterEqual(renewed["lease_until"] - LEASE_SECONDS, started["at"])
+        # Renewed before the start lease ended, with a long lease again.
+        self.assertLess(self.now[0], 1_000_000.0 + START_LEASE_SECONDS)
+        self.assertGreaterEqual(renewed["lease_until"], self.now[0] + START_LEASE_SECONDS - 10)
 
     def test_stop_of_a_queued_notebook_ends_once_the_cancel_lease_has_expired(self):
         self.provider.submit()

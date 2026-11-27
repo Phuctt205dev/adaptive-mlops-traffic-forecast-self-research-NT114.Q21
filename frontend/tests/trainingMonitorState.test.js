@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { modelStatus, progressLabel, freshness, kaggleQueueMinutes, stopWaitNotice, queueWaitNotice, QUEUE_WARNING_MINUTES } from "../src/trainingMonitorState.js";
+import { modelStatus, progressLabel, freshness, kaggleQueueMinutes, stopWaitNotice, queueWaitNotice, QUEUE_WARNING_MINUTES, gpuFallbackNotices } from "../src/trainingMonitorState.js";
 
 test("Local queue does not make an already finished tree model wait for CPU again", () => {
   const run = { backend: "local", state: "running", branches: { tree: { observation: { phase: "waiting_resources" } } } };
@@ -26,6 +26,17 @@ test("notebook submission check is shown as a check, not as a connection failure
   const run = { backend: "kaggle", state: "running", branches: { lstm: { observation: { phase: "submit_reconciling" } } } };
   assert.equal(modelStatus(run, { id: "lstm", stage: "queued", state: "waiting" }), "Checking that Kaggle received the notebook");
   assert.equal(modelStatus({ ...run, state: "cancelling" }, { id: "lstm", state: "cancelling" }), "Stopping");
+});
+
+test("a branch that moved from a queued Kaggle GPU to CPU is reported once per branch", () => {
+  const run = { backend: "kaggle", state: "running", branches: {
+    tree: { observation: { phase: "branch_ready" } },
+    lstm: { observation: { phase: "ml_running", gpu_fallback: { after_seconds: 124, at: "2026-11-27T15:00:00+00:00" } } },
+    gru: { observation: { phase: "ml_running" } } } };
+  assert.deepEqual(gpuFallbackNotices(run), [{ branch: "lstm", seconds: 124 }]);
+  assert.deepEqual(gpuFallbackNotices({ ...run, backend: "local" }), []);
+  const switching = { backend: "kaggle", state: "running", branches: { gru: { observation: { phase: "gpu_fallback" } } } };
+  assert.equal(modelStatus(switching, { id: "gru", stage: "queued", state: "waiting" }), "No GPU in time · Switching to CPU");
 });
 
 test("CV completion is a wait for final training, not completion of the run", () => {

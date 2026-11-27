@@ -794,7 +794,7 @@ class KaggleExecutionTests(unittest.TestCase):
         elapsed = self.running_clock()
         self.provider.submit()
         self.provider.ledger.update(control_pending=True, pending_control={
-            "lease_until": elapsed[0] + 180, "cancel": False, "sha256": "x", "base_version": 1, "writes": 2})
+            "lease_until": elapsed[0] + 900, "cancel": False, "sha256": "x", "base_version": 1, "writes": 2})
         calls = [0]
         def control(**options):
             calls[0] += 1
@@ -802,7 +802,7 @@ class KaggleExecutionTests(unittest.TestCase):
                 raise self.unconfirmed()
         self.provider.control = control
         with self.assertRaises(TrainingCancelled):
-            self.provider.run(lambda _: None, lambda: elapsed[0] >= 1100)
+            self.provider.run(lambda _: None, lambda: elapsed[0] >= 1700)
         self.assertGreaterEqual(calls[0], 2)
         self.assertNotEqual(self.provider.ledger.get("phase"), "needs_attention")
 
@@ -879,12 +879,13 @@ class KaggleExecutionTests(unittest.TestCase):
         elapsed = self.running_clock()
         self.provider.submit()
         self.refuse_control_writes(count=1)
+        # The first renewal is due RENEW_BEFORE_SECONDS before the start lease ends (1600).
         with self.assertRaises(TrainingCancelled):
-            self.provider.run(lambda _: None, lambda: elapsed[0] >= 1060)
+            self.provider.run(lambda _: None, lambda: elapsed[0] >= 1660)
         self.assertNotEqual(self.provider.ledger.get("phase"), "needs_attention")
         self.assertGreaterEqual(self.provider.ledger["confirmed_control_writes"], 1)
         self.assertEqual(self.provider.ledger["control_rejections"], 0)
-        self.assertGreater(self.provider.ledger["lease_until"], 1060)
+        self.assertGreater(self.provider.ledger["lease_until"], 1660)
 
     def test_run_still_fails_when_every_renewal_is_refused(self):
         elapsed = self.running_clock()
@@ -893,7 +894,7 @@ class KaggleExecutionTests(unittest.TestCase):
         with self.assertRaises(ProviderError) as caught:
             self.provider.run(lambda _: None, lambda: elapsed[0] >= 5000)
         self.assertEqual(caught.exception.category, "control_rejected")
-        self.assertLess(elapsed[0], 1120)  # Failed well before the lease ran out.
+        self.assertLess(elapsed[0], 1900)  # Failed before the lease ran out.
 
 
 if __name__ == "__main__":

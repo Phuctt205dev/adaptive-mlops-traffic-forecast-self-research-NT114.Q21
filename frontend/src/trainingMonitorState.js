@@ -19,6 +19,7 @@ export const providerPhases = {
   reconnecting: "Reconnecting to Kaggle", needs_attention: "Connection needs attention",
   input_reconciling: "Checking uploaded training data",
   submit_reconciling: "Checking that Kaggle received the notebook",
+  gpu_fallback: "No GPU in time · Switching to CPU",
   prepare_input: "Preparing input", input_upload: "Uploading input", input_processing: "Kaggle is preparing input",
   notebook_submit: "Submitting to Kaggle", provider_wait: "Submitted · Waiting for Kaggle progress",
   supervisor_started: "Starting the Kaggle environment", child_running: "Starting the training process",
@@ -68,6 +69,14 @@ export function queueWaitNotice(run) {
 
 // A notebook that is still queued cannot read the stop signal until Kaggle starts it.
 // Once the signal's lease has ended it can no longer train, so the stop finishes by itself.
+// LSTM/GRU branches that Kaggle did not give a GPU in time and that train on CPU instead.
+export function gpuFallbackNotices(run) {
+  if (run?.backend !== "kaggle") return [];
+  return Object.entries(run.branches || {})
+    .filter(([, item]) => item.observation?.gpu_fallback)
+    .map(([branch, item]) => ({ branch, seconds: Number(item.observation.gpu_fallback.after_seconds) || 0 }));
+}
+
 export function stopWaitNotice(run) {
   if (run?.backend !== "kaggle" || run.state !== "cancelling") return null;
   for (const [branch, item] of Object.entries(run.branches || {})) {

@@ -36,6 +36,17 @@ def kaggle_accelerator(configuration, branch):
     return value
 
 
+def effective_accelerator(configuration, branch, environ):
+    """Hardware the training process actually uses inside a Kaggle notebook.
+
+    The notebook supervisor sets TRAFFIC_KAGGLE_ACCELERATOR=cpu only in a CPU
+    notebook that replaced a GPU notebook Kaggle had not started in time. The
+    override can only lower GPU to CPU; it never asks for hardware the run did not.
+    """
+    requested = kaggle_accelerator(configuration, branch)
+    return "cpu" if environ.get("TRAFFIC_KAGGLE_ACCELERATOR") == "cpu" else requested
+
+
 def validate_context(context):
     if not isinstance(context, dict) or set(context) != CONTEXT_KEYS:
         raise ValueError("Invalid execution context fields.")

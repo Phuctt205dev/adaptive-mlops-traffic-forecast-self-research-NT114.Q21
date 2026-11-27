@@ -15,6 +15,8 @@ LEASE_SECONDS = 180
 # nothing is written to a notebook while its run is queued (each Quick Save
 # became a Failed version and the queued run never started, run 98f8a8bd).
 START_LEASE_SECONDS = 900
+# A CPU notebook that replaces a GPU notebook Kaggle did not start has its own name.
+CPU_FALLBACK_SUFFIX = "-c"
 
 
 def body_digest(source):
@@ -62,16 +64,21 @@ def with_control(source, *, cancel=False, clock=None, lease_seconds=LEASE_SECOND
     return body + CONTROL_PREFIX + canonical(control).decode() + "\n"
 
 
-def render_notebook(snapshot, reference, dataset_reference, *, clock=None, lease_seconds=LEASE_SECONDS):
+def render_notebook(snapshot, reference, dataset_reference, *, clock=None, lease_seconds=LEASE_SECONDS,
+                    accelerator_override=None):
     validate_context(snapshot["context"])
     # These are deterministic, per-attempt private resources. Never accept an
     # arbitrary existing notebook as a target for control writes or cleanup.
     attempt = snapshot["context"]["attempt_id"].replace("-", "")
-    if (reference.split("/")[-1] != "traffic-train-" + attempt
+    if accelerator_override not in (None, "cpu"):
+        raise ValueError("A notebook can only be lowered to CPU.")
+    slug = "traffic-train-" + attempt + (CPU_FALLBACK_SUFFIX if accelerator_override == "cpu" else "")
+    if (reference.split("/")[-1] != slug
             or dataset_reference != reference.split("/")[0] + "/traffic-input-" + attempt):
         raise ValueError("Cloud resource identity must be derived from this attempt.")
     template = Path(__file__).with_name("notebook.py").read_text(encoding="utf-8").replace("\r\n", "\n")
     configuration = {**snapshot, "reference": reference, "dataset_reference": dataset_reference,
-                     "body_sha256": body_digest(template)}
+                     "body_sha256": body_digest(template),
+                     **({"accelerator_override": "cpu"} if accelerator_override == "cpu" else {})}
     source = template.replace("CONFIG = {}", "CONFIG = " + repr(configuration), 1)
     return with_control(source, clock=clock, lease_seconds=lease_seconds)

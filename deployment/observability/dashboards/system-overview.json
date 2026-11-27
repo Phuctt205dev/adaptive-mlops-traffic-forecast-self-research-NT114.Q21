@@ -1720,13 +1720,557 @@
       }
     },
     {
+      "id": 50,
+      "title": "Prediction API · available (7 days)",
+      "type": "stat",
+      "description": "Share of the last 7 days with at least one Prediction API pod ready to answer (checked every 5 seconds by Kubernetes). Prometheus keeps 7 days. This is readiness, not the success of every request; see Failed requests.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unknown",
+          "decimals": 2,
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 99
+              },
+              {
+                "color": "green",
+                "value": 99.5
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "100 * avg_over_time((sum(kube_deployment_status_replicas_available{job=\"kube-state-metrics\",namespace=\"traffic-mlops\",deployment=~\"api|api-next\"}) >= bool 1)[7d:1m])",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 28
+        }
+      }
+    },
+    {
+      "id": 51,
+      "title": "Response time · 95% of requests (1 h)",
+      "type": "stat",
+      "description": "95% of user requests in the last hour were answered within this time (health checks excluded). No requests in the hour shows No requests. Review at 1 s, high at 2.5 s.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 16,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No requests",
+          "decimals": 2,
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2.5
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(traffic_api_request_duration_seconds_bucket{source!=\"probe\"}[1h]))) >= 0",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 28
+        }
+      }
+    },
+    {
+      "id": 52,
+      "title": "Failed requests (1 h)",
+      "type": "stat",
+      "description": "Share of user requests in the last hour answered with a server error (5xx), including 'busy' replies when a pod already has a full prediction queue. Wrong input or sign-in errors (4xx) are not failures. Review at 1%, high at 5%.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No requests",
+          "decimals": 1,
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "100 * sum(rate(traffic_api_requests_total{source!=\"probe\",status=~\"5..\"}[1h])) / sum(rate(traffic_api_requests_total{source!=\"probe\"}[1h])) >= 0",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 28
+        }
+      }
+    },
+    {
+      "id": 53,
+      "title": "Website requests · last 24 h",
+      "type": "stat",
+      "description": "Requests from the website that reached the API in the last 24 hours. Every one passes through ngrok, whose free plan allows 20,000 a month (about 667 a day); above that the website loses the API until the next month. Turns orange at the daily share.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 16,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 667
+              },
+              {
+                "color": "red",
+                "value": 1334
+              }
+            ]
+          },
+          "unit": "suffix: / 667"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "round(sum(increase(traffic_api_requests_total{source=\"web\"}[24h])))",
+          "format": "time_series",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "legendFormat": "",
+          "exemplar": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "wideLayout": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "text": {
+          "valueSize": 28
+        }
+      }
+    },
+    {
+      "id": 60,
+      "title": "Request details",
+      "type": "row",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 61,
+          "title": "Response time over time",
+          "type": "timeseries",
+          "description": "Time within which 50% and 95% of user requests were answered, over 5-minute windows. Health checks excluded.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 22,
+            "w": 12,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "Unknown",
+              "decimals": 2,
+              "mappings": [
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null",
+                    "result": {
+                      "text": "Unknown",
+                      "color": "gray"
+                    }
+                  }
+                }
+              ],
+              "unit": "s",
+              "min": 0,
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "showPoints": "never",
+                "spanNulls": false,
+                "axisGridShow": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "histogram_quantile(0.5, sum by (le) (rate(traffic_api_request_duration_seconds_bucket{source!=\"probe\"}[5m])))",
+              "format": "time_series",
+              "instant": false,
+              "range": true,
+              "editorMode": "code",
+              "legendFormat": "50% of requests",
+              "exemplar": false
+            },
+            {
+              "refId": "B",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(traffic_api_request_duration_seconds_bucket{source!=\"probe\"}[5m])))",
+              "format": "time_series",
+              "instant": false,
+              "range": true,
+              "editorMode": "code",
+              "legendFormat": "95% of requests",
+              "exemplar": false
+            }
+          ],
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          },
+          "maxDataPoints": 240
+        },
+        {
+          "id": 62,
+          "title": "Requests per second by origin",
+          "type": "timeseries",
+          "description": "web: the website through ngrok; proxy: other requests through Nginx (for example a load test); cluster: Airflow and workers.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 22,
+            "w": 12,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "Unknown",
+              "decimals": 2,
+              "mappings": [
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null",
+                    "result": {
+                      "text": "Unknown",
+                      "color": "gray"
+                    }
+                  }
+                }
+              ],
+              "unit": "reqps",
+              "min": 0,
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "showPoints": "never",
+                "spanNulls": false,
+                "axisGridShow": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum by (source) (rate(traffic_api_requests_total{source!=\"probe\"}[5m]))",
+              "format": "time_series",
+              "instant": false,
+              "range": true,
+              "editorMode": "code",
+              "legendFormat": "{{source}}",
+              "exemplar": false
+            }
+          ],
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          },
+          "maxDataPoints": 240
+        }
+      ]
+    },
+    {
       "id": 30,
       "title": "Alert details",
       "type": "row",
       "collapsed": true,
       "gridPos": {
         "x": 0,
-        "y": 16,
+        "y": 22,
         "w": 24,
         "h": 1
       },
@@ -1742,7 +2286,7 @@
           },
           "gridPos": {
             "x": 0,
-            "y": 17,
+            "y": 23,
             "w": 24,
             "h": 7
           },

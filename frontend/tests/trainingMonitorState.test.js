@@ -95,3 +95,22 @@ test("a long Kaggle queue is flagged with the notebook to cancel, but only for a
   assert.equal(queueWaitNotice(run("2026-11-23T06:56:33+00:00", { backend: "local" })), null);
   assert.equal(queueWaitNotice({ ...run("2026-11-23T06:56:33+00:00"), observed_at: "not a date" }), null);
 });
+
+test("monitor polls fast only while a run is shown, to save the ngrok request quota", async () => {
+  const { monitorPollDelay, MONITOR_POLL_ACTIVE_MS, MONITOR_POLL_IDLE_MS } = await import("../src/trainingMonitorState.js");
+  assert.equal(monitorPollDelay([{ training_run_id: "run" }]), MONITOR_POLL_ACTIVE_MS);
+  assert.equal(monitorPollDelay([]), MONITOR_POLL_IDLE_MS);
+  assert.equal(monitorPollDelay(undefined), MONITOR_POLL_IDLE_MS);
+  assert.ok(MONITOR_POLL_ACTIVE_MS >= 5000 && MONITOR_POLL_IDLE_MS >= 4 * MONITOR_POLL_ACTIVE_MS);
+  // One hour with a run on screen: 720 requests instead of 1,800 at the former 2-second poll.
+  assert.equal(3600 * 1000 / MONITOR_POLL_ACTIVE_MS, 720);
+});
+
+test("starting a training run asks the monitor to refresh at once", async () => {
+  const { announceTrainingStarted, TRAINING_STARTED_EVENT } = await import("../src/trainingMonitorState.js");
+  const target = new EventTarget();
+  let heard = 0;
+  target.addEventListener(TRAINING_STARTED_EVENT, () => { heard += 1; });
+  announceTrainingStarted(target);
+  assert.equal(heard, 1);
+});

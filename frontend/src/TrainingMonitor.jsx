@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { stages as labels, modelStatus, progressLabel, freshness, stopWaitNotice, queueWaitNotice } from "./trainingMonitorState";
+import { stages as labels, modelStatus, progressLabel, freshness, stopWaitNotice, queueWaitNotice, monitorPollDelay, TRAINING_STARTED_EVENT } from "./trainingMonitorState";
 import AppDialog from "./AppDialog.jsx";
 
 
@@ -229,20 +229,23 @@ export default function TrainingMonitor({ region, enabled }) {
     let disposed = false;
     let timer;
     let controller;
+    let shown = [];
     async function refresh() {
       if (disposed || document.hidden) return;
+      window.clearTimeout(timer);
       controller?.abort();
       const request = new AbortController();
       controller = request;
       try {
         const result = await api.trainingMonitor(region.id, { signal: request.signal });
         if (disposed || request.signal.aborted) return;
-        setItems(Array.isArray(result.items) ? result.items : []);
+        shown = Array.isArray(result.items) ? result.items : [];
+        setItems(shown);
         setError(""); setReceivedAt({ time: new Date().toISOString(), clock: performance.now() });
       } catch (failure) {
         if (!disposed && !request.signal.aborted && failure.name !== "AbortError") setError("Training updates are unavailable. The last known state is shown.");
       } finally {
-        if (!disposed && controller === request && !document.hidden) timer = window.setTimeout(refresh, 2000);
+        if (!disposed && controller === request && !document.hidden) timer = window.setTimeout(refresh, monitorPollDelay(shown));
       }
     }
     function visibility() {
@@ -250,7 +253,12 @@ export default function TrainingMonitor({ region, enabled }) {
       if (document.hidden) controller?.abort(); else refresh();
     }
     refresh(); document.addEventListener("visibilitychange", visibility);
-    return () => { disposed = true; window.clearTimeout(timer); controller?.abort(); document.removeEventListener("visibilitychange", visibility); };
+    window.addEventListener(TRAINING_STARTED_EVENT, refresh);
+    return () => {
+      disposed = true; window.clearTimeout(timer); controller?.abort();
+      document.removeEventListener("visibilitychange", visibility);
+      window.removeEventListener(TRAINING_STARTED_EVENT, refresh);
+    };
   }, [enabled, region?.id]);
 
   // A successful run is omitted by the API. No retained 100% card, log,

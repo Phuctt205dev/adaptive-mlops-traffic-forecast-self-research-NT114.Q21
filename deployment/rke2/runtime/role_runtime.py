@@ -81,6 +81,10 @@ def main():
         from backend.app.services.region_cleanup_uploader import main as sync
         return sync()
     import uvicorn
+    if document['role'] == 'api':
+        # Private Prometheus endpoint (port 9464); the public NodePort only reaches port 8000.
+        from backend.app.core.metrics import start_metrics_server
+        start_metrics_server()
     uvicorn.run(build_app(), host='0.0.0.0', port=8000, workers=1, access_log=False,
                 timeout_graceful_shutdown=850)
 

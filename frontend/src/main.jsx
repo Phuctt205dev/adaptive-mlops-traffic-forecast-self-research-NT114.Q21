@@ -4,6 +4,7 @@ import { api, ApiError, getStoredToken, setStoredToken } from "./api";
 import ModelQualityPanel from "./ModelQualityPanel";
 import FeatureImportancePanel from "./FeatureImportancePanel";
 import TrainingMonitor from "./TrainingMonitor";
+import { announceTrainingStarted } from "./trainingMonitorState";
 import TrainingConfiguration from "./TrainingConfiguration.jsx";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import CleanupDialog from "./CleanupDialog.jsx";
@@ -1014,6 +1015,7 @@ function DatasetManager({ selectedRegion, datasets, datasetsLoading = false, ref
         ...trainingConfig,
         selected_models: selectedModels,
       });
+      announceTrainingStarted();
       setActiveTraining({
         ...result.training_run,
         datasetName: dataset.original_filename,
@@ -1868,6 +1870,7 @@ function DriftMonitor({ selectedRegion, refreshModels = async () => {}, refreshR
       selected_models: selectedModels,
     };
     const result = await api.trainDataset(dataset.id, payload);
+    announceTrainingStarted();
     setRetrainPlan(null);
     setMessageType("success");
     setMessage("Retrain has been queued. Track progress in Airflow or the Datasets tab.");
